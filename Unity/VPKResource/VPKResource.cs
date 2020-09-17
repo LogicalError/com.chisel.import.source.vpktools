@@ -16,32 +16,34 @@ namespace Chisel.Import.Source.VPKTools
     {
         private Dictionary<string, Material> m_CachedMaterials = new Dictionary<string, Material>();
 
-        private VPKParser m_Parser;
+        private readonly VPKParser m_Parser;
 
         public VPKResource( string path )
         {
             m_Parser = new VPKParser( path );
+            Debug.Log( $"Loaded a VPK resource with the path [{path}]" );
         }
 
-        public Material GetMaterial( string vpkInternalPath )
+        public Material GetMaterial( string path )
         {
-            string   fixedLocation = vpkInternalPath; // will be overwritten if vpkInternalPath isn't found, so we'll set it to what the user asked for
-            VMTData  vmt;
-            Material material;
+            SourceMaterial material = null;
 
             using( m_Parser )
             {
-                bool isValid = m_Parser.IsValid();
+                if( m_Parser.IsValid() )
+                {
+                    Debug.Log( $"VPKParser was valid. Loading new SourceMaterial with the path [materials/{path.ToLower()}]." );
+                    material = new SourceMaterial( m_Parser, $"materials/{path.ToLower()}" );
 
-                if( !m_Parser.FileExists( vpkInternalPath ) )
-                    fixedLocation = VMTData.FixLocation( m_Parser, vpkInternalPath );
-
-                string vmtPath = m_Parser.LocateInArchive( fixedLocation );
-
-                vmt = VMTData.GrabVMT( m_Parser, vmtPath, true );
+                    if(!m_CachedMaterials.ContainsKey( material.Name ))
+                    {
+                        Debug.Log( $"Cached material [{material.Name}]" );
+                        m_CachedMaterials.Add( material.Name, material.GetMaterial() );
+                    }
+                }
             }
 
-            return vmt.GetMaterial();
+            return material.GetMaterial();
         }
     }
 }

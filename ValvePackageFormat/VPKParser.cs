@@ -3,6 +3,7 @@ using System.IO;
 using Chisel.Import.Source.VPKTools;
 using System;
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace Chisel.Import.Source.VPKTools
 {
@@ -22,15 +23,16 @@ namespace Chisel.Import.Source.VPKTools
         private VPKStream[] openStreams = new VPKStream[7];
         private int         nextStreamIndex;
 
-        public VPKParser( string _directoryLocation ) : this( _directoryLocation, "pak01" )
+        public VPKParser( string _directoryLocation )// : this( _directoryLocation, "pak01" )
         {
-        }
-
-        public VPKParser( string _directoryLocation, string _vpkPakPrefix )
-        {
-            vpkStartName      = _vpkPakPrefix;
             directoryLocation = _directoryLocation;
         }
+
+        /*public VPKParser( string _directoryLocation, string _vpkPakPrefix )
+        {
+            //vpkStartName      = _vpkPakPrefix;
+            directoryLocation = _directoryLocation;
+        }*/
 
         // Dispose() calls Dispose(true)
         public void Dispose()
@@ -56,7 +58,7 @@ namespace Chisel.Import.Source.VPKTools
                 foreach( var streamWrapper in openStreams )
                     streamWrapper.stream?.Dispose();
 
-                archivesNotFound.Clear();
+                archivesNotFound?.Clear();
                 archivesNotFound = null;
 
                 header = null;
@@ -97,7 +99,7 @@ namespace Chisel.Import.Source.VPKTools
 
         private void ParseHeader()
         {
-            string archivePath = Path.Combine( directoryLocation, GetArchiveName( DIR_PAK ) + ".vpk" );
+            string archivePath = directoryLocation; //Path.Combine( directoryLocation, GetArchiveName( DIR_PAK ) + ".vpk" );
 
             if( File.Exists( archivePath ) )
             {
@@ -131,6 +133,7 @@ namespace Chisel.Import.Source.VPKTools
             while( currentStream.Position < header.TreeSize )
             {
                 string extension = DataParser.ReadNullTerminatedString( currentStream ).ToLower();
+                Debug.Log( $"Extension [{extension}] VPKParser.ParseTree(Stream stream)" );
                 if( extension.Length <= 0 )
                     extension = tree.Keys.ElementAt( tree.Count - 1 );
                 else
@@ -202,8 +205,7 @@ namespace Chisel.Import.Source.VPKTools
             if( dirFixed.LastIndexOf( "/" ) == dirFixed.Length - 1 )
                 dirFixed = dirFixed.Substring( 0, dirFixed.Length - 1 );
 
-            VPKDirectoryEntry entry;
-            if( GetEntry( extFixed, dirFixed, fileNameFixed, out entry ) ) { archiveName = GetArchiveName( entry.ArchiveIndex ); }
+            if( GetEntry( extFixed, dirFixed, fileNameFixed, out VPKDirectoryEntry entry ) ) { archiveName = GetArchiveName( entry.ArchiveIndex ); }
 
             return archiveName;
         }
@@ -234,8 +236,7 @@ namespace Chisel.Import.Source.VPKTools
             if( dirFixed.LastIndexOf( "/" ) == dirFixed.Length - 1 )
                 dirFixed = dirFixed.Substring( 0, dirFixed.Length - 1 );
 
-            VPKDirectoryEntry entry;
-            if( GetEntry( extFixed, dirFixed, fileNameFixed, out entry ) )
+            if( GetEntry( extFixed, dirFixed, fileNameFixed, out VPKDirectoryEntry entry ) )
             {
                 Stream currentStream = GetStream( entry.ArchiveIndex );
                 if( currentStream != null )
@@ -289,9 +290,9 @@ namespace Chisel.Import.Source.VPKTools
 
         private string GetArchiveName( ushort archiveIndex )
         {
-            string vpkPakDir = "_";
-            if( archiveIndex      == DIR_PAK ) { vpkPakDir += "dir"; }
-            else if( archiveIndex < 1000 )
+            string vpkPakDir = $"{directoryLocation.Replace( ".vpk","" ).Replace( "_dir", "" )}_";
+            /*if( archiveIndex      == DIR_PAK ) { vpkPakDir += "dir"; }
+            else*/ if( archiveIndex < 1000 )
             {
                 if( archiveIndex >= 0 && archiveIndex < 10 )
                     vpkPakDir += "00" + archiveIndex;
@@ -301,7 +302,7 @@ namespace Chisel.Import.Source.VPKTools
                     vpkPakDir += archiveIndex;
             }
 
-            return vpkStartName + vpkPakDir;
+            return vpkPakDir; //vpkStartName + vpkPakDir;
         }
 
         private bool GetEntry( string ext, string dir, string fileName, out VPKDirectoryEntry entry )
