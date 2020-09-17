@@ -3,9 +3,8 @@ using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.IO;
-using UnityHelpers;
 
-namespace UnitySourceEngine
+namespace Chisel.Import.Source.VPKTools
 {
     public class SourceTexture
     {

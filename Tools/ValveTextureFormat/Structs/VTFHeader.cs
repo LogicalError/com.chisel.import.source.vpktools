@@ -1,4 +1,4 @@
-﻿namespace UnitySourceEngine
+﻿namespace Chisel.Import.Source.VPKTools
 {
     struct VTFHeader
     {
@@ -79,7 +79,7 @@
         IMAGE_FORMAT_X360_DST16,
         IMAGE_FORMAT_X360_DST24,
         IMAGE_FORMAT_X360_DST24F,
-        IMAGE_FORMAT_LINEAR_BGRX8888,			//!<  = Blue, Green, Red, Unused - 32 bpp		
+        IMAGE_FORMAT_LINEAR_BGRX8888,			//!<  = Blue, Green, Red, Unused - 32 bpp
         IMAGE_FORMAT_LINEAR_RGBA8888,			//!<  = Red, Green, Blue, Alpha - 32 bpp
         IMAGE_FORMAT_LINEAR_ABGR8888,			//!<  = Alpha, Blue, Green, Red - 32 bpp
         IMAGE_FORMAT_LINEAR_ARGB8888,			//!<  = Alpha, Red, Green, Blue - 32 bpp

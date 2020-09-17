@@ -2,9 +2,8 @@
 using System.IO;
 using System.Linq;
 using UnityEngine;
-using UnitySourceEngine;
 
-namespace UnityHelpers
+namespace Chisel.Import.Source.VPKTools
 {
     public static class Texture2DHelpers
     {

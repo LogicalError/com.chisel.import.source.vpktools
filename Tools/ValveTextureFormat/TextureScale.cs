@@ -3,7 +3,7 @@
 using System.Threading;
 using UnityEngine;
 
-namespace UnitySourceEngine
+namespace Chisel.Import.Source.VPKTools
 {
     public class TextureScale
     {

@@ -1,4 +1,4 @@
-﻿namespace UnitySourceEngine
+﻿namespace Chisel.Import.Source.VPKTools
 {
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit)]
     struct VTFResource

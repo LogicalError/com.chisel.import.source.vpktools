@@ -1,4 +1,4 @@
-﻿namespace UnitySourceEngine
+﻿namespace Chisel.Import.Source.VPKTools
 {
     class VPKHeader
     {

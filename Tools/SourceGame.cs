@@ -1,5 +1,5 @@
 ﻿/* * * * * * * * * * * * * * * * * * * * * *
-AeternumGames.Chisel.Import.Source.SourceGame.cs
+NuklearWynterInteractive.Chisel.Import.Source.SourceGame.cs
 
 License: MIT (https://tldrlegal.com/license/mit-license)
 Author: Daniel Cornelius
@@ -9,7 +9,7 @@ Author: Daniel Cornelius
 using System;
 using System.Collections.Generic;
 
-namespace AeternumGames.Chisel.Import.Source
+namespace Chisel.Import.Source.VPKTools
 {
     public enum GameTitle : int
     {

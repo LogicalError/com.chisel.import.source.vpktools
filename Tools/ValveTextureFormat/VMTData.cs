@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using System.Text.RegularExpressions;
 
-namespace UnitySourceEngine
+namespace Chisel.Import.Source.VPKTools
 {
     public class VMTData
     {

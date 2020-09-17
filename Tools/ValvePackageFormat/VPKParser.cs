@@ -1,9 +1,10 @@
 ﻿using System.Linq;
 using System.IO;
-using System.Collections.Generic;
+using Chisel.Import.Source.VPKTools;
 using System;
+using System.Collections.Generic;
 
-namespace UnitySourceEngine
+namespace Chisel.Import.Source.VPKTools
 {
     public class VPKParser : IDisposable
     {
