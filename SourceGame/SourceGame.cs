@@ -6,32 +6,14 @@ Author: Daniel Cornelius
 
 * * * * * * * * * * * * * * * * * * * * * */
 
-using System;
-using System.Collections.Generic;
-
 namespace Chisel.Import.Source.VPKTools
 {
-    public enum GameTitle : int
-    {
-        HalfLifeSource               = 0,
-        HalfLife2                    = 1,
-        HalfLife2Episode2            = 2,
-        HalfLife2LostCoast           = 3,
-        BlackMesa                    = 4,
-        Portal                       = 5,
-        Portal2                      = 6,
-        CounterStrikeSource          = 7,
-        CounterStrikeGlobalOffensive = 8,
-        Insurgency2                  = 9,
-        DayOfInfamy                  = 10
-    }
-
     public struct SourceGame
     {
         /// <summary>
         /// Change this to change the search directory of VPK import
         /// </summary>
-        public static string DEFAULTGAMEDIR = @"C:\Program Files (x86)\Steam\steamapps\common\";
+        public static string DefaultGameDir = @"C:\Program Files (x86)\Steam\steamapps\common\";
 
         private const string HL1S    = @"Half-Life 2\hl1\";
         private const string HL2     = @"Half-Life 2\hl2\";
@@ -49,20 +31,20 @@ namespace Chisel.Import.Source.VPKTools
         {
             switch( title )
             {
-                case GameTitle.HalfLifeSource:               return $"{DEFAULTGAMEDIR}{HL1S}";
-                case GameTitle.HalfLife2:                    return $"{DEFAULTGAMEDIR}{HL2}";
-                case GameTitle.HalfLife2Episode2:            return $"{DEFAULTGAMEDIR}{HL2E2}";
-                case GameTitle.HalfLife2LostCoast:           return $"{DEFAULTGAMEDIR}{HL2LC}";
-                case GameTitle.BlackMesa:                    return $"{DEFAULTGAMEDIR}{BLKMSA}";
-                case GameTitle.Portal:                       return $"{DEFAULTGAMEDIR}{PORTAL}";
-                case GameTitle.Portal2:                      return $"{DEFAULTGAMEDIR}{PORTAL2}";
-                case GameTitle.CounterStrikeSource:          return $"{DEFAULTGAMEDIR}{CSS}";
-                case GameTitle.CounterStrikeGlobalOffensive: return $"{DEFAULTGAMEDIR}{CSGO}";
-                case GameTitle.Insurgency2:                  return $"{DEFAULTGAMEDIR}{INS2}";
-                case GameTitle.DayOfInfamy:                  return $"{DEFAULTGAMEDIR}{DOI}";
+                case GameTitle.HalfLifeSource:               return $"{DefaultGameDir}{HL1S}";
+                case GameTitle.HalfLife2:                    return $"{DefaultGameDir}{HL2}";
+                case GameTitle.HalfLife2Episode2:            return $"{DefaultGameDir}{HL2E2}";
+                case GameTitle.HalfLife2LostCoast:           return $"{DefaultGameDir}{HL2LC}";
+                case GameTitle.BlackMesa:                    return $"{DefaultGameDir}{BLKMSA}";
+                case GameTitle.Portal:                       return $"{DefaultGameDir}{PORTAL}";
+                case GameTitle.Portal2:                      return $"{DefaultGameDir}{PORTAL2}";
+                case GameTitle.CounterStrikeSource:          return $"{DefaultGameDir}{CSS}";
+                case GameTitle.CounterStrikeGlobalOffensive: return $"{DefaultGameDir}{CSGO}";
+                case GameTitle.Insurgency2:                  return $"{DefaultGameDir}{INS2}";
+                case GameTitle.DayOfInfamy:                  return $"{DefaultGameDir}{DOI}";
             }
 
-            return $"{DEFAULTGAMEDIR}{HL2}"; // default to HL2 as its the most commonly used.
+            return $"{DefaultGameDir}{HL2}"; // default to HL2 as its the most commonly used.
         }
 
         /// <summary>
@@ -88,37 +70,6 @@ namespace Chisel.Import.Source.VPKTools
             }
 
             return new[] { $"{GetDirForTitle( title )}hl2_textures_dir.vpk" };
-        }
-    }
-
-    public static class SourceGameUtils
-    {
-        /// <summary>
-        /// Returns the friendly name of the corresponding <seealso cref="GameTitle"/>. Used for UI.
-        /// </summary>
-        public static string GetNameForGameTitle( this GameTitle title )
-        {
-            switch( title )
-            {
-                case GameTitle.HalfLifeSource:               return "Half-Life: Source";
-                case GameTitle.HalfLife2:                    return "Half-Life 2";
-                case GameTitle.HalfLife2Episode2:            return "Half-Life 2: Episode 2";
-                case GameTitle.HalfLife2LostCoast:           return "Half-Life 2: Lost Coast";
-                case GameTitle.BlackMesa:                    return "Black Mesa";
-                case GameTitle.Portal:                       return "Portal";
-                case GameTitle.Portal2:                      return "Portal 2";
-                case GameTitle.CounterStrikeSource:          return "Counter-Strike: Source";
-                case GameTitle.CounterStrikeGlobalOffensive: return "Counter-Strike: Global Offensive";
-                case GameTitle.Insurgency2:                  return "Insurgency";
-                case GameTitle.DayOfInfamy:                  return "Day of Infamy";
-            }
-
-            return "Half-Life 2"; // default to HL2 as its the most commonly used.
-        }
-
-        public static int GetValue( this GameTitle title )
-        {
-            return (int) title;
         }
     }
 }
