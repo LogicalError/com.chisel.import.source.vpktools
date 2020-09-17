@@ -3,7 +3,7 @@
     class VPKHeader
     {
         public const uint Signature = 0x55aa1234;
-        public uint Version;
+        public       uint Version;
 
         // The size, in bytes, of the directory tree
         public uint TreeSize;

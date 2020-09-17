@@ -99,7 +99,7 @@ namespace Chisel.Import.Source.VPKTools
                             byte[] vmtByteData = null;
                             vpkParser.LoadFileAsStream( vmtFilePath, ( stream, origOffset, fileLength ) =>
                             {
-                                vmtByteData = new byte[fileLength];
+                                vmtByteData     = new byte[fileLength];
                                 stream.Position = origOffset;
                                 stream.Read( vmtByteData, 0, vmtByteData.Length );
                             } );
@@ -115,7 +115,7 @@ namespace Chisel.Import.Source.VPKTools
                         string vtfFilePath = SourceTexture.FixLocation( vpkParser, rawPath );
                         if( ( vpkParser != null && vpkParser.FileExists( vtfFilePath ) ) )
                         {
-                            vmtData = new VMTData( vmtFilePath );
+                            vmtData                 = new VMTData( vmtFilePath );
                             vmtData.baseTexturePath = rawPath;
                             if( grabDependants )
                                 vmtData.GrabDependants( vpkParser );
@@ -191,8 +191,8 @@ namespace Chisel.Import.Source.VPKTools
                     //glossiness = 0;
                 }
 
-                glossiness = 0;
-                bumpMapPath = wrappedData.GetValue( "$bumpmap" );
+                glossiness      = 0;
+                bumpMapPath     = wrappedData.GetValue( "$bumpmap" );
                 hasTransparency = !string.IsNullOrEmpty( wrappedData.GetValue( "$alphatest" ) );
             }
         }
@@ -267,7 +267,7 @@ namespace Chisel.Import.Source.VPKTools
             if( nextEncapsulator.Success )
             {
                 currentVmtWrapper.dataTitle = titleRegex.Match( nextEncapsulator.Value ).Value.ToLower();
-                modifiedVmtString = modifiedVmtString.Substring( nextEncapsulator.Index + nextEncapsulator.Length );
+                modifiedVmtString           = modifiedVmtString.Substring( nextEncapsulator.Index + nextEncapsulator.Length );
                 int endEncapsulationIndex = modifiedVmtString.LastIndexOf( "}" );
                 if( endEncapsulationIndex < 0 )
                     endEncapsulationIndex = modifiedVmtString.Length;
@@ -288,7 +288,7 @@ namespace Chisel.Import.Source.VPKTools
                         int length = endEncapsulationIndex - peekEncapsulator.Index + 1;
                         if( length >= 0 )
                         {
-                            nextSubstring = modifiedVmtString.Substring( peekEncapsulator.Index, length );
+                            nextSubstring     = modifiedVmtString.Substring( peekEncapsulator.Index, length );
                             modifiedVmtString = modifiedVmtString.Substring( 0, peekEncapsulator.Index ) + modifiedVmtString.Substring( endEncapsulationIndex + 1 );
                             currentVmtWrapper.AddChild( WrapData( nextSubstring ) );
                         }
@@ -347,7 +347,7 @@ namespace Chisel.Import.Source.VPKTools
             if( startIndex >= 0 )
             {
                 amountRemoved += startIndex + 1;
-                modified = modified.Substring( startIndex + 1 );
+                modified      =  modified.Substring( startIndex + 1 );
                 int openersCount = 0;
                 while( modified.Contains( encapsulationEnder ) && foundIndex < 0 )
                 {
@@ -356,7 +356,7 @@ namespace Chisel.Import.Source.VPKTools
                     if( startIndex >= 0 && startIndex < endIndex )
                     {
                         amountRemoved += startIndex + 1;
-                        modified = modified.Substring( startIndex + 1 );
+                        modified      =  modified.Substring( startIndex + 1 );
                         openersCount++;
                     }
                     else
@@ -365,7 +365,7 @@ namespace Chisel.Import.Source.VPKTools
                         else
                         {
                             amountRemoved += endIndex + 1;
-                            modified = modified.Substring( endIndex + 1 );
+                            modified      =  modified.Substring( endIndex + 1 );
                             openersCount--;
                         }
                     }

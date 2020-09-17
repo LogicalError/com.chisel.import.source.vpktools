@@ -28,7 +28,7 @@ namespace Chisel.Import.Source.VPKTools
 
         public VPKParser( string _directoryLocation, string _vpkPakPrefix )
         {
-            vpkStartName = _vpkPakPrefix;
+            vpkStartName      = _vpkPakPrefix;
             directoryLocation = _directoryLocation;
         }
 
@@ -109,17 +109,17 @@ namespace Chisel.Import.Source.VPKTools
                 if( signature != VPKHeader.Signature )
                     return;
 
-                header.Version = DataParser.ReadUInt( preloadStream );
+                header.Version  = DataParser.ReadUInt( preloadStream );
                 header.TreeSize = DataParser.ReadUInt( preloadStream );
-                headerSize = 12;
+                headerSize      = 12;
 
                 if( header.Version > 1 )
                 {
-                    header.FileDataSectionSize = DataParser.ReadUInt( preloadStream );
-                    header.ArchiveMD5SectionSize = DataParser.ReadUInt( preloadStream );
-                    header.OtherMD5SectionSize = DataParser.ReadUInt( preloadStream );
-                    header.SignatureSectionSize = DataParser.ReadUInt( preloadStream );
-                    headerSize += 16;
+                    header.FileDataSectionSize   =  DataParser.ReadUInt( preloadStream );
+                    header.ArchiveMD5SectionSize =  DataParser.ReadUInt( preloadStream );
+                    header.OtherMD5SectionSize   =  DataParser.ReadUInt( preloadStream );
+                    header.SignatureSectionSize  =  DataParser.ReadUInt( preloadStream );
+                    headerSize                   += 16;
                 }
 
                 ParseTree( preloadStream );
@@ -153,11 +153,11 @@ namespace Chisel.Import.Source.VPKTools
                         if( !string.IsNullOrEmpty( fileName ) )
                         {
                             VPKDirectoryEntry dirEntry = new VPKDirectoryEntry();
-                            dirEntry.CRC = DataParser.ReadUInt( currentStream );
+                            dirEntry.CRC          = DataParser.ReadUInt( currentStream );
                             dirEntry.PreloadBytes = DataParser.ReadUShort( currentStream );
                             dirEntry.ArchiveIndex = DataParser.ReadUShort( currentStream );
-                            dirEntry.EntryOffset = DataParser.ReadUInt( currentStream );
-                            dirEntry.EntryLength = DataParser.ReadUInt( currentStream );
+                            dirEntry.EntryOffset  = DataParser.ReadUInt( currentStream );
+                            dirEntry.EntryLength  = DataParser.ReadUInt( currentStream );
                             ushort terminator = DataParser.ReadUShort( currentStream );
 
                             if( dirEntry.EntryOffset == 0 && dirEntry.ArchiveIndex == DIR_PAK )
@@ -271,8 +271,8 @@ namespace Chisel.Import.Source.VPKTools
                 {
                     openStreams[nextStreamIndex].stream?.Dispose();
 
-                    currentStream = new FileStream( archivePath, FileMode.Open, FileAccess.Read );
-                    openStreams[nextStreamIndex].stream = currentStream;
+                    currentStream                         = new FileStream( archivePath, FileMode.Open, FileAccess.Read );
+                    openStreams[nextStreamIndex].stream   = currentStream;
                     openStreams[nextStreamIndex].pakIndex = archiveIndex;
 
                     nextStreamIndex = ( nextStreamIndex + 1 ) % openStreams.Length;

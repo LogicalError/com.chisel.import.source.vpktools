@@ -85,7 +85,7 @@ namespace Chisel.Import.Source.VPKTools
                     if( averageTextures )
                     {
                         pixels = MakePlain( AverageTexture( pixels ), 4, 4 );
-                        width = 4;
+                        width  = 4;
                         height = 4;
                     }
                     else
@@ -93,7 +93,7 @@ namespace Chisel.Import.Source.VPKTools
                 }
 
                 srcTexture.pixels = pixels;
-                srcTexture.width = width;
+                srcTexture.width  = width;
                 srcTexture.height = height;
             }
 
@@ -145,12 +145,12 @@ namespace Chisel.Import.Source.VPKTools
         public static Color[] DecreaseTextureSize( Color[] pixels, int origWidth, int origHeight, int maxSize, out int decreasedWidth, out int decreasedHeight )
         {
             Color[] decreased = pixels;
-            decreasedWidth = origWidth;
+            decreasedWidth  = origWidth;
             decreasedHeight = origHeight;
             if( Mathf.Max( origWidth, origHeight ) > maxSize )
             {
                 float ratio = Mathf.Max( origWidth, origHeight ) / (float) maxSize;
-                decreasedWidth = (int) ( origWidth               / ratio );
+                decreasedWidth  = (int) ( origWidth              / ratio );
                 decreasedHeight = (int) ( origHeight             / ratio );
 
                 decreased = DecreaseTextureSize( pixels, origWidth, origHeight, decreasedWidth, decreasedHeight );
@@ -184,9 +184,9 @@ namespace Chisel.Import.Source.VPKTools
                                 if( mappedIndex >= 0 && mappedIndex < pixels.Length )
                                 {
                                     Color currentColor = pixels[mappedIndex];
-                                    red += currentColor.r;
+                                    red   += currentColor.r;
                                     green += currentColor.g;
-                                    blue += currentColor.b;
+                                    blue  += currentColor.b;
                                     alpha += currentColor.a;
                                     pixelCount++;
                                 }
@@ -233,7 +233,7 @@ namespace Chisel.Import.Source.VPKTools
         {
             //Texture2D extracted = null;
             Color[] extracted = null;
-            width = 0;
+            width  = 0;
             height = 0;
             if( stream != null )
             {
@@ -245,28 +245,28 @@ namespace Chisel.Import.Source.VPKTools
 
                     VTFHeader vtfHeader;
                     uint[]    version = new uint[] { DataParser.ReadUInt( stream ), DataParser.ReadUInt( stream ) };
-                    vtfHeader.version = ( version[0] ) + ( version[1] / 10f );
+                    vtfHeader.version    = ( version[0] ) + ( version[1] / 10f );
                     vtfHeader.headerSize = DataParser.ReadUInt( stream );
-                    vtfHeader.width = DataParser.ReadUShort( stream );
-                    vtfHeader.height = DataParser.ReadUShort( stream );
-                    vtfHeader.flags = DataParser.ReadUInt( stream );
-                    vtfHeader.frames = DataParser.ReadUShort( stream );
+                    vtfHeader.width      = DataParser.ReadUShort( stream );
+                    vtfHeader.height     = DataParser.ReadUShort( stream );
+                    vtfHeader.flags      = DataParser.ReadUInt( stream );
+                    vtfHeader.frames     = DataParser.ReadUShort( stream );
                     vtfHeader.firstFrame = DataParser.ReadUShort( stream );
-                    vtfHeader.padding0 = new byte[4];
+                    vtfHeader.padding0   = new byte[4];
                     stream.Read( vtfHeader.padding0, 0, 4 );
                     vtfHeader.reflectivity = new float[] { DataParser.ReadFloat( stream ), DataParser.ReadFloat( stream ), DataParser.ReadFloat( stream ) };
-                    vtfHeader.padding1 = new byte[4];
+                    vtfHeader.padding1     = new byte[4];
                     stream.Read( vtfHeader.padding1, 0, 4 );
-                    vtfHeader.bumpmapScale = DataParser.ReadFloat( stream );
+                    vtfHeader.bumpmapScale       = DataParser.ReadFloat( stream );
                     vtfHeader.highResImageFormat = (VTFImageFormat) DataParser.ReadUInt( stream );
-                    vtfHeader.mipmapCount = DataParser.ReadByte( stream );
-                    vtfHeader.lowResImageFormat = (VTFImageFormat) DataParser.ReadUInt( stream );
-                    vtfHeader.lowResImageWidth = DataParser.ReadByte( stream );
-                    vtfHeader.lowResImageHeight = DataParser.ReadByte( stream );
+                    vtfHeader.mipmapCount        = DataParser.ReadByte( stream );
+                    vtfHeader.lowResImageFormat  = (VTFImageFormat) DataParser.ReadUInt( stream );
+                    vtfHeader.lowResImageWidth   = DataParser.ReadByte( stream );
+                    vtfHeader.lowResImageHeight  = DataParser.ReadByte( stream );
 
-                    vtfHeader.depth = 1;
+                    vtfHeader.depth         = 1;
                     vtfHeader.resourceCount = 0;
-                    vtfHeader.resources = new VTFResource[0];
+                    vtfHeader.resources     = new VTFResource[0];
 
                     if( vtfHeader.version >= 7.2f )
                     {
@@ -316,7 +316,7 @@ namespace Chisel.Import.Source.VPKTools
                     else
                     {
                         thumbnailBufferOffset = (int) vtfHeader.headerSize;
-                        imageBufferOffset = thumbnailBufferOffset + thumbnailBufferSize;
+                        imageBufferOffset     = thumbnailBufferOffset + thumbnailBufferSize;
                     }
 
 #endregion
@@ -332,8 +332,8 @@ namespace Chisel.Import.Source.VPKTools
                         stream.Position = vtfBytePosition + imageBufferOffset + mipmapBufferOffset;
 
                         extracted = DecompressImage( stream, vtfHeader.width, vtfHeader.height, vtfHeader.highResImageFormat );
-                        width = vtfHeader.width;
-                        height = vtfHeader.height;
+                        width     = vtfHeader.width;
+                        height    = vtfHeader.height;
                     }
                     else
                         Debug.LogError( "SourceTexture: Image format given was none" );
@@ -411,9 +411,9 @@ namespace Chisel.Import.Source.VPKTools
                 {
                     uiImageSize += ComputeImageBufferSize( tempWidth, tempHeight, depth, imageFormat );
 
-                    tempWidth >>= 1;
+                    tempWidth  >>= 1;
                     tempHeight >>= 1;
-                    depth >>= 1;
+                    depth      >>= 1;
 
                     if( tempWidth < 1 )
                         tempWidth = 1;
@@ -433,9 +433,9 @@ namespace Chisel.Import.Source.VPKTools
         {
             // work out the width/height by taking the orignal dimension
             // and bit shifting them down uiMipmapLevel times
-            mipmapWidth = width   >> (int) mipmapLevel;
+            mipmapWidth  = width  >> (int) mipmapLevel;
             mipmapHeight = height >> (int) mipmapLevel;
-            mipmapDepth = depth   >> (int) mipmapLevel;
+            mipmapDepth  = depth  >> (int) mipmapLevel;
 
             // stop the dimension being less than 1 x 1
             if( mipmapWidth < 1 )

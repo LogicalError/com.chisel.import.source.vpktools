@@ -2,7 +2,7 @@
 {
     class VPKDirectoryEntry
     {
-        public uint CRC; // A 32bit CRC of the file's data.
+        public uint   CRC;          // A 32bit CRC of the file's data.
         public ushort PreloadBytes; // The number of bytes contained in the index file.
 
         // A zero based index of the archive this file's data is contained in.

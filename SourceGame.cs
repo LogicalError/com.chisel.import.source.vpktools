@@ -1,5 +1,5 @@
 ﻿/* * * * * * * * * * * * * * * * * * * * * *
-NuklearWynterInteractive.Chisel.Import.Source.SourceGame.cs
+Chisel.Import.Source.VPKTools.SourceGame.cs
 
 License: MIT (https://tldrlegal.com/license/mit-license)
 Author: Daniel Cornelius
