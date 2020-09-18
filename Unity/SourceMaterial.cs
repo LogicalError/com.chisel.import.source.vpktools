@@ -57,7 +57,7 @@ namespace Chisel.Import.Source.VPKTools
             if( sourceNormalTex != null )
             {
                 Debug.Log( $"Found the normal texture [{mainTexPath.Replace( ".vtf", "" )}_normal.vtf]." );
-                m_NormalTex = sourceNormalTex.GetTexture();
+                m_NormalTex      = sourceNormalTex.GetTexture();
             }
         }
 
@@ -67,18 +67,27 @@ namespace Chisel.Import.Source.VPKTools
                 return m_CachedMaterial;
             else
             {
+                Debug.Log( $"Assembling new material with the name [{m_MainTex.name}]" );
                 Material material = new Material( Shader.Find( "Standard (Specular setup)" ) );
                 material.name = m_MainTex.name;
+                try
+                {
+                    material.SetTexture( MainTex, m_MainTex );
+                    material.SetTexture( Bump,    m_NormalTex );
+                    material.SetFloat( Glossiness, 0 );
+                    material.SetColor( SpecColor, Color.black );
+                    material.SetInt( SmoothnessTextureChannel, 1 );
 
-                material.SetTexture( MainTex, m_MainTex );
-                material.SetTexture( Bump,    m_NormalTex );
-                material.SetFloat( Glossiness, 0 );
-                material.SetColor( SpecColor, Color.black );
-                material.SetInt( SmoothnessTextureChannel, 1 );
+                    m_CachedMaterial = material;
 
-                m_CachedMaterial = material;
+                    return material;
+                }
+                catch( Exception e )
+                {
+                    Debug.LogException( e );
+                }
 
-                return material;
+                return new Material( Shader.Find( "Hidden/InternalErrorShader" ) );
             }
         }
 
