@@ -16,11 +16,33 @@ namespace Chisel.Import.Source.VPKTools
 {
     public class VTF
     {
+        public readonly string name;
+
         private Texture2D texture;
         private Color[]   pixels;
 
         public VTF( VPKEntry entry )
         {
+            using( MemoryStream stream = new MemoryStream( entry.smallData ) )
+            {
+                Color[]    pixels = null;
+                Vector2Int dimensions;
+
+                pixels = LoadVTF( stream, 0, out dimensions );
+
+                texture = new Texture2D( dimensions.x, dimensions.y, TextureFormat.RGBA32, false );
+                texture.SetPixels( pixels );
+                texture.Apply();
+            }
+
+            name = entry.fileName;
+
+            Debug.Log( $"Loaded VTF [{name}]" );
+        }
+
+        public Texture2D GetTexture()
+        {
+            return texture;
         }
 
         private Color[] LoadVTF( Stream stream, long vtfBytePos, out Vector2Int dimensions )
@@ -118,30 +140,18 @@ namespace Chisel.Import.Source.VPKTools
                     if( header.highResImageFormat != VTFImageFormat.IMAGE_FORMAT_NONE )
                     {
                         int mipBufferOffset = 0;
-                        for( uint i = 1; i <= header.mipmapCount; i++ )
-                        {
-                            mipBufferOffset += (int) ComputeMipmapSize( header.width, header.height, header.depth, 1, header.highResImageFormat );
-                        }
+                        for( uint i = 1; i <= header.mipmapCount; i++ ) { mipBufferOffset += (int) ComputeMipmapSize( header.width, header.height, header.depth, 1, header.highResImageFormat ); }
 
                         stream.Position = vtfBytePos + imageBufferOffset + mipBufferOffset;
 
-                        pix   = DecompressImage( stream, header.width, header.height, header.highResImageFormat );
+                        pix        = DecompressImage( stream, header.width, header.height, header.highResImageFormat );
                         dimensions = new Vector2Int( header.width, header.height );
                     }
-                    else
-                    {
-                        throw new FormatException($"Image format = [{header.highResImageFormat.ToString()}]");
-                    }
+                    else { throw new FormatException( $"Image format = [{header.highResImageFormat.ToString()}]" ); }
                 }
-                else
-                {
-                    throw new FormatException($"Image signature mismatch [{sig} != {VTFHeader.signature}]");
-                }
+                else { throw new FormatException( $"Image signature mismatch [{sig} != {VTFHeader.signature}]" ); }
             }
-            else
-            {
-                throw new FormatException($"Image missing VTF data");
-            }
+            else { throw new FormatException( $"Image missing VTF data" ); }
 
             return pix;
         }
@@ -172,6 +182,7 @@ namespace Chisel.Import.Source.VPKTools
 
             return vtfColors;
         }
+
         private uint ComputeImageBufferSize( uint width, uint height, uint depth, uint mipmaps, VTFImageFormat imageFormat )
         {
             uint uiImageSize = 0, tempWidth = width, tempHeight = height;

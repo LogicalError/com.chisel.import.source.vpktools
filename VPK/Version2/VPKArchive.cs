@@ -18,7 +18,8 @@ namespace Chisel.Import.Source.VPKTools
     {
         public readonly string name;
 
-        private Dictionary<string, VPKEntry> m_Entries = new Dictionary<string, VPKEntry>();
+        private Dictionary<string, VPKEntry> m_Entries   = new Dictionary<string, VPKEntry>();
+        private Dictionary<string, Material> m_Materials = new Dictionary<string, Material>();
 
         public VPKArchive( string vpk )
         {
@@ -26,8 +27,11 @@ namespace Chisel.Import.Source.VPKTools
             Deserialize( stream );
 
             name = Path.GetFileNameWithoutExtension( vpk );
-       }
 
+            Debug.Log( $"Loaded VPK [{name}.vpk]" );
+        }
+
+        // $TODO: this is for V1, update to V2
         public void Deserialize( Stream stream )
         {
             if( stream.ReadValueU32() != 1437209140 )
@@ -96,9 +100,34 @@ namespace Chisel.Import.Source.VPKTools
                 throw new FileNotFoundException( $"Could not find the entry [{entryName}]" );
         }
 
-        //public VTF GetTexture( )
-        //{
+        public Material GetMaterial( string textureName )
+        {
+            Texture2D GetAbedo()
+            {
+                return new VTF( GetEntry( textureName ) ).GetTexture();
+            }
 
-        //}
+            Texture2D GetNormal()
+            {
+                return new VTF( GetEntry( $"{textureName}_normal" ) ).GetTexture();
+            }
+
+            Debug.Log( $"Attempting to create material from the mainTexture [{textureName}]" );
+
+            if( m_Materials.ContainsKey( textureName ) ) { return m_Materials[textureName]; }
+            else
+            {
+                Material material = new Material( Shader.Find( "Standard (Specular setup)" ) );
+                material.name = textureName;
+
+                material.SetTexture( "_MainTex", GetAbedo() );
+                material.SetTexture( "_BumpMap", GetNormal() );
+                material.SetFloat( "_Glossiness", 0 );
+                material.SetInt( "_SmoothnessTextureChannel", 1 );
+                material.SetColor( "_SpecColor", Color.black );
+
+                return material;
+            }
+        }
     }
 }
