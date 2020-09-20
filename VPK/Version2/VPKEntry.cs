@@ -21,5 +21,8 @@ namespace Chisel.Import.Source.VPKTools
         public uint   offset;
         public ushort archiveIndex;
         public byte[] smallData;
+
+        //v2 stuff
+        public ushort preloadBytes;
     }
 }

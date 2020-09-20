@@ -9,87 +9,42 @@ Author: Daniel Cornelius
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using Chisel.Import.Source.VPKTools.Helpers;
 using UnityEngine;
 
 namespace Chisel.Import.Source.VPKTools
 {
-    public class VPKArchive
+    public partial class VPKArchive
     {
         public readonly string name;
 
         private Dictionary<string, VPKEntry> m_Entries   = new Dictionary<string, VPKEntry>();
         private Dictionary<string, Material> m_Materials = new Dictionary<string, Material>();
 
-        public VPKArchive( string vpk )
+        // V2 stuff
+        private int headerSize;
+        private int version;
+
+        public VPKArchive( string vpk, int version )
         {
+            string logInfo = "";
             Stream stream = File.OpenRead( vpk );
-            Deserialize( stream );
+
+            if( version == 1 )
+                DeserializeV1( stream );
+            else if( version == 2 )
+                DeserializeV2( stream, out logInfo );
+            else
+                throw new ArgumentException( $"Invalid VPK version, expected 1 or 2, got [{version}]" );
 
             name = Path.GetFileNameWithoutExtension( vpk );
 
-            Debug.Log( $"Loaded VPK [{name}.vpk]" );
-        }
+            Debug.Log( $"Loaded VPK [{name}.vpk] with [{m_Entries.Count}] entries." );
 
-        // $TODO: this is for V1, update to V2
-        public void Deserialize( Stream stream )
-        {
-            if( stream.ReadValueU32() != 1437209140 )
-                stream.Seek( -4L, SeekOrigin.Current );
-            else
-            {
-                uint num  = stream.ReadValueU32();
-                uint num2 = stream.ReadValueU32();
+            //foreach( KeyValuePair<string, VPKEntry> kvp in m_Entries ) { Debug.Log( $"Entry: [{kvp.Key}], File Name: [{kvp.Value.fileName}]" ); }
 
-                if( num != 1 )
-                    throw new FormatException( $"Unexpected version [{num}]" );
-            }
-
-            Dictionary<string, VPKEntry> entries = new Dictionary<string, VPKEntry>();
-
-            while( true )
-            {
-                bool   flag     = true;
-                string typeName = stream.ReadStringASCIIZ();
-
-                if( typeName == string.Empty ) break;
-
-                while( true )
-                {
-                    flag = true;
-                    string directory = stream.ReadStringASCIIZ();
-                    if( directory == string.Empty ) break;
-
-                    while( true )
-                    {
-                        flag = true;
-                        string fileName = stream.ReadStringASCIIZ();
-                        if( fileName == string.Empty ) break;
-
-                        VPKEntry entry = new VPKEntry();
-                        entry.fileName      = fileName;
-                        entry.directoryName = directory;
-                        entry.typeName      = typeName;
-                        entry.CRC32         = stream.ReadValueU32();
-                        entry.smallData     = new byte[stream.ReadValueU16()];
-                        entry.archiveIndex  = stream.ReadValueU16();
-                        entry.offset        = stream.ReadValueU32();
-                        entry.size          = stream.ReadValueU32();
-
-                        ushort term = stream.ReadValueU16();
-
-                        if( term != ushort.MaxValue ) throw new FormatException( $"Invalid terminator [{term}]" );
-
-                        if( entry.smallData.Length > 0 ) stream.Read( entry.smallData, 0, entry.smallData.Length );
-
-                        entries.Add( entry.fileName, entry );
-                    }
-                }
-            }
-
-            m_Entries = entries;
-
-            Debug.Log( $"Found [{entries.Count}] entries in [{name}.vpk]" );
+            File.WriteAllText( $"{Application.dataPath}\\vpk_log.txt", logInfo );
         }
 
         public VPKEntry GetEntry( string entryName )
@@ -104,12 +59,12 @@ namespace Chisel.Import.Source.VPKTools
         {
             Texture2D GetAbedo()
             {
-                return new VTF( GetEntry( textureName ) ).GetTexture();
+                return new VTF( GetEntry( textureName  ), version ).GetTexture();
             }
 
             Texture2D GetNormal()
             {
-                return new VTF( GetEntry( $"{textureName}_normal" ) ).GetTexture();
+                return new VTF( GetEntry( $"{textureName}_normal" ), version ).GetTexture();
             }
 
             Debug.Log( $"Attempting to create material from the mainTexture [{textureName}]" );

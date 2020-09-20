@@ -21,7 +21,7 @@ namespace Chisel.Import.Source.VPKTools
         private Texture2D texture;
         private Color[]   pixels;
 
-        public VTF( VPKEntry entry )
+        public VTF( VPKEntry entry, int vpkVersion )
         {
             using( MemoryStream stream = new MemoryStream( entry.smallData ) )
             {
