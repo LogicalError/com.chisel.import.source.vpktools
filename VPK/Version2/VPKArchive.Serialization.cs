@@ -19,7 +19,6 @@ namespace Chisel.Import.Source.VPKTools
     {
         private void DeserializeV2( Stream stream, out string logInfo )
         {
-            version = 2;
             StringBuilder                sb      = new StringBuilder();
             Dictionary<string, VPKEntry> entries = new Dictionary<string, VPKEntry>();
 
@@ -42,7 +41,7 @@ namespace Chisel.Import.Source.VPKTools
             header.SignatureSectionSize  = stream.ReadValueU32();
             headerSize                   = 28;
 
-            sb.AppendLine( $"Header Data ------------------" );
+            sb.AppendLine( $"------------------ Header Data ------------------" );
             sb.AppendLine( $"VPK Version: {header.Version}" );
             sb.AppendLine( $"Tree Size: {header.TreeSize}" );
             sb.AppendLine( $"File Data Section Size: {header.FileDataSectionSize}" );
@@ -51,37 +50,50 @@ namespace Chisel.Import.Source.VPKTools
             sb.AppendLine( $"Signature Section Size: {header.SignatureSectionSize}" );
             sb.AppendLine( Environment.NewLine ); // add spacer
 
-            sb.AppendLine( $"Tree Data ------------------" );
+            sb.AppendLine( $"------------------ Tree Data ------------------" );
             // tree
             while( stream.Position < header.TreeSize )
             {
                 string extension = stream.ReadStringASCIIZ().ToLower();
-                sb.AppendLine( $"Extension: {extension}" );
+                //sb.AppendLine( $"Extension: {extension}" );
 
                 while( true )
                 {
                     string directory = stream.ReadStringASCIIZ().ToLower();
-                    sb.AppendLine( $"Directory: {directory}" );
+                    if(directory.Length > 0)
+                    {
+                        sb.AppendLine( $"------------------------------------------------------------------------" );
+                        sb.AppendLine( $"Directory: {directory}" );
+                        sb.AppendLine( $"------------------------------------------------------------------------" );
+                    }
 
                     if( directory.Length <= 0 )
                         break; // $TODO: determine if we should throw an exception here or just break as-is
 
                     string fileName;
+                    int    index = 0;
                     do
                     {
                         fileName = stream.ReadStringASCIIZ().ToLower();
-                        sb.AppendLine( $"File Name: {fileName}" );
                         if( !string.IsNullOrEmpty( fileName ) )
                         {
+                            index++;
+                            sb.AppendLine( $">\t[#{index:00#}] File Name: {fileName}" );
+                            sb.AppendLine( $"------------------------------------" );
+
                             VPKEntry entry = new VPKEntry();
+                            // get CRC
                             entry.CRC32        = stream.ReadValueU32();
                             entry.preloadBytes = stream.ReadValueU16();
+                            // get archive index marker (this marks which VPK this data is stored in)
                             entry.archiveIndex = stream.ReadValueU16();
                             entry.offset       = stream.ReadValueU32();
                             entry.size         = stream.ReadValueU32();
+                            entry.data         = new byte[entry.preloadBytes];
 
                             ushort term = stream.ReadValueU16();
 
+                            // if this entry is a reference to another PAK
                             if( entry.offset == 0 && entry.archiveIndex == 32767 )
                                 entry.offset = Convert.ToUInt32( stream.Position );
                             if( entry.size == 0 )
@@ -92,13 +104,15 @@ namespace Chisel.Import.Source.VPKTools
                             if( !entries.ContainsKey( $"{directory}/{fileName}.{extension}" ) )
                                 entries.Add( $"{directory}/{fileName}.{extension}", entry );
 
-                            sb.AppendLine( $"\tEntry ------------------" );
-                            sb.AppendLine( $"\tFile: [{directory}/{fileName}.{extension}]" );
-                            sb.AppendLine( $"\tCRC: {entry.CRC32}" );
-                            sb.AppendLine( $"\tPreload Bytes: {entry.preloadBytes}" );
-                            sb.AppendLine( $"\tArchive Index: {entry.archiveIndex}" );
-                            sb.AppendLine( $"\tEntry Offset: {entry.offset}" );
-                            sb.AppendLine( $"\tEntry Length: {entry.size}" );
+                            //sb.AppendLine( $"\t\t> Entry ------------------" );
+                            sb.AppendLine( $"\t|\tFile:          [/{directory}/{fileName}.{extension}]" );
+                            sb.AppendLine( $"\t|\tCRC:           {entry.CRC32}" );
+                            sb.AppendLine( $"\t|\tPreload Bytes: {entry.preloadBytes}" );
+                            sb.AppendLine( $"\t|\tArchive Index: {entry.archiveIndex}" );
+                            sb.AppendLine( $"\t|\tEntry Offset:  {entry.offset}" );
+                            sb.AppendLine( $"\t|\tEntry Length:  {entry.size}" );
+                            //sb.AppendLine( $"\t|\tEntry Data Length: {entry.data.Length}" );
+                            sb.AppendLine( Environment.NewLine ); // add spacer
                         }
                     }
                     while( !string.IsNullOrEmpty( fileName ) );
@@ -107,68 +121,6 @@ namespace Chisel.Import.Source.VPKTools
 
             m_Entries = entries;
             logInfo   = sb.ToString();
-        }
-
-        public void DeserializeV1( Stream stream )
-        {
-            version = 1;
-
-            if( stream.ReadValueU32() != 1437209140U )
-                stream.Seek( -4L, SeekOrigin.Current );
-            else
-            {
-                uint num  = stream.ReadValueU32();
-                uint num2 = stream.ReadValueU32();
-
-                if( num != 1 )
-                    throw new FormatException( $"Unexpected version [{num}]" );
-            }
-
-            Dictionary<string, VPKEntry> entries = new Dictionary<string, VPKEntry>();
-
-            while( true )
-            {
-                bool   flag     = true;
-                string typeName = stream.ReadStringASCIIZ();
-
-                if( typeName == string.Empty ) break;
-
-                while( true )
-                {
-                    flag = true;
-                    string directory = stream.ReadStringASCIIZ();
-                    if( directory == string.Empty ) break;
-
-                    while( true )
-                    {
-                        flag = true;
-                        string fileName = stream.ReadStringASCIIZ();
-                        if( fileName == string.Empty ) break;
-
-                        VPKEntry entry = new VPKEntry();
-                        entry.fileName      = fileName;
-                        entry.directoryName = directory;
-                        entry.typeName      = typeName;
-                        entry.CRC32         = stream.ReadValueU32();
-                        entry.smallData     = new byte[stream.ReadValueU16()];
-                        entry.archiveIndex  = stream.ReadValueU16();
-                        entry.offset        = stream.ReadValueU32();
-                        entry.size          = stream.ReadValueU32();
-
-                        ushort term = stream.ReadValueU16();
-
-                        if( term != ushort.MaxValue ) throw new FormatException( $"Invalid terminator [{term}]" );
-
-                        if( entry.smallData.Length > 0 ) stream.Read( entry.smallData, 0, entry.smallData.Length );
-
-                        entries.Add( entry.fileName, entry );
-                    }
-                }
-            }
-
-            m_Entries = entries;
-
-            Debug.Log( $"Found [{entries.Count}] entries in [{name}.vpk]" );
         }
     }
 }

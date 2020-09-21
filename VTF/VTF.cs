@@ -21,17 +21,26 @@ namespace Chisel.Import.Source.VPKTools
         private Texture2D texture;
         private Color[]   pixels;
 
-        public VTF( VPKEntry entry, int vpkVersion )
+        public VTF( VPKEntry entry )
         {
-            using( MemoryStream stream = new MemoryStream( entry.smallData ) )
+            using( MemoryStream stream = new MemoryStream( entry.data ) )
             {
-                Color[]    pixels = null;
+                Color[]    pix = null;
                 Vector2Int dimensions;
 
-                pixels = LoadVTF( stream, 0, out dimensions );
+                pix = LoadVTF( stream, 0, out dimensions );
+
+                // invert red channel on normal textures, so the normals are correct direction facing.
+                if( entry.fileName.Contains( "_normal" ) )
+                {
+                    for( int i = 0; i < pix.Length; i++ )
+                    {
+                        pix[i].r = 1 - pix[i].r;
+                    }
+                }
 
                 texture = new Texture2D( dimensions.x, dimensions.y, TextureFormat.RGBA32, false );
-                texture.SetPixels( pixels );
+                texture.SetPixels( pix );
                 texture.Apply();
             }
 

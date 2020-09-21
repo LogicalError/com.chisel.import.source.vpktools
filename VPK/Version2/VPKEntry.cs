@@ -24,5 +24,6 @@ namespace Chisel.Import.Source.VPKTools
 
         //v2 stuff
         public ushort preloadBytes;
+        public byte[] data;
     }
 }

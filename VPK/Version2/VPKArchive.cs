@@ -9,8 +9,6 @@ Author: Daniel Cornelius
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
-using Chisel.Import.Source.VPKTools.Helpers;
 using UnityEngine;
 
 namespace Chisel.Import.Source.VPKTools
@@ -22,18 +20,15 @@ namespace Chisel.Import.Source.VPKTools
         private Dictionary<string, VPKEntry> m_Entries   = new Dictionary<string, VPKEntry>();
         private Dictionary<string, Material> m_Materials = new Dictionary<string, Material>();
 
-        // V2 stuff
         private int headerSize;
-        private int version;
 
         public VPKArchive( string vpk, int version )
         {
-            string logInfo = "";
-            Stream stream = File.OpenRead( vpk );
+            string logInfo    = "";
+            Stream stream     = File.OpenRead( vpk );
+            bool   multichunk = Path.GetFileName( vpk ).Replace( ".vpk", string.Empty ).EndsWith( "_dir" );
 
-            if( version == 1 )
-                DeserializeV1( stream );
-            else if( version == 2 )
+            if( version == 2 )
                 DeserializeV2( stream, out logInfo );
             else
                 throw new ArgumentException( $"Invalid VPK version, expected 1 or 2, got [{version}]" );
@@ -45,26 +40,33 @@ namespace Chisel.Import.Source.VPKTools
             //foreach( KeyValuePair<string, VPKEntry> kvp in m_Entries ) { Debug.Log( $"Entry: [{kvp.Key}], File Name: [{kvp.Value.fileName}]" ); }
 
             File.WriteAllText( $"{Application.dataPath}\\vpk_log.txt", logInfo );
+            stream.Close();
         }
 
+        // $TODO: use string.Contains() to make finding more fuzzy. should allow searching for only the texture name instead.
         public VPKEntry GetEntry( string entryName )
         {
             if( m_Entries.ContainsKey( entryName ) )
                 return m_Entries[entryName];
             else
-                throw new FileNotFoundException( $"Could not find the entry [{entryName}]" );
+            {
+                Debug.LogError( $"Could not find the entry [{entryName}], skipping." );
+                return new VPKEntry() { fileName = $"Could not find the entry [{entryName}]" };
+            }
+
+            //throw new FileNotFoundException( $"Could not find the entry [{entryName}]" );
         }
 
         public Material GetMaterial( string textureName )
         {
             Texture2D GetAbedo()
             {
-                return new VTF( GetEntry( textureName  ), version ).GetTexture();
+                return new VTF( GetEntry( textureName ) ).GetTexture();
             }
 
             Texture2D GetNormal()
             {
-                return new VTF( GetEntry( $"{textureName}_normal" ), version ).GetTexture();
+                return new VTF( GetEntry( $"{textureName}_normal" ) ).GetTexture();
             }
 
             Debug.Log( $"Attempting to create material from the mainTexture [{textureName}]" );
