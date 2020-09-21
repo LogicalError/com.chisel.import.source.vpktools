@@ -78,7 +78,7 @@ namespace Chisel.Import.Source.VPKTools
                         if( !string.IsNullOrEmpty( fileName ) )
                         {
                             index++;
-                            sb.AppendLine( $">\t[#{index:00#}] File Name: {fileName}" );
+                            sb.AppendLine( $"[#{index:00#}]>\tFile Name: {fileName}" );
                             sb.AppendLine( $"------------------------------------" );
 
                             VPKEntry entry = new VPKEntry();

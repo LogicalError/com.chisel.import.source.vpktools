@@ -17,6 +17,8 @@ namespace Chisel.Import.Source.VPKTools
     {
         public readonly string name;
 
+        public int EntryCount => m_Entries.Count;
+
         private Dictionary<string, VPKEntry> m_Entries   = new Dictionary<string, VPKEntry>();
         private Dictionary<string, Material> m_Materials = new Dictionary<string, Material>();
 
