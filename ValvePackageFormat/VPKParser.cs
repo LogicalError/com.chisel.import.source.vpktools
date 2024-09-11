@@ -1,38 +1,34 @@
 ﻿using System.Linq;
 using System.IO;
-using Chisel.Import.Source.VPKTools;
 using System;
 using System.Collections.Generic;
-using UnityEngine;
+
+using Debug = UnityEngine.Debug;
 
 namespace Chisel.Import.Source.VPKTools
 {
     public class VPKParser : IDisposable
     {
+        public delegate bool FileLoadDelegate(Stream stream);
         private const ushort    DIR_PAK = 0x7fff, NO_PAK = ushort.MaxValue;
-        public        string    directoryLocation { get; private set; }
-        public        string    vpkStartName      { get; private set; }
+        public        string    DirectoryLocation { get; private set; }
+        public        string    VpkStartName      { get; private set; }
+
         private       VPKHeader header;
         private       int       headerSize;
 
-        private Dictionary<string, Dictionary<string, Dictionary<string, VPKDirectoryEntry>>> tree = new Dictionary<string, Dictionary<string, Dictionary<string, VPKDirectoryEntry>>>();
+        private Dictionary<string, Dictionary<string, Dictionary<string, VPKDirectoryEntry>>> tree = new();
 
-        private List<ushort> archivesNotFound = new List<ushort>();
+        private List<ushort>     archivesNotFound = new();
 
-        private Stream      preloadStream;
-        private VPKStream[] openStreams = new VPKStream[7];
-        private int         nextStreamIndex;
+        private Stream           preloadStream;
+        private VPKOpenStreams[] openStreams = new VPKOpenStreams[7];
+        private int              nextStreamIndex;
 
-        public VPKParser( string _directoryLocation )// : this( _directoryLocation, "pak01" )
+        public VPKParser( string _directoryLocation )
         {
-            directoryLocation = _directoryLocation;
+            DirectoryLocation = _directoryLocation;
         }
-
-        /*public VPKParser( string _directoryLocation, string _vpkPakPrefix )
-        {
-            //vpkStartName      = _vpkPakPrefix;
-            directoryLocation = _directoryLocation;
-        }*/
 
         // Dispose() calls Dispose(true)
         public void Dispose()
@@ -52,37 +48,38 @@ namespace Chisel.Import.Source.VPKTools
 
         protected virtual void Dispose( bool disposing )
         {
-            if( disposing )
+            if (!disposing)
+                return;
+            
+            preloadStream?.Dispose();
+            foreach (var streamWrapper in openStreams)
+                streamWrapper.stream?.Dispose();
+
+            archivesNotFound?.Clear();
+            archivesNotFound = null;
+
+            header = null;
+            if (tree != null)
             {
-                preloadStream?.Dispose();
-                foreach( var streamWrapper in openStreams )
-                    streamWrapper.stream?.Dispose();
-
-                archivesNotFound?.Clear();
-                archivesNotFound = null;
-
-                header = null;
-                if( tree != null )
+                foreach (var extPair in tree)
                 {
-                    foreach( var extPair in tree )
-                        if( extPair.Value != null )
+                    if (extPair.Value != null)
+                    {
+                        foreach (var dirPair in extPair.Value)
                         {
-                            foreach( var dirPair in extPair.Value )
-                                if( dirPair.Value != null )
-                                {
-                                    foreach( var entryPair in dirPair.Value )
-                                        entryPair.Value.Dispose();
-                                    dirPair.Value.Clear();
-                                }
-
-                            extPair.Value.Clear();
+                            if (dirPair.Value != null)
+                            {
+                                foreach (var entryPair in dirPair.Value)
+                                    entryPair.Value.Dispose();
+                                dirPair.Value.Clear();
+                            }
                         }
-
-                    tree.Clear();
+                        extPair.Value.Clear();
+                    }
                 }
-
-                tree = null;
+                tree.Clear();
             }
+            tree = null;
         }
 
         public bool IsValid()
@@ -99,7 +96,7 @@ namespace Chisel.Import.Source.VPKTools
 
         private void ParseHeader()
         {
-            string archivePath = directoryLocation; //Path.Combine( directoryLocation, GetArchiveName( DIR_PAK ) + ".vpk" );
+            string archivePath = DirectoryLocation;
 
             if( File.Exists( archivePath ) )
             {
@@ -181,75 +178,59 @@ namespace Chisel.Import.Source.VPKTools
 
         public string LocateInArchive( string filePath )
         {
-            string extension = Path.GetExtension( filePath );
-            if( extension.Length > 0 )
-                extension = extension.Substring( 1 );
-            string directory = Path.GetDirectoryName( filePath );
-            string fileName  = Path.GetFileNameWithoutExtension( filePath );
-
-            return LocateInArchive( extension, directory, fileName );
+			PackagePath.DecomposePathNotCleaned(filePath, out string directory, out string fileName, out string extension);
+			return LocateInArchive( directory, fileName, extension);
         }
 
-        public string LocateInArchive( string extension, string directory, string fileName )
+        public string LocateInArchive(string directory, string fileName, string extension)
         {
             string archiveName = null;
 
-            string extFixed      = extension.ToLower();
-            string dirFixed      = directory.Replace( "\\", "/" ).ToLower();
-            string fileNameFixed = fileName.ToLower();
-
-            if( extFixed.IndexOf( "." ) == 0 )
-                extFixed = extFixed.Substring( 1 );
-            if( dirFixed.IndexOf( "/" ) == 0 )
-                dirFixed = dirFixed.Substring( 1 );
-            if( dirFixed.LastIndexOf( "/" ) == dirFixed.Length - 1 )
-                dirFixed = dirFixed.Substring( 0, dirFixed.Length - 1 );
-
-            if( GetEntry( extFixed, dirFixed, fileNameFixed, out VPKDirectoryEntry entry ) ) { archiveName = GetArchiveName( entry.ArchiveIndex ); }
+            PackagePath.CleanPath(ref directory, ref fileName, ref extension);
+            if (GetEntry(directory, fileName, extension, out VPKDirectoryEntry entry)) { archiveName = GetArchiveName(entry.ArchiveIndex); }
 
             return archiveName;
         }
-
-        public void LoadFileAsStream( string path, Action<Stream, uint, uint> streamActions )
-        {
-            string fixedPath = path.Replace( "\\", "/" );
-            string extension = fixedPath.Substring( fixedPath.LastIndexOf( "." ) + 1 );
-            string directory = fixedPath.Substring( 0, fixedPath.LastIndexOf( "/" ) );
-            string fileName  = fixedPath.Substring( fixedPath.LastIndexOf( "/" ) + 1 );
-            fileName = fileName.Substring( 0, fileName.LastIndexOf( "." ) );
-
-            LoadFileAsStream( extension, directory, fileName, streamActions );
+        
+		public bool LoadFileAsStream(string filePath, FileLoadDelegate streamActions)
+		{
+			PackagePath.DecomposePathNotCleaned(filePath, out string directory, out string fileName, out string extension);
+            return LoadFileAsStream( directory, fileName, extension, streamActions);
         }
 
-        public void LoadFileAsStream( string extension, string directory, string fileName, Action<Stream, uint, uint> streamActions )
+        public bool LoadFileAsStream( string directory, string fileName, string extension, FileLoadDelegate streamActions)
         {
             CheckHeader();
 
-            string extFixed      = extension.ToLower();
-            string dirFixed      = directory.Replace( "\\", "/" ).ToLower();
-            string fileNameFixed = fileName.ToLower();
-
-            if( extFixed.IndexOf( "." ) == 0 )
-                extFixed = extFixed.Substring( 1 );
-            if( dirFixed.IndexOf( "/" ) == 0 )
-                dirFixed = dirFixed.Substring( 1 );
-            if( dirFixed.LastIndexOf( "/" ) == dirFixed.Length - 1 )
-                dirFixed = dirFixed.Substring( 0, dirFixed.Length - 1 );
-
-            if( GetEntry( extFixed, dirFixed, fileNameFixed, out VPKDirectoryEntry entry ) )
+			PackagePath.CleanPath(ref directory, ref fileName, ref extension);
+            if (GetEntry(directory, fileName, extension, out VPKDirectoryEntry entry))
             {
-                Stream currentStream = GetStream( entry.ArchiveIndex );
-                if( currentStream != null )
-                    streamActions( currentStream, entry.EntryOffset, entry.EntryLength );
+                Stream currentStream = GetStream(entry.ArchiveIndex);
+                if (currentStream != null)
+                {
+                    try
+                    {
+                        currentStream.Position = 0;
+                        return streamActions(new VPKStream(currentStream, entry.EntryOffset, entry.EntryLength));
+                    }
+                    catch (Exception ex)
+                    {
+                        UnityEngine.Debug.LogException(ex);
+                        throw ex;
+                    }
+                }
+                return true;
+            } else
+            {
+                UnityEngine.Debug.LogError($"VPKParser: Could not find entry {directory}/{fileName}.{extension}");
+                return false;
             }
-            else
-                UnityEngine.Debug.LogError( "VPKParser: Could not find entry " + dirFixed + "/" + fileNameFixed + "." + extFixed );
         }
 
         private Stream GetStream( ushort archiveIndex )
         {
             Stream currentStream = null;
-
+            /*
             if( archiveIndex == DIR_PAK ) { currentStream = preloadStream; }
             else
             {
@@ -262,27 +243,27 @@ namespace Chisel.Import.Source.VPKTools
                     }
                 }
             }
-
-            if( currentStream == null )
+            */
+            //if( currentStream == null )
             {
                 string archiveName   = GetArchiveName( archiveIndex );
-                string archivePath   = Path.Combine( directoryLocation, archiveName + ".vpk" );
+                string archivePath   = Path.Combine( DirectoryLocation, Path.ChangeExtension(archiveName, PackagePath.VpkExtension));
                 bool   archiveExists = File.Exists( archivePath );
                 if( archiveExists )
                 {
-                    openStreams[nextStreamIndex].stream?.Dispose();
+//                  openStreams[nextStreamIndex].stream?.Dispose();
 
-                    currentStream                         = new FileStream( archivePath, FileMode.Open, FileAccess.Read );
-                    openStreams[nextStreamIndex].stream   = currentStream;
-                    openStreams[nextStreamIndex].pakIndex = archiveIndex;
+                    currentStream = new FileStream( archivePath, FileMode.Open, FileAccess.Read );
+//                  openStreams[nextStreamIndex].stream   = currentStream;
+//                  openStreams[nextStreamIndex].pakIndex = archiveIndex;
 
-                    nextStreamIndex = ( nextStreamIndex + 1 ) % openStreams.Length;
-                }
+//                  nextStreamIndex = ( nextStreamIndex + 1 ) % openStreams.Length;
+                }/*
                 else if( !archivesNotFound.Contains( archiveIndex ) )
                 {
                     archivesNotFound.Add( archiveIndex );
                     UnityEngine.Debug.LogError( "VPKParser: Could not find archive " + archiveName + ", full path = '" + archivePath + "'" );
-                }
+                }*/
             }
 
             return currentStream;
@@ -290,7 +271,7 @@ namespace Chisel.Import.Source.VPKTools
 
         private string GetArchiveName( ushort archiveIndex )
         {
-            string vpkPakDir = $"{directoryLocation.Replace( ".vpk","" ).Replace( "_dir", "" )}_";
+            string vpkPakDir = $"{DirectoryLocation.Replace(PackagePath.VpkExtension, "" ).Replace( "_dir", "" )}_";
             /*if( archiveIndex      == DIR_PAK ) { vpkPakDir += "dir"; }
             else*/ if( archiveIndex < 1000 )
             {
@@ -305,82 +286,57 @@ namespace Chisel.Import.Source.VPKTools
             return vpkPakDir; //vpkStartName + vpkPakDir;
         }
 
-        private bool GetEntry( string ext, string dir, string fileName, out VPKDirectoryEntry entry )
+        private bool GetEntry(string directory, string fileName, string extension, out VPKDirectoryEntry entry)
         {
             CheckHeader();
 
-            string extFixed      = ext.ToLower();
-            string dirFixed      = dir.ToLower();
-            string fileNameFixed = fileName.ToLower();
-
-            if( tree != null && tree.ContainsKey( extFixed ) && tree[extFixed].ContainsKey( dirFixed ) && tree[extFixed][dirFixed].ContainsKey( fileNameFixed ) )
+			PackagePath.CleanPath(ref directory, ref fileName, ref extension);
+            if (tree != null && tree.ContainsKey(extension) && tree[extension].ContainsKey(directory) && tree[extension][directory].ContainsKey(fileName))
             {
-                entry = tree[extFixed][dirFixed][fileNameFixed];
+                entry = tree[extension][directory][fileName];
                 return true;
-            }
-            else
+            } else
             {
                 entry = new VPKDirectoryEntry();
                 return false;
             }
         }
 
-        public bool FileExists( string path )
+        public bool FileExists(string filePath)
         {
-            string fixedPath = path.Replace( "\\", "/" ).ToLower();
-            string extension = Path.GetExtension( fixedPath );
-            string directory = Path.GetDirectoryName( fixedPath );
-            string fileName  = Path.GetFileNameWithoutExtension( fixedPath );
-
-            return FileExists( extension, directory, fileName );
+            PackagePath.DecomposePathNotCleaned(filePath, out string directory, out string fileName, out string extension);
+            return FileExists(directory, fileName, extension);
         }
 
-        public bool FileExists( string extension, string directory, string fileName )
-        {
-            CheckHeader();
+        public bool FileExists(string directory, string fileName, string extension)
+		{
+			CheckHeader();
 
-            string extFixed      = extension.ToLower();
-            string dirFixed      = directory.Replace( "\\", "/" ).ToLower();
-            string fileNameFixed = fileName.ToLower();
-
-            if( extFixed.IndexOf( "." ) == 0 )
-                extFixed = extFixed.Substring( 1 );
-
-            if( dirFixed.IndexOf( "/" ) == 0 )
-                dirFixed = dirFixed.Substring( 1 );
-            if( dirFixed.LastIndexOf( "/" ) == dirFixed.Length - 1 )
-                dirFixed = dirFixed.Substring( 0, dirFixed.Length - 1 );
-
-            if( tree != null && tree.ContainsKey( extFixed ) && tree[extFixed].ContainsKey( dirFixed ) && tree[extFixed][dirFixed].ContainsKey( fileNameFixed ) )
-                return true;
-            else
-                return false;
+            PackagePath.CleanPath(ref directory, ref fileName, ref extension);
+			return tree != null && tree.ContainsKey(extension) && 
+                tree[extension].ContainsKey(directory) && 
+                tree[extension][directory].ContainsKey(fileName);
         }
 
         public bool DirectoryExists( string directory )
-        {
-            CheckHeader();
+		{
+			CheckHeader();
 
-            string dirFixed = directory.Replace( "\\", "/" );
+			if (tree == null)
+				return false;
 
-            if( dirFixed.IndexOf( "/" ) == 0 )
-                dirFixed = dirFixed.Substring( 1 );
-            if( dirFixed.LastIndexOf( "/" ) == dirFixed.Length - 1 )
-                dirFixed = dirFixed.Substring( 0, dirFixed.Length - 1 );
-
-            if( tree != null )
+			directory = PackagePath.CleanDirectory(directory);
+            for (int i = 0; i < tree.Count; i++)
             {
-                for( int i = 0; i < tree.Count; i++ )
-                {
-                    if( tree.ContainsKey( tree.Keys.ElementAt( i ) ) && tree[tree.Keys.ElementAt( i )].ContainsKey( dirFixed ) ) { return true; }
-                }
+                if (tree.ContainsKey(tree.Keys.ElementAt(i)) && 
+                    tree[tree.Keys.ElementAt(i)].ContainsKey(directory)) 
+                    return true;
             }
-
             return false;
         }
     }
 
-    public struct VPKStream
+    public struct VPKOpenStreams
     {
         public ushort pakIndex;
         public Stream stream;
