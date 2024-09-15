@@ -1,12 +1,21 @@
 {
-    "description": "Tools to handle the Valve Package Format used by the Source engine ",
-    "displayName": "Source VPK Tools",
-    "name": "com.chisel.import.source.vpktools",
-    "keywords": [
-        "Source", "VMF", "VPK", "Importer", "Utility"
-    ],
-    "unity": "2020.1",
-    "version": "1.0.0-preview",
-    "dependencies": {
-    }
+  "description": "Tools to handle the Valve Package Format used by the Source engine ",
+  "displayName": "Source VPK Tools",
+  "name": "com.chisel.import.source.vpktools",
+  "keywords": [
+    "Source",
+    "VPK",
+    "VTF",
+    "VMT",
+    "MDL",
+    "Importer",
+    "Utility"
+  ],
+  "unity": "2020.1",
+  "version": "1.0.0-preview",
+  "dependencies": {
+    "com.unity.mathematics": "1.2.6",
+    "com.unity.modules.imageconversion": "1.0.0"
+  },
+  "_fingerprint": "27f69addb40f826998d1dfc61f510a21225be212"
 }
