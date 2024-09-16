@@ -2,6 +2,13 @@ using UnityEngine;
 
 namespace Chisel.Import.Source.VPKTools
 {
+	public enum SourceEntity
+	{
+		Brush,
+		Light,
+		Model
+	}
+
 	public class SourceEngineUnits
 	{
 		public const float VmfMeters = 64.0f / 1.22f;
@@ -56,7 +63,10 @@ namespace Chisel.Import.Source.VPKTools
 							cr * cp);
 		}
 
-		public static void SetUnityTransformWithValveCoordinates(Transform transform, Vector3 angles, Vector3 position, bool isLight = false)
+		public static readonly Matrix4x4 ModelFixupMatrix = Matrix4x4.Rotate(Quaternion.AngleAxis(-90, Vector3.right));
+		public static readonly Matrix4x4 InvModelMatrix = Matrix4x4.Inverse(ModelFixupMatrix);
+
+		public static void SetUnityTransformWithValveCoordinates(Transform transform, Vector3 angles, Vector3 position, SourceEntity sourceEntity)
 		{
 			if (float.IsNaN(position.x) ||
 				float.IsNaN(position.y) ||
@@ -72,18 +82,32 @@ namespace Chisel.Import.Source.VPKTools
 			forward = SourceEngineUnits.VmfSwizzle.MultiplyPoint(forward);
 			up = SourceEngineUnits.VmfSwizzle.MultiplyPoint(up);
 
-			if (isLight)
+			switch (sourceEntity)
 			{
-				quaternion = Quaternion.AngleAxis(180, Vector3.up) * Quaternion.LookRotation(-right, up);
-			} else
-			{
-				var matrix = Matrix4x4.identity;
-				matrix.SetColumn(3, new Vector4(translation.x, translation.y, translation.z, 1));
-				matrix.SetColumn(0, right);
-				matrix.SetColumn(1, -forward);
-				matrix.SetColumn(2, -up);
+				case SourceEntity.Light: quaternion = Quaternion.AngleAxis(180, Vector3.up) * Quaternion.LookRotation(-right, up); break;
+				case SourceEntity.Model:
+				{
+					var matrix = Matrix4x4.identity;
+					matrix.SetColumn(3, new Vector4(translation.x, translation.y, translation.z, 1));
+					matrix.SetColumn(0, right);
+					matrix.SetColumn(1, -forward);
+					matrix.SetColumn(2, -up);
+					matrix = matrix * ModelFixupMatrix;
 
-				matrix.Decompose(out translation, out quaternion, out scale);
+					matrix.Decompose(out translation, out quaternion, out scale);
+					break;
+				}
+				case SourceEntity.Brush:
+				{
+					var matrix = Matrix4x4.identity;
+					matrix.SetColumn(3, new Vector4(translation.x, translation.y, translation.z, 1));
+					matrix.SetColumn(0, right);
+					matrix.SetColumn(1, -forward);
+					matrix.SetColumn(2, -up);
+
+					matrix.Decompose(out translation, out quaternion, out scale);
+					break;
+				}
 			}
 
 			transform.localScale = scale;

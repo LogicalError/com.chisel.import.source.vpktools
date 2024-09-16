@@ -57,9 +57,9 @@
         public       VTFImageFlag   flags;                  // VTF flags.
         public       ushort         frames;                 // Number of frames, if animated (1 for no animation).
         public       ushort         firstFrame;             // First frame in animation (0 based).
-        public       byte[]         padding0;               // (Sizeof 4) reflectivity padding (16 byte alignment).
+        public       uint           padding0;               // (Sizeof 4) reflectivity padding (16 byte alignment).
         public       float[]        reflectivity;           // (Sizeof 3) reflectivity vector.
-        public       byte[]         padding1;               // (Sizeof 4) reflectivity padding (8 byte packing).
+        public       uint           padding1;               // (Sizeof 4) reflectivity padding (8 byte packing).
         public       float          bumpmapScale;           // Bumpmap scale.
         public       VTFImageFormat highResImageFormat;     // High resolution image format.
         public       byte           mipmapCount;            // Number of mipmaps.
