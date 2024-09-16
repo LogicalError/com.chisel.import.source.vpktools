@@ -6,7 +6,6 @@ using Mathf = UnityEngine.Mathf;
 
 namespace Chisel.Import.Source.VPKTools
 {
-    // TODO: support multiple frames
     public class VTF
     {
         public static bool averageTextures = false;

@@ -81,6 +81,14 @@ namespace Chisel.Import.Source.VPKTools
 		public float?       AlphaTestReference;
 		public bool?		AlphaTest;
 
+
+		public bool HaveCutout { get { return AlphaTest.HasValue && AlphaTest.Value; } }
+		public bool HaveTranslucency { get { return Translucent.HasValue && Translucent.Value; } }
+		public bool HaveAdditiveBlending { get { return Additive.HasValue && (Additive.Value > 0); } }
+		public bool HaveTransparency { get { return HaveTranslucency || HaveAdditiveBlending || HaveCutout; } }
+
+
+
 		public void GetAllTextureNames(HashSet<string> outputTextureNames)
 		{
 			if (BaseTextureName != null) outputTextureNames.Add(BaseTextureName);
