@@ -85,22 +85,7 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			entryName = entryName.Replace('\\', '/').ToLower();
 			string fullname = Path.ChangeExtension($"materials/{entryName}", PackagePath.VtfExtension);
-			return ImportGetEntry<Texture2D>(fullname);
-		}
-
-		public T ImportGetEntry<T>(string entryName) where T : UnityEngine.Object
-		{
-			if (entryName == null)
-				return null;
-			// TODO: use PackagePath instead
-			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
-			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
-			ArrayPool<char>.Shared.Return(rentedCharList);
-			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
-				return null;
-			if (!Import<T>(entry, out var asset))
-				return null;
-			return asset;
+			return Import<Texture2D>(fullname);
 		}
 
 
@@ -118,7 +103,7 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceText;
 		}
 
-		public VTF ImportVTF(string entryName)
+		public VTF LoadVTF(string entryName)
 		{
 			if (entryName == null)
 				return null;
@@ -128,10 +113,10 @@ namespace Chisel.Import.Source.VPKTools
 			ArrayPool<char>.Shared.Return(rentedCharList);
 			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
 				return null;
-			return ImportVTF(entry);
+			return LoadVTF(entry);
 		}
 
-		public VTF ImportVTF(GameEntry entry)
+		public VTF LoadVTF(GameEntry entry)
 		{
 			VTF sourceTexture = null;
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
@@ -142,7 +127,7 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceTexture;
 		}
 
-		public VmfMaterial ImportVmf(string entryName)
+		public VmfMaterial LoadVmf(string entryName)
 		{
 			if (entryName == null)
 				return null;
@@ -152,10 +137,10 @@ namespace Chisel.Import.Source.VPKTools
 			ArrayPool<char>.Shared.Return(rentedCharList);
 			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
 				return null;
-			return ImportVmf(entry);
+			return LoadVmf(entry);
 		}
 
-		public VmfMaterial ImportVmf(GameEntry entry)
+		public VmfMaterial LoadVmf(GameEntry entry)
 		{
 			VmfMaterial sourceMaterial = null; 
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
@@ -169,7 +154,7 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceMaterial;
 		}
 
-		public MdlHeader ImportMdl(string entryName, Lookup _lookup)
+		public MdlHeader LoadMdl(string entryName, Lookup _lookup)
 		{
 			if (entryName == null)
 				return null;
@@ -179,10 +164,10 @@ namespace Chisel.Import.Source.VPKTools
 			ArrayPool<char>.Shared.Return(rentedCharList);
 			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
 				return null;
-			return ImportMdl(entry, _lookup);
+			return LoadMdl(entry, _lookup);
 		}
 
-		public MdlHeader ImportMdl(GameEntry entry, Lookup lookup)
+		public MdlHeader LoadMdl(GameEntry entry, Lookup lookup)
 		{
 			if (entry.Extension != PackagePath.MdlExtension)
 				return null;
@@ -192,8 +177,6 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				if (!LoadFileAsStream(entry, delegate (Stream stream)
 				{
-					var outputPath = GetOutputPath(entry.keyname);
-					PackagePath.EnsureDirectoriesExist(outputPath);
 					using var reader = new BinaryReader(stream);
 					header = MdlHeader.Read(reader, this, lookup);
 					return true;
@@ -206,7 +189,7 @@ namespace Chisel.Import.Source.VPKTools
 			return header;
 		}
 
-		public VtxHeader ImportVtx(string entryName)
+		public VtxHeader LoadVtx(string entryName)
 		{
 			if (entryName == null)
 				return null;
@@ -216,10 +199,10 @@ namespace Chisel.Import.Source.VPKTools
 			ArrayPool<char>.Shared.Return(rentedCharList);
 			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
 				return null;
-			return ImportVtx(entry);
+			return LoadVtx(entry);
 		}
 
-		public VtxHeader ImportVtx(GameEntry entry)
+		public VtxHeader LoadVtx(GameEntry entry)
 		{
 			if (entry.Extension != PackagePath.VtxExtension)
 				return null;
@@ -227,8 +210,6 @@ namespace Chisel.Import.Source.VPKTools
 			VtxHeader header = null;
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
 			{
-				var outputPath = GetOutputPath(entry.keyname);
-				PackagePath.EnsureDirectoriesExist(outputPath);
 				using var reader = new BinaryReader(stream);
 				header = VtxHeader.Read(reader);
 				return true;
@@ -236,7 +217,7 @@ namespace Chisel.Import.Source.VPKTools
 			return header;
 		}
 
-		public VvdHeader ImportVvd(string entryName, MdlHeader mdlHeader)
+		public VvdHeader LoadVvd(string entryName, MdlHeader mdlHeader)
 		{
 			if (entryName == null)
 				return null;
@@ -246,10 +227,10 @@ namespace Chisel.Import.Source.VPKTools
 			ArrayPool<char>.Shared.Return(rentedCharList);
 			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
 				return null;
-			return ImportVvd(entry, mdlHeader);
+			return LoadVvd(entry, mdlHeader);
 		}
 
-		public VvdHeader ImportVvd(GameEntry entry, MdlHeader mdlHeader)
+		public VvdHeader LoadVvd(GameEntry entry, MdlHeader mdlHeader)
 		{
 			if (entry.Extension != PackagePath.VvdExtension)
 				return null;
@@ -257,8 +238,6 @@ namespace Chisel.Import.Source.VPKTools
 			VvdHeader header = null;
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
 			{
-				var outputPath = GetOutputPath(entry.keyname);
-				PackagePath.EnsureDirectoriesExist(outputPath);
 				using var reader = new BinaryReader(stream);
 				header = VvdHeader.Load(reader, mdlHeader);
 				return true;
@@ -271,7 +250,7 @@ namespace Chisel.Import.Source.VPKTools
 			var lookup = new Lookup();
 
 			var mdlEntry = GetEntry(modelId);
-			var mdlHeader = mdlEntry != null ? ImportMdl(mdlEntry, lookup) : null;
+			var mdlHeader = mdlEntry != null ? LoadMdl(mdlEntry, lookup) : null;
 			if (mdlHeader == null)
 			{
 				Debug.LogError($"Failed to load mdlHeader {modelId}");
@@ -280,7 +259,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			var vvdHeaderName = Path.ChangeExtension(modelId, PackagePath.VvdExtension);
 			var vvdEntry = GetEntry(vvdHeaderName);
-			var vvdHeader = (vvdEntry != null) ? ImportVvd(vvdEntry, mdlHeader) : null;
+			var vvdHeader = (vvdEntry != null) ? LoadVvd(vvdEntry, mdlHeader) : null;
 			if (vvdHeader == null)
 			{
 				Debug.LogError($"Failed to load vvdHeader {vvdHeaderName}");
@@ -289,7 +268,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			var vtxHeaderName = Path.ChangeExtension(modelId, PackagePath.VtxDX90Extension);
 			var vtxEntry = GetEntry(vtxHeaderName);
-			var vtxHeader = (vtxEntry != null) ? ImportVtx(vtxEntry) : null;
+			var vtxHeader = (vtxEntry != null) ? LoadVtx(vtxEntry) : null;
 			if (vtxHeader == null)
 			{
 				Debug.LogError($"Failed to load vtxHeader {vtxHeaderName}");
@@ -310,6 +289,21 @@ namespace Chisel.Import.Source.VPKTools
 			};
 		}
 
+
+		public T Import<T>(string entryName) where T : UnityEngine.Object
+		{
+			if (entryName == null)
+				return null;
+			// TODO: use PackagePath instead
+			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
+			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
+			ArrayPool<char>.Shared.Return(rentedCharList);
+			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
+				return null;
+			if (!Import<T>(entry, out var asset))
+				return null;
+			return asset;
+		}
 
 		public bool Import<T>(GameEntry entry, out T asset) where T : UnityEngine.Object
 		{

@@ -173,9 +173,6 @@ namespace Chisel.Import.Source.VPKTools
 			if (unityMaterial.HasProperty("_Glossiness")) unityMaterial.SetFloat("_Glossiness", 0);
 			if (unityMaterial.HasProperty("_SmoothnessTextureChannel")) unityMaterial.SetInt("_SmoothnessTextureChannel", 0);
 
-
-			// TODO: support multiple frames
-
 			Texture2D mainTexture = SetMaterialTexture(resources, unityMaterial, "_MainTex", sourceMaterial.BaseTextureName);
 			Texture2D normalMap = SetMaterialTexture(resources, unityMaterial, "_BumpMap", sourceMaterial.BumpMapName);
 			Texture2D selfIlluminationMap = SetMaterialTexture(resources, unityMaterial, "_EmissionMap", sourceMaterial.SelfIlluminationTexture);
@@ -274,10 +271,6 @@ namespace Chisel.Import.Source.VPKTools
 
 			if (sourceMaterial.Color != null)
 				unityMaterial.SetColor("_Color", sourceMaterial.Color);
-
-			// TODO: support BumpmapScale
-			//if (normalMap != null)
-			//	unityMaterial.SetFloat("_BumpScale", normalMap.BumpmapScale);
 
 			if (haveCutout && sourceMaterial.AlphaTestReference.HasValue)
 				unityMaterial.SetFloat("_Cutoff", sourceMaterial.AlphaTestReference.Value);
