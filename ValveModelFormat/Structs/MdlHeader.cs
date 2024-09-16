@@ -157,6 +157,7 @@ namespace Chisel.Import.Source.VPKTools
 		public static StudioQuaternionInterpolateInfo[] Load(BinaryReader reader, Lookup lookup, int count, long offset)
 		{
 			return null;
+			#if false
 			// TODO: figure out why this is broken
 			StudioQuaternionInterpolateInfo[] items;
 			try
@@ -181,6 +182,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			reader.BaseStream.Seek(startSeek, SeekOrigin.Begin);
 			return items;
+			#endif
 		}
 	};
 
@@ -952,7 +954,8 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			//if (offset == 0)
 				return new StudioAnimation[0];
-				
+
+			#if false
 			var items = new List<StudioAnimation>();
 			var startSeek = reader.BaseStream.Position;
 			var currentOffset = offset;
@@ -974,6 +977,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			reader.BaseStream.Seek(startSeek, SeekOrigin.Begin);
 			return items.ToArray();
+			#endif
 		}
 	};
 		
@@ -2149,7 +2153,7 @@ namespace Chisel.Import.Source.VPKTools
 				var mdlEntry = gameResources.GetEntry(items[i].name);
 				if (mdlEntry != null)
 				{
-					items[i].header = gameResources.ImportMdl(mdlEntry, lookup);
+					items[i].header = gameResources.LoadMdl(mdlEntry, lookup);
 				}
 				else
 					items[i].header = null;

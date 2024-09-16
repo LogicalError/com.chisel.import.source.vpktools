@@ -2,66 +2,91 @@ using System.IO;
 
 using UnityEngine;
 using UnityEditor;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace Chisel.Import.Source.VPKTools
 {
 	public static class Texture2DImporter
 	{
-		public static Texture2D Import(VTF sourceTexture, string outputPath)
+		public static Texture2D[] Import(VTF sourceTexture, string outputPath)
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, ".png");
 			var foundAsset = UnityAssets.Load<Texture2D>(destinationPath);
 			if (foundAsset != null)
-				return foundAsset;
+				return new Texture2D[] { foundAsset };
 
-			// Convert vtf texture to unity Texture2D
-			if (!CopyToTexture(sourceTexture, out Texture2D unityTexture) ||
-				unityTexture == null)
+			var filePath = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + "[0].png");
+			foundAsset = UnityAssets.Load<Texture2D>(filePath);
+			if (foundAsset != null)
 			{
-				return null;
+				var frameTextureList = new List<Texture2D>();
+				int index = 0;
+				while (foundAsset != null)
+				{
+					frameTextureList.Add(foundAsset);
+					index++;
+					filePath = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + $"[{index}].png");
+					foundAsset = UnityAssets.Load<Texture2D>(filePath);
+				}
+				return frameTextureList.ToArray();
 			}
 
-			try
-			{
-				// Write texture as a png file
-				SavePng(unityTexture, destinationPath);
+			// Write texture as a png file
+			var frameNames = SaveFramesAsPNG(sourceTexture, destinationPath);
+			if (frameNames == null || frameNames.Length == 0)
+				return null;
 
+			var frameTextures = new Texture2D[frameNames.Length];
+			for (int i = 0; i < frameNames.Length; i++)
+			{
 				// Import png file as an asset
-				var assetPath = UnityAssets.GetAssetPath(destinationPath);
+				var assetPath = UnityAssets.GetAssetPath(frameNames[i]);
 				AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUncompressedImport);
-			
+
 				// Configure the importer (can only be done after importing once) and re-import
 				ConfigureTextureImporter(sourceTexture, assetPath);
 
 				// Reload the asset
-				return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+				frameTextures[i] = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
 			}
-			finally
-			{
-				// make sure we destroy the Texture2D we created, so it doesn't end up stored in our scene file
-				UnityEngine.Object.DestroyImmediate(unityTexture);
-			}
+			return frameTextures;
 		}
 
-		public static void SavePng(Texture2D unityTexture, string destinationPath)
+		public static string[] SaveFramesAsPNG(VTF texture, string destinationPath)
 		{
+			if (texture.Frames == null || texture.Frames.Length == 0)
+				return null;
+
 			PackagePath.EnsureDirectoriesExist(destinationPath);
-			var bytes = ImageConversion.EncodeToPNG(unityTexture);
-			File.WriteAllBytes(destinationPath, bytes);
+
+			var frameNames = new string[texture.Frames.Length];
+			if (texture.Frames.Length == 1)
+			{
+				var bytes = ImageConversion.EncodeArrayToPNG(texture.Frames[0].Pixels,
+					//UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm, 
+					UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
+					(uint)texture.Width, (uint)texture.Height);
+
+				frameNames[0] = destinationPath;
+				File.WriteAllBytes(destinationPath, bytes);
+				return frameNames;
+			}
+
+			for (int i = 0; i < texture.Frames.Length; i++)
+			{
+				var bytes = ImageConversion.EncodeArrayToPNG(texture.Frames[i].Pixels,
+					//UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm, 
+					UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
+					(uint)texture.Width, (uint)texture.Height);
+
+				var filePath = Path.Combine(Path.GetDirectoryName(destinationPath), Path.GetFileNameWithoutExtension(destinationPath) + $"[{i}].png");
+				frameNames[i] = filePath;
+				File.WriteAllBytes(filePath, bytes);
+			}
+			return frameNames;
 		}
 
-		static bool CopyToTexture(VTF vtfTexture, out Texture2D unityTexture)
-		{
-			unityTexture = null;
-			if (vtfTexture.Width == 0 || vtfTexture.Height == 0)
-				return false;
-
-			unityTexture = new Texture2D(vtfTexture.Width, vtfTexture.Height, TextureFormat.RGBA32, false);
-			unityTexture.SetPixels(vtfTexture.Pixels);
-			unityTexture.Apply();
-			return true;
-		}
-		
 		public static void ConfigureTextureImporter(VTF sourceTexture, string destinationPath)
 		{
 			var assetPath = Path.Combine("Assets", Path.GetRelativePath(Application.dataPath, destinationPath));

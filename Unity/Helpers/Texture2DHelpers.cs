@@ -1,4 +1,4 @@
-﻿using Chisel.Import.Source.VPKTools.Helpers;
+using Chisel.Import.Source.VPKTools.Helpers;
 
 using System;
 using System.IO;
@@ -7,7 +7,6 @@ using UnityEngine;
 
 namespace Chisel.Import.Source.VPKTools
 {
-    // TODO: separate the unity specific functions from those that simply work on an array of colors
     public static class Texture2DHelpers
     {
         /// <summary>
@@ -68,7 +67,7 @@ namespace Chisel.Import.Source.VPKTools
         /// <param name="height">Expected height of the image</param>
         /// <param name="textureFormat">The format of the data given</param>
         /// <returns>Pixel color data</returns>
-        public static Color[] DecompressRawBytes( Stream data, ushort width, ushort height, TextureFormat textureFormat )
+        public static Color[] DecompressRawBytes( Stream data, ushort width, ushort height, uint dataSize, TextureFormat textureFormat )
         {
             Color[] colors = null;
             if( textureFormat == TextureFormat.BGR888 )
@@ -76,11 +75,11 @@ namespace Chisel.Import.Source.VPKTools
             else if( textureFormat == TextureFormat.BGRA8888 )
                 colors = DecompressBGRA8888( data, width, height );
             else if( textureFormat == TextureFormat.DXT1 )
-                colors = DecompressDXT1( data, width, height );
+                colors = DecompressDXT1( data, width, height, dataSize);
             else if( textureFormat == TextureFormat.DXT3 )
-                colors = DecompressDXT3( data, width, height );
+                colors = DecompressDXT3( data, width, height, dataSize);
             else if( textureFormat == TextureFormat.DXT5 )
-                colors = DecompressDXT5( data, width, height );
+                colors = DecompressDXT5( data, width, height, dataSize);
             else
                 Debug.LogError( "Texture2DHelpers: Texture format not supported " + textureFormat );
 
@@ -172,8 +171,8 @@ namespace Chisel.Import.Source.VPKTools
         /// <param name="width">Expected width of the image</param>
         /// <param name="height">Expected height of the image</param>
         /// <returns>Pixel color data</returns>
-        public static Color[] DecompressDXT1( Stream data, ushort width, ushort height )
-        {
+        public static Color[] DecompressDXT1(Stream data, ushort width, ushort height, uint dataSize)
+		{
             Color[] texture2DColors = new Color[width * height];
 
             for( int row = 0; row < height; row += 4 )
@@ -216,17 +215,17 @@ namespace Chisel.Import.Source.VPKTools
             }
 
             return texture2DColors.ToArray();
-        }
+		}
 
-        /// <summary>
-        /// Turn raw DXT3 bytes to a Color array that can be used in a Texture2D.
-        /// </summary>
-        /// <param name="data">Raw image byte data</param>
-        /// <param name="width">Expected width of the image</param>
-        /// <param name="height">Expected height of the image</param>
-        /// <returns>Pixel color data</returns>
-        public static Color[] DecompressDXT3( Stream data, ushort width, ushort height )
-        {
+		/// <summary>
+		/// Turn raw DXT3 bytes to a Color array that can be used in a Texture2D.
+		/// </summary>
+		/// <param name="data">Raw image byte data</param>
+		/// <param name="width">Expected width of the image</param>
+		/// <param name="height">Expected height of the image</param>
+		/// <returns>Pixel color data</returns>
+		public static Color[] DecompressDXT3( Stream data, ushort width, ushort height, uint dataSize)
+		{
             Color[] texture2DColors = new Color[width * height];
 
             for( int row = 0; row < height; row += 4 )
@@ -279,8 +278,18 @@ namespace Chisel.Import.Source.VPKTools
         /// <param name="width">Expected width of the image</param>
         /// <param name="height">Expected height of the image</param>
         /// <returns>Pixel color data</returns>
-        public static Color[] DecompressDXT5( Stream data, ushort width, ushort height )
-        {
+        public static Color[] DecompressDXT5( Stream data, ushort width, ushort height, uint dataSize)
+		{
+			// TODO: replace this with our own DXT5 decompression code
+			var byteBuffer = new byte[dataSize];
+			data.Read(byteBuffer, 0, byteBuffer.Length);
+
+			Texture2D tex = new(width, height, UnityEngine.TextureFormat.DXT5, false, false, true);
+			tex.LoadRawTextureData(byteBuffer);
+			var pixels = tex.GetPixels();
+			UnityEngine.Object.DestroyImmediate(tex);
+			return pixels;
+#if false
             Color[] texture2DColors = new Color[width * height];
 
             for( int row = 0; row < height; row += 4 )
@@ -370,7 +379,8 @@ namespace Chisel.Import.Source.VPKTools
             }
 
             return texture2DColors.ToArray();
-        }
+#endif
+		}
 
         /// <summary>
         /// This enum only holds the formats this helper class can read.
