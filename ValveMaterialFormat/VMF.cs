@@ -23,6 +23,7 @@ namespace Chisel.Import.Source.VPKTools
 		public bool?		BumpSelfShadowing;
 		public string       BumpMapName;
 		public string       BumpMap2Name;
+		public string       BumpMap3Name;
 		public int?			BumpFrame;
 		
 		public string       NormalMapName;
@@ -95,6 +96,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (BaseTexture2Name != null) outputTextureNames.Add(BaseTexture2Name);
 			if (BumpMapName != null) outputTextureNames.Add(BumpMapName);
 			if (BumpMap2Name != null) outputTextureNames.Add(BumpMap2Name);
+			if (BumpMap3Name != null) outputTextureNames.Add(BumpMap3Name);
 			if (NormalMapName != null) outputTextureNames.Add(NormalMapName);
 
 			if (SelfIlluminationMask != null) outputTextureNames.Add(SelfIlluminationMask);
@@ -302,12 +304,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$bloomexponent": // '3'.
 						case "$bloomsaturation": // '1'.
 						case "$bloomscale": // '1'.
-											//case "$bloomtexture": // '_rt_fullframefb2'.
-											//case "$bloomtexture": // '_rt_small16fb0'.
-											//case "$bloomtexture": // '_rt_small2fb0'.
-											//case "$bloomtexture": // '_rt_smallfb0'.
-											//case "$bloomtexture": // '_rt_smallfb2'.
-											//case "$bloomtexture": // '_rt_smallhdr0'.
 						case "$bloomtexture": // '_rt_small8fb0'.
 						case "$bloomtintenable": // '1'. '2'.
 						case "$bloomtype": // '0'.
@@ -316,18 +312,16 @@ namespace Chisel.Import.Source.VPKTools
 						case "$blurtexture": // '_rt_smallhdr0'.
 						case "$bottommaterial":
 						case "$brightness": // 'effects/spark_brightness'.
-						case "$bumpamp":
 						case "$bumpbasetexture2withbumpmap": // '0'. '1'.
-						case "$bumpmap3": // 'models/boxrocket_chell_head/face_1.0_n'.
-						case "$bumpmaptransform": // 'center 1.0 1.0 scale 2.0 2.0 rotate 0.0 translate 0.5 0.5'.
 						case "$bumpoffset":
 						case "$bumpscale": // '0.25'. '0.50'.
 						case "$bumpstretch": // 'models/shadertest/shader1_normal'.
-											 //case "$bumptransform": // 'center .75 .75 scale 2 2 rotate 0 translate 0 0'.
-											 //case "$bumptransform": // 'center 0 0 scale 2 2 rotate 0 translate 0 0'.
-											 //case "$bumptransform": // 'center 1 1 scale 2 2 rotate 0 translate .50 0'.
-											 //case "$bumptransform": // 'center 1 1 scale 2 2 rotate 0 translate 0 0'.
+						//case "$bumptransform": // 'center .75 .75 scale 2 2 rotate 0 translate 0 0'.
+						//case "$bumptransform": // 'center 0 0 scale 2 2 rotate 0 translate 0 0'.
+						//case "$bumptransform": // 'center 1 1 scale 2 2 rotate 0 translate .50 0'.
+						//case "$bumptransform": // 'center 1 1 scale 2 2 rotate 0 translate 0 0'.
 						case "$bumptransform": // '[ 1.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.000000 0.000000 0.000000 0.000000 1.000000 ]'.
+						case "$bumpmaptransform": // 'center 1.0 1.0 scale 2.0 2.0 rotate 0.0 translate 0.5 0.5'.
 						case "$bumpwrinkle": // 'models/shadertest/shader3_normal'.
 						case "$burn_grad": // 'dev/vortex_burn_grad_1d'.
 						case "$burn_noise": // 'dev/burnableweb3_mask'. 'dev/xognoise'.
@@ -1105,8 +1099,10 @@ namespace Chisel.Import.Source.VPKTools
 						case "$basealphaenvmapmask": { TryParseFloatProperty(property, ref vmfMaterial.BaseAlphaEnvMapMask); break; }
 
 						case "$bumpframe": { TryParseIntProperty(property, ref vmfMaterial.BumpFrame); break; }
+						case "$bumpamp":
 						case "$bumpmap": { vmfMaterial.BumpMapName = property.Value; break; }
 						case "$bumpmap2": { vmfMaterial.BumpMap2Name = property.Value; break; }
+						case "$bumpmap3": { vmfMaterial.BumpMap3Name = property.Value; break; }
 
 						case "$ssbump2": // '1'.
 						case "$ssbumpmathfix": // '1'.

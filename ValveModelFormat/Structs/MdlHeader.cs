@@ -2153,7 +2153,7 @@ namespace Chisel.Import.Source.VPKTools
 				var mdlEntry = gameResources.GetEntry(items[i].name);
 				if (mdlEntry != null)
 				{
-					items[i].header = gameResources.ImportMdl(mdlEntry, lookup);
+					items[i].header = gameResources.LoadMdl(mdlEntry, lookup);
 				}
 				else
 					items[i].header = null;

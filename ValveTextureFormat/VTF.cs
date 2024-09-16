@@ -8,7 +8,6 @@ namespace Chisel.Import.Source.VPKTools
 {
     public class VTF
     {
-        public static bool averageTextures = false;
         public static int  maxTextureSize  = 4096;
 
 		public Frame[] Frames       { get; private set; }
@@ -26,26 +25,12 @@ namespace Chisel.Import.Source.VPKTools
         public static VTF Read( Stream stream )
         {
 			var frames = LoadVTFFile(stream, out int width, out int height, out var flags, out var hasAlpha);
-			
-            // TODO: why? when we export textures and import them through unity, unity can handle this for us?
-			/*
-			if (pixels != null)
-            {
-                if (averageTextures)
-                {
-                    pixels = MakePlain( AverageTexture( pixels ), 4, 4 );
-                    width  = 4;
-                    height = 4;
-                } else
-                    pixels = DecreaseTextureSize( pixels, width, height, maxTextureSize, out width, out height );
-            }*/
-
 			return new VTF
 			{
-				Frames = frames,
-				Width  = width,
-				Height = height,
-				Flags = flags,
+				Frames   = frames,
+				Width    = width,
+				Height   = height,
+				Flags    = flags,
 				HasAlpha = hasAlpha
 			};
         }
@@ -110,7 +95,6 @@ namespace Chisel.Import.Source.VPKTools
 
             return scaledTexture;
         }
-#endif
 
         public static Color AverageTexture(Color[] pixels)
         {
@@ -138,6 +122,7 @@ namespace Chisel.Import.Source.VPKTools
                 plain[i] = mainColor;
             return plain;
         }
+#endif
 
         public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha)
 		{

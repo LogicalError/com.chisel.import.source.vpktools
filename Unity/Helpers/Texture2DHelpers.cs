@@ -7,7 +7,6 @@ using UnityEngine;
 
 namespace Chisel.Import.Source.VPKTools
 {
-    // TODO: separate the unity specific functions from those that simply work on an array of colors
     public static class Texture2DHelpers
     {
         /// <summary>

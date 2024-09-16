@@ -13,13 +13,24 @@ namespace Chisel.Import.Source.VPKTools
 	#region Data (move out of this file)
 	public class MdlMeshEntry
 	{
-		public Material				material;
+		public int materialIndex;
 		internal readonly List<int>	Indices				= new List<int>();
 	}
 		
 	public class MdlSkeleton
 	{
 		public readonly List<Transform> Bones = new();
+	}
+
+	public class MdlMaterialTable
+	{
+		public VmfMaterial[] sourceMaterials;
+		public Material[] unityMaterials;
+	}
+
+	public class MdlModelMaterials : MdlMaterialTable
+	{
+		public MdlMaterialTable[] skins;
 	}
 
 	[DebuggerDisplay("Name {Name}")]
@@ -31,9 +42,11 @@ namespace Chisel.Import.Source.VPKTools
 		public string	   Name;
 		public MdlModel    Model;
 		public Studioflags Flags;
+		public Renderer	   Renderer;
 		public GameObject  MeshObject;
 		public Animation   Animation;
-		
+		public Mesh		   Mesh;
+
 		public readonly List<Vector3>		Vertices	= new();
 		public readonly List<Vector4>		Tangents	= new();
 		public readonly List<Vector3>		Normals		= new();
@@ -41,12 +54,12 @@ namespace Chisel.Import.Source.VPKTools
 		public readonly List<BoneWeight>	BoneWeights = new();
 		public readonly List<MdlMeshEntry>	SubMeshes   = new();
 		
-		public void GenerateMesh(GameObject parentGameObject, MdlSkeleton skeleton, bool staticPropHack, out Mesh mesh)
+		public void GenerateMesh(GameObject parentGameObject, MdlSkeleton skeleton, bool staticPropHack)
 		{
 			if (string.IsNullOrWhiteSpace(Name))
 				Name = "unnamed mesh";
-			
-			mesh = null;
+
+			Mesh = null;
 			MeshObject = new GameObject(Name);
 			if (Vertices.Count > 0)
 			{
@@ -102,7 +115,7 @@ namespace Chisel.Import.Source.VPKTools
 					}
 				}
 
-				mesh = new Mesh
+				Mesh = new Mesh
 				{
 					vertices	 = vertices,
 					normals		 = normals,
@@ -115,22 +128,19 @@ namespace Chisel.Import.Source.VPKTools
 					bounds		 = Model.MdlHeader.ViewBounds
 				};
 
-			
-				var materials = new Material[SubMeshes.Count];
 				for (var i = 0; i < SubMeshes.Count; i++)
 				{
-					mesh.SetTriangles(SubMeshes[i].Indices.ToArray(), i);
-					materials[i] = SubMeshes[i].material != null ? SubMeshes[i].material : null;// ChiselDefaultMaterials.DefaultMaterial;
+					Mesh.SetTriangles(SubMeshes[i].Indices.ToArray(), i);
 				}
+
 				if (tangents == null)
-					mesh.RecalculateTangents();
-				mesh.RecalculateBounds();
+					Mesh.RecalculateTangents();
+				Mesh.RecalculateBounds();
 
 				if (skeleton != null && skeleton.Bones.Count > 0)
 				{
 					var skinnedMeshRenderer = MeshObject.AddComponent<SkinnedMeshRenderer>();
-					skinnedMeshRenderer.sharedMaterials		= materials;
-					skinnedMeshRenderer.sharedMesh			= mesh;
+					skinnedMeshRenderer.sharedMesh			= Mesh;
 					skinnedMeshRenderer.bones				= skeleton.Bones.ToArray();
 					skinnedMeshRenderer.updateWhenOffscreen = true;
 					if ((Model.MdlHeader.Flags & Studioflags.DoNotCastShadows) == Studioflags.DoNotCastShadows)
@@ -142,14 +152,13 @@ namespace Chisel.Import.Source.VPKTools
 
 					// TODO: figure out the root-bones (zombie -> headcrab needs a different rootbone than body? maybe?)
 					//skinnedMeshRenderer.rootBone = skeleton.Bones[0];
-
+					Renderer = skinnedMeshRenderer;
 					Animation = MeshObject.AddComponent<Animation>();
 				} else
 				{
 					var meshFilter = MeshObject.AddComponent<MeshFilter>();
 					var meshRenderer = MeshObject.AddComponent<MeshRenderer>();
-					meshRenderer.sharedMaterials = materials;
-					meshFilter.sharedMesh = mesh;
+					meshFilter.sharedMesh = Mesh;
 					if ((Model.MdlHeader.Flags & Studioflags.DoNotCastShadows) == Studioflags.DoNotCastShadows)
 						meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
 					else
@@ -159,6 +168,7 @@ namespace Chisel.Import.Source.VPKTools
 
 					if (MeshObject.GetComponent<MeshCollider>() == null)
 						MeshObject.AddComponent<MeshCollider>();
+					Renderer = meshRenderer;
 				}
 			}
 
@@ -172,18 +182,76 @@ namespace Chisel.Import.Source.VPKTools
 
 	public static class MdlModelImporter
 	{
-		// TODO: import *all* skins, "skin" is part of entity
-		public static GameObject Import(GameResources gameResources, MdlModel model, string outputPath, int skin = 0)
+		public static GameObject Import(GameResources gameResources, MdlModel model, string outputPath, int skin)
+		{
+			if (skin == 0)
+			{
+				var destinationPath = Path.ChangeExtension(outputPath, ".prefab");
+				var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
+				if (foundAsset != null)
+					return foundAsset;
+			} else
+			{ 
+				var destinationPath = Path.ChangeExtension(outputPath, "[0].prefab");
+				var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
+				if (foundAsset != null)
+					return foundAsset;
+			}
+
+			var skinnedModels = Import(gameResources, model, outputPath);
+			if (skinnedModels == null || skinnedModels.Length == 0)
+				return null;
+
+			if (skin < 0 || skin >= skinnedModels.Length)
+				skin = 0;
+			var prefab = skinnedModels[skin];
+			if (prefab == null)
+			{
+				for (skin = 0; skin < skinnedModels.Length; skin++)
+				{
+					prefab = skinnedModels[skin];
+					if (prefab != null)
+						break;
+				}
+			}
+			return prefab;
+		}
+
+		public static GameObject[] Import(GameResources gameResources, MdlModel model, string outputPath)
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, ".prefab");
 			var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
 			if (foundAsset != null)
-				return foundAsset;
+			{
+				return new GameObject[1] { foundAsset };
+			}
+
+			{
+				var skinPath0 = Path.ChangeExtension(outputPath, "[0].prefab");
+				foundAsset = UnityAssets.Load<GameObject>(skinPath0);
+				if (foundAsset != null)
+				{
+					List<GameObject> foundAssets = new();
+					int index = 0;
+					do
+					{
+						foundAssets.Add(foundAsset);
+						index++;
+						var skinPathN = Path.ChangeExtension(outputPath, $"[{index}].prefab");
+						foundAsset = UnityAssets.Load<GameObject>(skinPathN);
+					} while (foundAsset != null);
+					return foundAssets.ToArray();
+				}
+			}
+
 
 			if (model == null)
 				return null;
 
-			var modelEntries = ImportModelLods(gameResources, model, out MdlSkeleton skeleton, skin);
+			var modelMaterials = ImportModelTextures(gameResources, model);
+
+			//var modelEntries = ImportModelLods(gameResources, model, modelMaterials, out MdlSkeleton skeleton, skin);
+			var modelEntries = ImportModelLods(gameResources, model, out MdlSkeleton skeleton);
 			if (modelEntries == null)
 			{
 				Debug.LogError("Failed to load model");
@@ -197,25 +265,92 @@ namespace Chisel.Import.Source.VPKTools
 			PackagePath.EnsureDirectoriesExist(outputPath);
 			GameObject prefabGameObject = new();
 
-			// prefabs are wack. we need to save prefabs several times to be able to attach the meshes that it uses to it
-			var prefab = PrefabUtility.SaveAsPrefabAsset(prefabGameObject, assetPath);
-			var instantiatedPrefab = PrefabUtility.InstantiatePrefab(prefab) as GameObject;
+			var haveMultipleSkins = modelMaterials.skins != null && modelMaterials.skins.Length > 0;
+			var defaultSkin = (!haveMultipleSkins || modelMaterials.skins[0] == null) ? modelMaterials : modelMaterials.skins[0];
 
-			List <Mesh> generatedMeshes = new();
-			PopulatePrefab(instantiatedPrefab, model, modelEntries, skeleton, generatedMeshes);
-			foreach(var mesh in generatedMeshes)
+			var skinPath = assetPath;
+			if (haveMultipleSkins)
 			{
-				AssetDatabase.AddObjectToAsset(mesh, prefab);
+				skinPath = Path.ChangeExtension(assetPath, "[0].prefab");
+			}
+
+			// prefabs are wack. we need to save prefabs several times to be able to attach the meshes that it uses to it
+			var prefab = PrefabUtility.SaveAsPrefabAsset(prefabGameObject, skinPath);
+
+			var instantiatedPrefab = PrefabUtility.InstantiatePrefab(prefab) as GameObject;
+			PopulatePrefab(instantiatedPrefab, model, modelEntries, skeleton);
+			foreach (var modelEntry in modelEntries)
+			{
+				if (modelEntry.Mesh != null)
+					AssetDatabase.AddObjectToAsset(modelEntry.Mesh, prefab);
 			}
 			AssetDatabase.SaveAssets();
-			var prefab2 = PrefabUtility.SaveAsPrefabAsset(instantiatedPrefab, assetPath);
+
+			SetSkin(instantiatedPrefab, modelEntries, defaultSkin);
+
+			var prefab2 = PrefabUtility.SaveAsPrefabAsset(instantiatedPrefab, skinPath);
 			AssetDatabase.SaveAssets();
+
 			GameObject.DestroyImmediate(prefabGameObject);
 			GameObject.DestroyImmediate(instantiatedPrefab);
-			return prefab2;
+
+			GameObject[] prefabs;
+			if (haveMultipleSkins)
+			{
+				prefabs = new GameObject[modelMaterials.skins.Length];
+				prefabs[0] = prefab2;
+				for (int i = 1; i < modelMaterials.skins.Length; i++)
+				{
+					if (modelMaterials.skins[i] == null)
+						continue;
+					var basePrefab = PrefabUtility.InstantiatePrefab(prefab2) as GameObject;
+					SetSkin(basePrefab, modelEntries, modelMaterials.skins[i]);
+					skinPath = Path.ChangeExtension(assetPath, $"[{i}].prefab");
+					prefabs[i] = PrefabUtility.SaveAsPrefabAsset(basePrefab, skinPath);
+				}
+			} else
+			{
+				prefabs = new GameObject[1];
+				prefabs[0] = prefab2;
+			}
+
+			return prefabs;
 		}
 
-		public static void PopulatePrefab(GameObject prefab, MdlModel model, MdlModelEntry[] modelEntries, MdlSkeleton skeleton, List<Mesh> generatedMeshes)
+		public static void SetSkin(GameObject parentGO, MdlModelEntry[] modelEntries, MdlMaterialTable skinMaterials)
+		{
+			if (skinMaterials == null)
+				return;
+
+			// We can't use the Renderers in modelEntries directly, since it might point to a Renderer in another prefab
+			// So we lookup the Renderers by name, assuming that all meshes are uniquely named 
+			// (since they're originated from fbx files this is more likely than not, but we probably should double check this / fixup when necessary)
+			var rendererLookup = new Dictionary<string, Renderer>();
+			var allChildRenderers = parentGO.GetComponentsInChildren<Renderer>();
+			foreach(var renderer in allChildRenderers)
+			{
+				rendererLookup[renderer.gameObject.name] = renderer;
+			}
+
+			var unityMaterials = skinMaterials.unityMaterials;
+			foreach (var modelEntry in modelEntries)
+			{
+				if (modelEntry.Name == null) // TODO: why do we have lots of empty modelEntries?
+					continue;
+				var subMeshes = modelEntry.SubMeshes;
+				var materials = new Material[subMeshes.Count];
+				for (var i = 0; i < subMeshes.Count; i++)
+				{
+					var materialIndex = subMeshes[i].materialIndex;
+					materials[i] = (materialIndex >= 0 && materialIndex < unityMaterials.Length) ? unityMaterials[materialIndex] : null;
+				}
+
+				var modelRenderer = rendererLookup[modelEntry.Name];
+				modelRenderer.sharedMaterials = materials;
+			}
+		}
+
+		public static void PopulatePrefab(GameObject prefab, MdlModel model, MdlModelEntry[] modelEntries, MdlSkeleton skeleton)
 		{
 			var entryName = model.MdlHeader.Name;
 
@@ -262,11 +397,7 @@ namespace Chisel.Import.Source.VPKTools
 				if (hasMultipleLods.Contains(modelEntry.Name))
 					modelEntry.Name += "_LOD" + modelEntry.LodIndex;
 
-				modelEntry.GenerateMesh(prefab, skeleton, staticPropHack, out Mesh mesh);
-				if (mesh != null)
-				{
-					generatedMeshes.Add(mesh);
-				}
+				modelEntry.GenerateMesh(prefab, skeleton, staticPropHack);
 				if (modelEntry.Animation)
 				{
 					if (clips.Count > 0)
@@ -304,8 +435,14 @@ namespace Chisel.Import.Source.VPKTools
 				lastLod.screenRelativeTransitionHeight = 1.0f;
 				lods[lods.Count - 1] = lastLod;
 			}
- 			if (lodGroup != null)
+			if (lodGroup != null)
+			{
+				lods.Sort(delegate (LOD x, LOD y)
+				{
+					return y.screenRelativeTransitionHeight.CompareTo(x.screenRelativeTransitionHeight);
+				});
 				lodGroup.SetLODs(lods.ToArray());
+			}
 		}
 
 		
@@ -341,11 +478,9 @@ namespace Chisel.Import.Source.VPKTools
 			};
 		}
 
-		private static MdlModelEntry[] ImportModelLods(GameResources gameResources, MdlModel model, out MdlSkeleton skeleton, int skin = 0)
+		private static MdlModelMaterials ImportModelTextures(GameResources gameResources, MdlModel model)
 		{
 			var mdlHeader = model.MdlHeader;
-			var vvdHeader = model.VvdHeader;
-			var vtxHeader = model.VtxHeader;
 
 			var sourceMaterials = new VmfMaterial[mdlHeader.TextureFilenames.Length];
 			var outputPaths = new string[mdlHeader.TextureFilenames.Length];
@@ -357,7 +492,7 @@ namespace Chisel.Import.Source.VPKTools
 
 				string fileName = Path.ChangeExtension(mdlHeader.TextureFilenames[i].Name, PackagePath.VmtExtension);
 				string entryName = fileName;
-				var sourceMaterial = gameResources.ImportVmf(entryName);
+				var sourceMaterial = gameResources.LoadVmf(entryName);
 				if (sourceMaterials[i] != null)
 				{
 					sourceMaterials[i] = sourceMaterial;
@@ -366,7 +501,7 @@ namespace Chisel.Import.Source.VPKTools
 				}
 
 				entryName = PackagePath.Combine("materials", fileName);
-				sourceMaterial = gameResources.ImportVmf(entryName);
+				sourceMaterial = gameResources.LoadVmf(entryName);
 				if (sourceMaterial != null)
 				{
 					sourceMaterials[i] = sourceMaterial;
@@ -377,7 +512,7 @@ namespace Chisel.Import.Source.VPKTools
 				for (int j = 0; j < mdlHeader.TextureDirs.Length; j++)
 				{
 					entryName = PackagePath.Combine(mdlHeader.TextureDirs[j], fileName);
-					sourceMaterial = gameResources.ImportVmf(entryName);
+					sourceMaterial = gameResources.LoadVmf(entryName);
 					if (sourceMaterial != null)
 					{
 						sourceMaterials[i] = sourceMaterial;
@@ -386,7 +521,7 @@ namespace Chisel.Import.Source.VPKTools
 					}
 
 					entryName = PackagePath.Combine("materials", mdlHeader.TextureDirs[j], fileName);
-					sourceMaterial = gameResources.ImportVmf(entryName);
+					sourceMaterial = gameResources.LoadVmf(entryName);
 					if (sourceMaterial != null)
 					{
 						sourceMaterials[i] = sourceMaterial;
@@ -406,6 +541,53 @@ namespace Chisel.Import.Source.VPKTools
 				unityMaterials[i] = MaterialImporter.Import(gameResources, sourceMaterials[i], outputPath);
 			}
 
+			MdlMaterialTable[] skins = null;
+
+			var refTable = mdlHeader.SkinReferenceTable;
+			if (refTable != null)
+			{
+				skins = new MdlMaterialTable[mdlHeader.SkinReferenceTable.Length];
+				for (int s = 0; s < mdlHeader.SkinReferenceTable.Length; s++)
+				{
+					var skinLookup = mdlHeader.SkinReferenceTable[s];
+					if (skinLookup == null)
+					{
+						skins[s] = null;
+						continue;
+					}
+
+					var skinTable = new MdlMaterialTable
+					{
+						sourceMaterials = new VmfMaterial[skinLookup.Length],
+						unityMaterials = new Material[skinLookup.Length]
+					};
+					for (int i = 0; i < skinLookup.Length; i++)
+					{
+						skinTable.sourceMaterials[i] = sourceMaterials[skinLookup[i]];
+						skinTable.unityMaterials[i] = unityMaterials[skinLookup[i]];
+					}
+					skins[s] = skinTable;
+				}
+			}
+
+			return new MdlModelMaterials
+			{
+				sourceMaterials = sourceMaterials,
+				unityMaterials = unityMaterials,
+				skins = skins
+			};
+		}
+
+		private static MdlModelEntry[] ImportModelLods(GameResources gameResources, MdlModel model, //MdlModelMaterials modelMaterials, 
+			out MdlSkeleton skeleton)//, int skin = 0)
+		{
+			var mdlHeader = model.MdlHeader;
+			var vvdHeader = model.VvdHeader;
+			var vtxHeader = model.VtxHeader;
+			/*
+			var sourceMaterials = modelMaterials.sourceMaterials;
+			var unityMaterials = modelMaterials.unityMaterials;
+
 			var refTable = mdlHeader.SkinReferenceTable;
 			if (refTable != null && skin < refTable.Length)
 			{
@@ -417,7 +599,7 @@ namespace Chisel.Import.Source.VPKTools
 						skinMaterials[i] = unityMaterials[skinLookup[i]];
 					unityMaterials = skinMaterials;
 				}
-			}
+			}*/
 
 			var modelEntries = new List<MdlModelEntry>();
 
@@ -522,12 +704,11 @@ namespace Chisel.Import.Source.VPKTools
 							if (vertices == null)
 								continue;
 
-							var sourceMaterial = sourceMaterials[mdlMesh.MaterialIndex];
-							var unityMaterial  = unityMaterials[mdlMesh.MaterialIndex];
+							//var sourceMaterial = sourceMaterials[mdlMesh.MaterialIndex];
 
-							var isTransparent  = sourceMaterial.HaveTransparency;
+							//var isTransparent  = sourceMaterial.HaveTransparency;
 							var isDoubleSided  = //material.NoCull || 
-												 (isTransparent & 
+												 (//isTransparent & 
 												((model.MdlHeader.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass));
 
 							modelEntry.isDoubleSided = isDoubleSided;
@@ -541,7 +722,7 @@ namespace Chisel.Import.Source.VPKTools
 
 							var meshEntry = new MdlMeshEntry()
 							{
-								material = unityMaterial
+								materialIndex = mdlMesh.MaterialIndex
 							};
 
 							for (int nGroup = 0; nGroup < vtxMesh.StripGroupHeaders.Length; ++nGroup)
