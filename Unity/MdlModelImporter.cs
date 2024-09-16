@@ -574,19 +574,21 @@ namespace Chisel.Import.Source.VPKTools
 													indexLookup[vertex3] = index3;
 												}
 
+												#pragma warning disable CS0162 // Unreachable code detected
 												if (SourceEngineUnits.InvertPlanes)
 												{
 													meshEntry.Indices.Add(index1);
 													meshEntry.Indices.Add(index3);
 													meshEntry.Indices.Add(index2);
 												} else
-												{ 
+												{
 													meshEntry.Indices.Add(index1);
 													meshEntry.Indices.Add(index2);
 													meshEntry.Indices.Add(index3);
 												}
+												#pragma warning restore CS0162 // Unreachable code detected
 											}
-											
+
 											if (isDoubleSided)
 											{
 												if (!inverseIndexLookup.TryGetValue(vertex1, out int index1)) index1 = -1;
@@ -625,7 +627,8 @@ namespace Chisel.Import.Source.VPKTools
 													if (tangents != null) modelEntry.Tangents.Add(-tangents[vertex2]);
 													inverseIndexLookup[vertex2] = index2;
 												}
-
+												
+												#pragma warning disable CS0162 // Unreachable code detected
 												if (SourceEngineUnits.InvertPlanes)
 												{
 													meshEntry.Indices.Add(index1);
@@ -637,6 +640,7 @@ namespace Chisel.Import.Source.VPKTools
 													meshEntry.Indices.Add(index2);
 													meshEntry.Indices.Add(index3);
 												}
+												#pragma warning restore CS0162 // Unreachable code detected
 											}
 										}
 									}
