@@ -33,10 +33,9 @@ namespace Chisel.Import.Source.VPKTools
 
 		private static Material CreateUnityMaterial(GameResources resources, VmfMaterial sourceMaterial, string materialName)
 		{
-			var haveCutout  = sourceMaterial.AlphaTest.HasValue && sourceMaterial.AlphaTest.Value;
-			var translucent = sourceMaterial.Translucent.HasValue && sourceMaterial.Translucent.Value;
-			var additive    = sourceMaterial.Additive.HasValue && (sourceMaterial.Additive.Value > 0);
-			var haveTransparency = translucent || additive || haveCutout;
+			var haveCutout		 = sourceMaterial.HaveCutout;
+			var translucency	 = sourceMaterial.HaveTranslucency;
+			var additiveBlending = sourceMaterial.HaveAdditiveBlending;
 
 			var complexShader = !string.IsNullOrEmpty(sourceMaterial.BumpMapName) ||
 								!string.IsNullOrEmpty(sourceMaterial.SelfIlluminationMask) ||
@@ -52,7 +51,7 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				case "unlitgeneric":
 				{
-					if (!complexShader && translucent && additive)
+					if (!complexShader && translucency && additiveBlending)
 					{
 						if (!_premultiplyShader)
 						{
@@ -66,7 +65,7 @@ namespace Chisel.Import.Source.VPKTools
 							break;
 						}
 					}
-					if (!complexShader && translucent && haveCutout)
+					if (!complexShader && translucency && haveCutout)
 					{
 						if (!_unlitTransparentCutoutShader)
 						{
@@ -80,7 +79,7 @@ namespace Chisel.Import.Source.VPKTools
 							break;
 						}
 					}
-					if (!complexShader && translucent)
+					if (!complexShader && translucency)
 					{
 						if (!_unlitTransparentShader)
 						{
@@ -127,7 +126,7 @@ namespace Chisel.Import.Source.VPKTools
 				//case "lightmappedgeneric":
 				//case "worldvertextransition":
 				{
-					if (!complexShader && translucent && additive)
+					if (!complexShader && translucency && additiveBlending)
 					{
 						if (!_premultiplyShader)
 						{
@@ -283,7 +282,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (haveCutout && sourceMaterial.AlphaTestReference.HasValue)
 				unityMaterial.SetFloat("_Cutoff", sourceMaterial.AlphaTestReference.Value);
 
-			if ((haveCutout || translucent) ||
+			if ((haveCutout || translucency) ||
 				(sourceMaterial.NoCull.HasValue && sourceMaterial.NoCull.Value))
 			{
 				unityMaterial.name += "_nocull";
@@ -298,7 +297,7 @@ namespace Chisel.Import.Source.VPKTools
 					ChangeRenderMode(unityMaterial, BlendMode.Fade);
 				}
 				else
-				if (translucent)
+				if (translucency)
 				{
 					unityMaterial.SetFloat("_Mode", (int)BlendMode.Transparent);
 					ChangeRenderMode(unityMaterial, BlendMode.Transparent);
@@ -453,42 +452,6 @@ namespace Chisel.Import.Source.VPKTools
 			return skybox;
 		}
 
-		// TODO: should use vmt-material for this, since it'll probably be more specific
-		public static bool IsMaterialTransparent(Material material)
-		{
-			if (material == null)
-				return false;
-			switch (material.shader.name)
-			{
-				case _unlitTransparentShaderName:
-				case _unlitTransparentCutoutShaderName:
-				case _premultiplyShaderName:
-					return true;
-
-				case _standardShaderName:
-				{					
-					var blendMode = (BlendMode)material.GetFloat("_Mode");
-					switch (blendMode)
-					{
-						case BlendMode.Cutout:
-						case BlendMode.Fade:
-						case BlendMode.Transparent:
-						{
-							return true;
-						}
-						case BlendMode.Opaque: 
-						default:
-						{
-							return false;
-						}
-					}
-				}
-				case _unlitShaderName:
-				default:
-					return false;
-			}
-		}
-		
 		public static Vector2? GetMaterialResolution(Material unityMaterial)
 		{
 			if (!unityMaterial)

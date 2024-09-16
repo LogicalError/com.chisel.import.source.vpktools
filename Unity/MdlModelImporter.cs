@@ -300,9 +300,9 @@ namespace Chisel.Import.Source.VPKTools
 			}
 			if (lods != null && lods.Count > 0)
 			{
-				var lastLod = lods[lods.Count];
+				var lastLod = lods[lods.Count - 1];
 				lastLod.screenRelativeTransitionHeight = 1.0f;
-				lods[lods.Count] = lastLod;
+				lods[lods.Count - 1] = lastLod;
 			}
  			if (lodGroup != null)
 				lodGroup.SetLODs(lods.ToArray());
@@ -347,32 +347,63 @@ namespace Chisel.Import.Source.VPKTools
 			var vvdHeader = model.VvdHeader;
 			var vtxHeader = model.VtxHeader;
 
-			var materials = new Material[mdlHeader.TextureFilenames.Length];
+			var sourceMaterials = new VmfMaterial[mdlHeader.TextureFilenames.Length];
+			var outputPaths = new string[mdlHeader.TextureFilenames.Length];
+			var unityMaterials = new Material[mdlHeader.TextureFilenames.Length];
 			for (var i = 0; i < mdlHeader.TextureFilenames.Length; i++)
 			{
+				outputPaths[i] = default;
+				sourceMaterials[i] = default;
+
 				string fileName = Path.ChangeExtension(mdlHeader.TextureFilenames[i].Name, PackagePath.VmtExtension);
 				string entryName = fileName;
-				materials[i] = gameResources.ImportGetEntry<Material>(entryName);
-				if (materials[i] != null)
+				var sourceMaterial = gameResources.ImportVmf(entryName);
+				if (sourceMaterials[i] != null)
+				{
+					sourceMaterials[i] = sourceMaterial;
+					outputPaths[i] = entryName;
 					continue;
+				}
 
 				entryName = PackagePath.Combine("materials", fileName);
-				materials[i] = gameResources.ImportGetEntry<Material>(entryName);
-				if (materials[i] != null)
+				sourceMaterial = gameResources.ImportVmf(entryName);
+				if (sourceMaterial != null)
+				{
+					sourceMaterials[i] = sourceMaterial;
+					outputPaths[i] = entryName;
 					continue;
+				}
 
 				for (int j = 0; j < mdlHeader.TextureDirs.Length; j++)
 				{
 					entryName = PackagePath.Combine(mdlHeader.TextureDirs[j], fileName);
-					materials[i] = gameResources.ImportGetEntry<Material>(entryName);
-					if (materials[i] != null)
+					sourceMaterial = gameResources.ImportVmf(entryName);
+					if (sourceMaterial != null)
+					{
+						sourceMaterials[i] = sourceMaterial;
+						outputPaths[i] = entryName;
 						break;
+					}
 
 					entryName = PackagePath.Combine("materials", mdlHeader.TextureDirs[j], fileName);
-					materials[i] = gameResources.ImportGetEntry<Material>(entryName);
-					if (materials[i] != null)
+					sourceMaterial = gameResources.ImportVmf(entryName);
+					if (sourceMaterial != null)
+					{
+						sourceMaterials[i] = sourceMaterial;
+						outputPaths[i] = entryName;
 						break;
+					}
 				}
+			}
+
+			for (var i = 0; i < sourceMaterials.Length; i++)
+			{
+				if (sourceMaterials[i] == null)
+					continue;
+
+				var entry = gameResources.GetEntry(outputPaths[i]);
+				var outputPath = GameResources.GetOutputPath(entry.keyname);
+				unityMaterials[i] = MaterialImporter.Import(gameResources, sourceMaterials[i], outputPath);
 			}
 
 			var refTable = mdlHeader.SkinReferenceTable;
@@ -383,8 +414,8 @@ namespace Chisel.Import.Source.VPKTools
 				{
 					var skinMaterials = new Material[skinLookup.Length];
 					for (int i = 0; i < skinMaterials.Length; i++)
-						skinMaterials[i] = materials[skinLookup[i]];
-					materials = skinMaterials;
+						skinMaterials[i] = unityMaterials[skinLookup[i]];
+					unityMaterials = skinMaterials;
 				}
 			}
 
@@ -491,13 +522,13 @@ namespace Chisel.Import.Source.VPKTools
 							if (vertices == null)
 								continue;
 
-							var material = materials[mdlMesh.MaterialIndex];
+							var sourceMaterial = sourceMaterials[mdlMesh.MaterialIndex];
+							var unityMaterial  = unityMaterials[mdlMesh.MaterialIndex];
 
-							var isTransparent = MaterialImporter.IsMaterialTransparent(material);
-							var isDoubleSided = (isTransparent & 
-												((model.MdlHeader.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass))
-												/*||
-												material.NoCull*/;
+							var isTransparent  = sourceMaterial.HaveTransparency;
+							var isDoubleSided  = //material.NoCull || 
+												 (isTransparent & 
+												((model.MdlHeader.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass));
 
 							modelEntry.isDoubleSided = isDoubleSided;
 
@@ -510,7 +541,7 @@ namespace Chisel.Import.Source.VPKTools
 
 							var meshEntry = new MdlMeshEntry()
 							{
-								material = material
+								material = unityMaterial
 							};
 
 							for (int nGroup = 0; nGroup < vtxMesh.StripGroupHeaders.Length; ++nGroup)

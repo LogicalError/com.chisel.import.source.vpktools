@@ -118,6 +118,19 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceText;
 		}
 
+		public VTF ImportVTF(string entryName)
+		{
+			if (entryName == null)
+				return null;
+			// TODO: use PackagePath instead
+			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
+			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
+			ArrayPool<char>.Shared.Return(rentedCharList);
+			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
+				return null;
+			return ImportVTF(entry);
+		}
+
 		public VTF ImportVTF(GameEntry entry)
 		{
 			VTF sourceTexture = null;
@@ -127,6 +140,19 @@ namespace Chisel.Import.Source.VPKTools
 				return true;
 			})) return null;
 			return sourceTexture;
+		}
+
+		public VmfMaterial ImportVmf(string entryName)
+		{
+			if (entryName == null)
+				return null;
+			// TODO: use PackagePath instead
+			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
+			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
+			ArrayPool<char>.Shared.Return(rentedCharList);
+			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
+				return null;
+			return ImportVmf(entry);
 		}
 
 		public VmfMaterial ImportVmf(GameEntry entry)
@@ -141,6 +167,19 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			}
 			return sourceMaterial;
+		}
+
+		public MdlHeader ImportMdl(string entryName, Lookup _lookup)
+		{
+			if (entryName == null)
+				return null;
+			// TODO: use PackagePath instead
+			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
+			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
+			ArrayPool<char>.Shared.Return(rentedCharList);
+			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
+				return null;
+			return ImportMdl(entry, _lookup);
 		}
 
 		public MdlHeader ImportMdl(GameEntry entry, Lookup lookup)
@@ -167,6 +206,19 @@ namespace Chisel.Import.Source.VPKTools
 			return header;
 		}
 
+		public VtxHeader ImportVtx(string entryName)
+		{
+			if (entryName == null)
+				return null;
+			// TODO: use PackagePath instead
+			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
+			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
+			ArrayPool<char>.Shared.Return(rentedCharList);
+			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
+				return null;
+			return ImportVtx(entry);
+		}
+
 		public VtxHeader ImportVtx(GameEntry entry)
 		{
 			if (entry.Extension != PackagePath.VtxExtension)
@@ -182,6 +234,19 @@ namespace Chisel.Import.Source.VPKTools
 				return true;
 			})) return null;
 			return header;
+		}
+
+		public VvdHeader ImportVvd(string entryName, MdlHeader mdlHeader)
+		{
+			if (entryName == null)
+				return null;
+			// TODO: use PackagePath instead
+			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
+			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
+			ArrayPool<char>.Shared.Return(rentedCharList);
+			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
+				return null;
+			return ImportVvd(entry, mdlHeader);
 		}
 
 		public VvdHeader ImportVvd(GameEntry entry, MdlHeader mdlHeader)
