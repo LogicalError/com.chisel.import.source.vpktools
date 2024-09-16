@@ -295,11 +295,16 @@ namespace Chisel.Import.Source.VPKTools
 				else
 					ArrayUtility.Add(ref lod.renderers, renderer);
 
-				// TODO: improve on this
 				lod.screenRelativeTransitionHeight = 1.0f / (2.0f + (modelEntry.LodIndex * 3));// SourceEngineUnits.VmfLodSwitchpointToUnityLodTransition(modelEntry.SwitchPoint);
 				lods[modelEntry.LodIndex] = lod;
 			}
-			if (lodGroup != null)
+			if (lods != null && lods.Count > 0)
+			{
+				var lastLod = lods[lods.Count];
+				lastLod.screenRelativeTransitionHeight = 1.0f;
+				lods[lods.Count] = lastLod;
+			}
+ 			if (lodGroup != null)
 				lodGroup.SetLODs(lods.ToArray());
 		}
 

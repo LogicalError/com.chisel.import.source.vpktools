@@ -12,16 +12,21 @@ namespace Chisel.Import.Source.VPKTools
         public static bool averageTextures = false;
         public static int  maxTextureSize  = 4096;
 
-		public Color[] Pixels       { get; private set; }
+		public Frame[] Frames       { get; private set; }
 		public  int Width           { get; private set; }
         public  int Height          { get; private set; }
 		public VTFImageFlag Flags   { get; private set; }
 		public bool HasAlpha        { get; private set; }
 
 
+        public struct Frame
+        {
+            public Color[] Pixels;
+		}
+
         public static VTF Read( Stream stream )
         {
-			var pixels = LoadVTFFile(stream, out int width, out int height, out var flags);
+			var frames = LoadVTFFile(stream, out int width, out int height, out var flags, out var hasAlpha);
 			
             // TODO: why? when we export textures and import them through unity, unity can handle this for us?
 			/*
@@ -36,19 +41,9 @@ namespace Chisel.Import.Source.VPKTools
                     pixels = DecreaseTextureSize( pixels, width, height, maxTextureSize, out width, out height );
             }*/
 
-			bool hasAlpha = false;
-			for (int i = 0; i < pixels.Length; i++)
-            {
-                if (pixels[i].a != 1.0f)
-                {
-                    hasAlpha = true;
-                    break;
-                }
-            }
-
 			return new VTF
 			{
-				Pixels = pixels,
+				Frames = frames,
 				Width  = width,
 				Height = height,
 				Flags = flags,
@@ -56,6 +51,7 @@ namespace Chisel.Import.Source.VPKTools
 			};
         }
 
+#if false
         public static Color[] DecreaseTextureSize( Color[] pixels, int origWidth, int origHeight, int maxSize, out int decreasedWidth, out int decreasedHeight )
         {
             Color[] decreased = pixels;
@@ -115,6 +111,7 @@ namespace Chisel.Import.Source.VPKTools
 
             return scaledTexture;
         }
+#endif
 
         public static Color AverageTexture(Color[] pixels)
         {
@@ -143,12 +140,13 @@ namespace Chisel.Import.Source.VPKTools
             return plain;
         }
 
-        public static Color[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags )
-        {
-            Color[] extracted = null;
-            width  = 0;
-            height = 0;
+        public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha)
+		{
+			width = 0;
+			height = 0;
 			flags = (VTFImageFlag)0;
+            hasAlpha = false;
+			Frame[] frames = null;
 			if ( stream != null )
             {
                 int signature = DataParser.ReadInt( stream );
@@ -204,7 +202,15 @@ namespace Chisel.Import.Source.VPKTools
                             }
                         }
                     }
-					#endregion
+                    #endregion
+
+                    if (vtfHeader.frames == 0)
+					{
+						Debug.LogError("SourceTexture: Image has zero frames");
+						return null;
+                    }
+
+					frames = new Frame[vtfHeader.frames];
 
 					int thumbnailBufferSize = 0;
                     int imageBufferSize = (int) ComputeImageBufferSize( vtfHeader.width, vtfHeader.height, vtfHeader.depth, vtfHeader.mipmapCount, vtfHeader.highResImageFormat ) * vtfHeader.frames;
@@ -231,28 +237,59 @@ namespace Chisel.Import.Source.VPKTools
                     #endregion
 
                     if( vtfHeader.highResImageFormat != VTFImageFormat.IMAGE_FORMAT_NONE )
-                    {
-                        int mipmapBufferOffset = 0;
-                        for( uint i = 1; i <= vtfHeader.mipmapCount; i++ )
+					{
+                        uint mipmapSize = ComputeImageBufferSize(vtfHeader.width, vtfHeader.height, vtfHeader.depth, vtfHeader.highResImageFormat);
+
+						width = vtfHeader.width;
+						height = vtfHeader.height;
+						for (int i = 0; i < vtfHeader.frames; i++)
                         {
-                            mipmapBufferOffset += (int) ComputeMipmapSize( vtfHeader.width, vtfHeader.height, vtfHeader.depth, i, vtfHeader.highResImageFormat );
+                            uint mipmapBufferOffset = mipmapSize * (uint)(vtfHeader.frames - i);
+
+                            stream.Position = stream.Length - mipmapBufferOffset;
+                            frames[i].Pixels = DecompressImage(stream, vtfHeader.width, vtfHeader.height, mipmapSize, vtfHeader.highResImageFormat);
+						}
+
+
+						hasAlpha = false;
+                        if (vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_A8 ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_ABGR8888 ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_ARGB8888 ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_BGRA8888 ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_RGBA8888 ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_BGRA4444 ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_BGRA5551 ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_DXT1_ONEBITALPHA ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_IA88 ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_RGBA16161616 ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_RGBA16161616F ||
+                            vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_RGBA32323232F ||
+							vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_DXT1 ||
+							vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_DXT3 ||
+							vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_DXT5)
+                        {
+                            for (int f = 0; f < frames.Length; f++)
+                            {
+                                var pixels = frames[f].Pixels;
+                                for (int i = 0; i < pixels.Length; i++)
+                                {
+                                    var pixel = pixels[i];
+                                    if (pixel.a != 1.0f)
+                                    {
+                                        hasAlpha = true;
+                                        break;
+                                    }
+                                }
+                            }
                         }
-
-                        uint mipmapSize = ComputeMipmapSize(vtfHeader.width, vtfHeader.height, vtfHeader.depth, 0, vtfHeader.highResImageFormat);
-						
-						stream.Position = imageBufferOffset + mipmapBufferOffset;
-
-                        extracted = DecompressImage( stream, vtfHeader.width, vtfHeader.height, mipmapSize, vtfHeader.highResImageFormat );
-                        width     = vtfHeader.width;
-                        height    = vtfHeader.height;
-                    } else
+					} else
                         Debug.LogError( "SourceTexture: Image format given was none" );
                 } else
                     Debug.LogError( "SourceTexture: Signature mismatch " + signature + " != " + VTFHeader.signature );
             } else
                 Debug.LogError( "SourceTexture: Missing VTF data" );
 
-            return extracted;
+            return frames;
         }
 
         private static Color[] DecompressImage( Stream data, ushort width, ushort height, uint dataSize, VTFImageFormat imageFormat )
@@ -330,7 +367,7 @@ namespace Chisel.Import.Source.VPKTools
                 if( tempHeight < 4 && tempHeight > 0 )
                     tempHeight = 4;
 
-                return ( ( tempWidth + 3 ) / 4 ) * ( ( tempHeight + 3 ) / 4 ) * 8 * depth;
+				return ( ( tempWidth + 3 ) / 4 ) * ( ( tempHeight + 3 ) / 4 ) * 8 * depth;
             }
             else if( imageFormat == VTFImageFormat.IMAGE_FORMAT_DXT3 || imageFormat == VTFImageFormat.IMAGE_FORMAT_DXT5 )
             {
@@ -394,12 +431,11 @@ namespace Chisel.Import.Source.VPKTools
 
         private static uint ComputeMipmapSize( uint width, uint height, uint depth, uint mipmapLevel, VTFImageFormat ImageFormat )
         {
-            // figure out the width/height of this MIP level
-            uint uiMipmapWidth, uiMipmapHeight, uiMipmapDepth;
-            ComputeMipmapDimensions( width, height, depth, mipmapLevel, out uiMipmapWidth, out uiMipmapHeight, out uiMipmapDepth );
+			// figure out the width/height of this MIP level
+			ComputeMipmapDimensions(width, height, depth, mipmapLevel, out uint uiMipmapWidth, out uint uiMipmapHeight, out uint uiMipmapDepth);
 
-            // return the memory requirements
-            return ComputeImageBufferSize( uiMipmapWidth, uiMipmapHeight, uiMipmapDepth, ImageFormat );
+			// return the memory requirements
+			return ComputeImageBufferSize( uiMipmapWidth, uiMipmapHeight, uiMipmapDepth, ImageFormat );
         }
 
         #region Image Convert Info
