@@ -86,6 +86,7 @@ namespace Chisel.Import.Source.VPKTools
 							new Vector4( 0, 0,-1, 0),
 							new Vector4( 0, 1, 0, 0),
 							new Vector4( 0, 0, 0, 1)) * transformation;
+					transformation = SourceEngineUnits.InvModelMatrix * transformation;
 				} else
 				{
 					var rotation = Quaternion.identity;
@@ -97,6 +98,7 @@ namespace Chisel.Import.Source.VPKTools
 							new Vector4( 0, 0, 0, 1)) *
 							Matrix4x4.Rotate(rotation) *
 							transformation;
+					transformation = SourceEngineUnits.InvModelMatrix * transformation;
 				}
 
 				for (int i = 0; i < vertices.Length; i++)
@@ -104,7 +106,7 @@ namespace Chisel.Import.Source.VPKTools
 					vertices[i] = transformation.MultiplyPoint(vertices[i]);
 				}
 				for (int i = 0; i < normals.Length; i++)
-				{
+				{ 
 					normals[i] = transformation.MultiplyVector(normals[i]);
 				}
 				if (tangents != null)
@@ -191,8 +193,8 @@ namespace Chisel.Import.Source.VPKTools
 				if (foundAsset != null)
 					return foundAsset;
 			} else
-			{ 
-				var destinationPath = Path.ChangeExtension(outputPath, "[0].prefab");
+			{
+				var destinationPath = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + "[0].prefab");
 				var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
 				if (foundAsset != null)
 					return foundAsset;
@@ -227,7 +229,7 @@ namespace Chisel.Import.Source.VPKTools
 			}
 
 			{
-				var skinPath0 = Path.ChangeExtension(outputPath, "[0].prefab");
+				var skinPath0 = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + "[0].prefab");
 				foundAsset = UnityAssets.Load<GameObject>(skinPath0);
 				if (foundAsset != null)
 				{
@@ -237,7 +239,7 @@ namespace Chisel.Import.Source.VPKTools
 					{
 						foundAssets.Add(foundAsset);
 						index++;
-						var skinPathN = Path.ChangeExtension(outputPath, $"[{index}].prefab");
+						var skinPathN = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + $"[{index}].prefab");
 						foundAsset = UnityAssets.Load<GameObject>(skinPathN);
 					} while (foundAsset != null);
 					return foundAssets.ToArray();
@@ -271,12 +273,12 @@ namespace Chisel.Import.Source.VPKTools
 			var skinPath = assetPath;
 			if (haveMultipleSkins)
 			{
-				skinPath = Path.ChangeExtension(assetPath, "[0].prefab");
+				skinPath = Path.Combine(Path.GetDirectoryName(assetPath), Path.GetFileNameWithoutExtension(assetPath) + "[0].prefab");
 			}
 
 			// prefabs are wack. we need to save prefabs several times to be able to attach the meshes that it uses to it
 			var prefab = PrefabUtility.SaveAsPrefabAsset(prefabGameObject, skinPath);
-
+			
 			var instantiatedPrefab = PrefabUtility.InstantiatePrefab(prefab) as GameObject;
 			PopulatePrefab(instantiatedPrefab, model, modelEntries, skeleton);
 			foreach (var modelEntry in modelEntries)
@@ -305,8 +307,10 @@ namespace Chisel.Import.Source.VPKTools
 						continue;
 					var basePrefab = PrefabUtility.InstantiatePrefab(prefab2) as GameObject;
 					SetSkin(basePrefab, modelEntries, modelMaterials.skins[i]);
-					skinPath = Path.ChangeExtension(assetPath, $"[{i}].prefab");
-					prefabs[i] = PrefabUtility.SaveAsPrefabAsset(basePrefab, skinPath);
+					skinPath = Path.Combine(Path.GetDirectoryName(assetPath), Path.GetFileNameWithoutExtension(outputPath) + $"[{i}].prefab");
+					PrefabUtility.SaveAsPrefabAsset(basePrefab, skinPath);
+					GameObject.DestroyImmediate(basePrefab);
+					prefabs[i] = UnityAssets.Load<GameObject>(skinPath);
 				}
 			} else
 			{
@@ -432,7 +436,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (lods != null && lods.Count > 0)
 			{
 				var lastLod = lods[lods.Count - 1];
-				lastLod.screenRelativeTransitionHeight = 1.0f;
+				lastLod.screenRelativeTransitionHeight = 0.0f;
 				lods[lods.Count - 1] = lastLod;
 			}
 			if (lodGroup != null)

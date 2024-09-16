@@ -16,7 +16,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (foundAsset != null)
 				return new Texture2D[] { foundAsset };
 
-			var filePath = Path.ChangeExtension(outputPath, "[0].png");
+			var filePath = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + "[0].png");
 			foundAsset = UnityAssets.Load<Texture2D>(filePath);
 			if (foundAsset != null)
 			{
@@ -26,7 +26,7 @@ namespace Chisel.Import.Source.VPKTools
 				{
 					frameTextureList.Add(foundAsset);
 					index++;
-					filePath = Path.ChangeExtension(outputPath, $"[{index}].png");
+					filePath = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + $"[{index}].png");
 					foundAsset = UnityAssets.Load<Texture2D>(filePath);
 				}
 				return frameTextureList.ToArray();
@@ -80,7 +80,7 @@ namespace Chisel.Import.Source.VPKTools
 					UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
 					(uint)texture.Width, (uint)texture.Height);
 
-				var filePath = Path.ChangeExtension(destinationPath, $"[{i}].png");
+				var filePath = Path.Combine(Path.GetDirectoryName(destinationPath), Path.GetFileNameWithoutExtension(destinationPath) + $"[{i}].png");
 				frameNames[i] = filePath;
 				File.WriteAllBytes(filePath, bytes);
 			}
