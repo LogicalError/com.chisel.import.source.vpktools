@@ -269,7 +269,9 @@ namespace Chisel.Import.Source.VPKTools
 					case PackagePath.VtfExtension:
 					{
 						VTF sourceTexture = VTF.Read(stream);
-						foundAsset = Texture2DImporter.Import(sourceTexture, outputPath);
+						var foundAssets = Texture2DImporter.Import(sourceTexture, outputPath);
+						if (foundAssets != null)
+							foundAsset = foundAssets[0]; // TODO: handle frames better
 						return foundAsset != null;
 					}
 					default:
