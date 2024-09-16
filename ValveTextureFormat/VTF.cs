@@ -157,19 +157,17 @@ namespace Chisel.Import.Source.VPKTools
                     #region Read Header
                     VTFHeader vtfHeader;
                     uint[]    version = new uint[] { DataParser.ReadUInt( stream ), DataParser.ReadUInt( stream ) };
-                    vtfHeader.version    = ( version[0] ) + ( version[1] / 10f );
-                    vtfHeader.headerSize = DataParser.ReadUInt( stream );
-                    vtfHeader.width      = DataParser.ReadUShort( stream );
-                    vtfHeader.height     = DataParser.ReadUShort( stream );
-                    vtfHeader.flags      = (VTFImageFlag)DataParser.ReadUInt( stream );
-                    vtfHeader.frames     = DataParser.ReadUShort( stream );
-                    vtfHeader.firstFrame = DataParser.ReadUShort( stream );
-                    vtfHeader.padding0   = new byte[4];
-                    stream.Read( vtfHeader.padding0, 0, 4 );
-                    vtfHeader.reflectivity = new float[] { DataParser.ReadFloat( stream ), DataParser.ReadFloat( stream ), DataParser.ReadFloat( stream ) };
-                    vtfHeader.padding1     = new byte[4];
-                    stream.Read( vtfHeader.padding1, 0, 4 );
-                    vtfHeader.bumpmapScale       = DataParser.ReadFloat( stream );
+                    vtfHeader.version       = ( version[0] ) + ( version[1] / 10f );
+                    vtfHeader.headerSize    = DataParser.ReadUInt( stream );
+                    vtfHeader.width         = DataParser.ReadUShort( stream );
+                    vtfHeader.height        = DataParser.ReadUShort( stream );
+                    vtfHeader.flags         = (VTFImageFlag)DataParser.ReadUInt( stream );
+                    vtfHeader.frames        = DataParser.ReadUShort( stream );
+                    vtfHeader.firstFrame    = DataParser.ReadUShort( stream );
+                    vtfHeader.padding0      = DataParser.ReadUInt( stream );
+                    vtfHeader.reflectivity  = new float[] { DataParser.ReadFloat( stream ), DataParser.ReadFloat( stream ), DataParser.ReadFloat( stream ) };
+                    vtfHeader.padding1      = DataParser.ReadUInt(stream);
+					vtfHeader.bumpmapScale       = DataParser.ReadFloat( stream );
                     vtfHeader.highResImageFormat = (VTFImageFormat) DataParser.ReadUInt( stream );
                     vtfHeader.mipmapCount        = DataParser.ReadByte( stream );
                     vtfHeader.lowResImageFormat  = (VTFImageFormat) DataParser.ReadUInt( stream );
@@ -225,8 +223,7 @@ namespace Chisel.Import.Source.VPKTools
                             if( (VTFResourceEntryType) vtfHeader.resources[i].type == VTFResourceEntryType.VTF_LEGACY_RSRC_IMAGE )
                                 imageBufferOffset = (int) vtfHeader.resources[i].data;
                         }
-                    }
-                    else
+                    } else
                     {
                         thumbnailBufferOffset = (int) vtfHeader.headerSize;
                         imageBufferOffset     = thumbnailBufferOffset + thumbnailBufferSize;
@@ -241,9 +238,11 @@ namespace Chisel.Import.Source.VPKTools
                             mipmapBufferOffset += (int) ComputeMipmapSize( vtfHeader.width, vtfHeader.height, vtfHeader.depth, i, vtfHeader.highResImageFormat );
                         }
 
-                        stream.Position = imageBufferOffset + mipmapBufferOffset;
+                        uint mipmapSize = ComputeMipmapSize(vtfHeader.width, vtfHeader.height, vtfHeader.depth, 0, vtfHeader.highResImageFormat);
+						
+						stream.Position = imageBufferOffset + mipmapBufferOffset;
 
-                        extracted = DecompressImage( stream, vtfHeader.width, vtfHeader.height, vtfHeader.highResImageFormat );
+                        extracted = DecompressImage( stream, vtfHeader.width, vtfHeader.height, mipmapSize, vtfHeader.highResImageFormat );
                         width     = vtfHeader.width;
                         height    = vtfHeader.height;
                     } else
@@ -256,37 +255,33 @@ namespace Chisel.Import.Source.VPKTools
             return extracted;
         }
 
-        private static Color[] DecompressImage( Stream data, ushort width, ushort height, VTFImageFormat imageFormat )
-        {
-            Color[] vtfColors = new Color[width * height];
-
-            Texture2DHelpers.TextureFormat format;
-            if( imageFormat == VTFImageFormat.IMAGE_FORMAT_DXT1 || imageFormat == VTFImageFormat.IMAGE_FORMAT_DXT1_ONEBITALPHA )
-                format = Texture2DHelpers.TextureFormat.DXT1;
-            else if( imageFormat == VTFImageFormat.IMAGE_FORMAT_DXT3 )
-                format = Texture2DHelpers.TextureFormat.DXT3;
-            else if( imageFormat == VTFImageFormat.IMAGE_FORMAT_DXT5 )
-                format = Texture2DHelpers.TextureFormat.DXT5;
-            else if( imageFormat == VTFImageFormat.IMAGE_FORMAT_BGR888 )
-                format = Texture2DHelpers.TextureFormat.BGR888;
-			else if (imageFormat == VTFImageFormat.IMAGE_FORMAT_RGB888)
-				format = Texture2DHelpers.TextureFormat.BGR888;
-			else if( imageFormat == VTFImageFormat.IMAGE_FORMAT_BGRA8888 || 
-                     imageFormat == VTFImageFormat.IMAGE_FORMAT_BGRX8888)
-                format = Texture2DHelpers.TextureFormat.BGRA8888;
-			else if (imageFormat == VTFImageFormat.IMAGE_FORMAT_RGBA8888)
-				format = Texture2DHelpers.TextureFormat.BGRA8888;
-			else if (imageFormat == VTFImageFormat.IMAGE_FORMAT_ABGR8888)
-				format = Texture2DHelpers.TextureFormat.BGRA8888;
-			else if (imageFormat == VTFImageFormat.IMAGE_FORMAT_ARGB8888)
-				format = Texture2DHelpers.TextureFormat.BGRA8888;
-			else
+        private static Color[] DecompressImage( Stream data, ushort width, ushort height, uint dataSize, VTFImageFormat imageFormat )
+		{
+			Texture2DHelpers.TextureFormat format;
+            switch(imageFormat)
             {
-                format = Texture2DHelpers.TextureFormat.BGR888;
-                Debug.LogError( "SourceTexture: Unsupported format " + imageFormat + ", will read as " + format );
+                case VTFImageFormat.IMAGE_FORMAT_DXT1:
+                case VTFImageFormat.IMAGE_FORMAT_DXT1_ONEBITALPHA:  format = Texture2DHelpers.TextureFormat.DXT1; break;
+
+                case VTFImageFormat.IMAGE_FORMAT_DXT3:  format = Texture2DHelpers.TextureFormat.DXT3; break;
+                case VTFImageFormat.IMAGE_FORMAT_DXT5:  format = Texture2DHelpers.TextureFormat.DXT5; break;
+				case VTFImageFormat.IMAGE_FORMAT_BGR888: format = Texture2DHelpers.TextureFormat.BGR888; break;
+				case VTFImageFormat.IMAGE_FORMAT_RGB888: format = Texture2DHelpers.TextureFormat.BGR888; break;
+
+				case VTFImageFormat.IMAGE_FORMAT_BGRA8888: 
+                case VTFImageFormat.IMAGE_FORMAT_BGRX8888: format = Texture2DHelpers.TextureFormat.BGRA8888; break;
+				case VTFImageFormat.IMAGE_FORMAT_RGBA8888: format = Texture2DHelpers.TextureFormat.BGRA8888; break;
+				case VTFImageFormat.IMAGE_FORMAT_ABGR8888: format = Texture2DHelpers.TextureFormat.BGRA8888; break;
+				case VTFImageFormat.IMAGE_FORMAT_ARGB8888: format = Texture2DHelpers.TextureFormat.BGRA8888; break;
+                default:
+                {
+                    format = Texture2DHelpers.TextureFormat.BGR888;
+                    Debug.LogError( "SourceTexture: Unsupported format " + imageFormat + ", will read as " + format );
+                    break;
+                }
             }
 
-            vtfColors = Texture2DHelpers.DecompressRawBytes( data, width, height, format );
+			Color[] vtfColors = Texture2DHelpers.DecompressRawBytes( data, width, height, dataSize, format );
             Texture2DHelpers.FlipVertical( vtfColors, width, height );
 
             

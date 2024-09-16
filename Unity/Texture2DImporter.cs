@@ -13,40 +13,28 @@ namespace Chisel.Import.Source.VPKTools
 			var foundAsset = UnityAssets.Load<Texture2D>(destinationPath);
 			if (foundAsset != null)
 				return foundAsset;
-
-			// Convert vtf texture to unity Texture2D
-			if (!CopyToTexture(sourceTexture, out Texture2D unityTexture) ||
-				unityTexture == null)
-			{
-				return null;
-			}
-
-			try
-			{
-				// Write texture as a png file
-				SavePng(unityTexture, destinationPath);
-
-				// Import png file as an asset
-				var assetPath = UnityAssets.GetAssetPath(destinationPath);
-				AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUncompressedImport);
 			
-				// Configure the importer (can only be done after importing once) and re-import
-				ConfigureTextureImporter(sourceTexture, assetPath);
+			// Write texture as a png file
+			SavePng(sourceTexture, destinationPath);
 
-				// Reload the asset
-				return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
-			}
-			finally
-			{
-				// make sure we destroy the Texture2D we created, so it doesn't end up stored in our scene file
-				UnityEngine.Object.DestroyImmediate(unityTexture);
-			}
+			// Import png file as an asset
+			var assetPath = UnityAssets.GetAssetPath(destinationPath);
+			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUncompressedImport);
+			
+			// Configure the importer (can only be done after importing once) and re-import
+			ConfigureTextureImporter(sourceTexture, assetPath);
+
+			// Reload the asset
+			return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
 		}
 
-		public static void SavePng(Texture2D unityTexture, string destinationPath)
+		public static void SavePng(VTF texture, string destinationPath)
 		{
 			PackagePath.EnsureDirectoriesExist(destinationPath);
-			var bytes = ImageConversion.EncodeToPNG(unityTexture);
+			var bytes = ImageConversion.EncodeArrayToPNG(texture.Pixels,
+				//UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm, 
+				UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
+				(uint)texture.Width, (uint)texture.Height);
 			File.WriteAllBytes(destinationPath, bytes);
 		}
 
