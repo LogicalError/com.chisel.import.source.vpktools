@@ -348,6 +348,115 @@ namespace Chisel.Import.Source.VPKTools
             return texture2DColors.ToArray();
         }
 
+		// from: https://github.com/Benjamin-Dobell/s3tc-dxt-decompression by Benjamin Dobell
+		//
+		// void DecompressBlockDXT5(): Decompresses one block of a DXT5 texture and stores the resulting pixels at the appropriate offset in 'image'.
+		//
+		// ulong x:                     x-coordinate of the first pixel in the block.
+		// ulong y:                     y-coordinate of the first pixel in the block.
+		// ulong width:                 width of the texture being decompressed.
+		// ulong height:                height of the texture being decompressed.
+		// char[] blockStorage:   pointer to the block to decompress.
+		// ulong *image:                pointer to image where the decompressed pixel data should be stored.
+
+		internal static void DecompressBlockDXT5(int x, int y, int width, Span<byte> blockStorage, Color[] image)
+        {
+            byte alpha0 = blockStorage[0];
+			byte alpha1 = blockStorage[1];
+
+            uint alphaCode1 = (uint)blockStorage[2 + 2] | ((uint)blockStorage[2 + 3] << 8) | ((uint)blockStorage[2 + 4] << 16) | ((uint)blockStorage[2 + 5] << 24);
+            uint alphaCode2 = (uint)blockStorage[2 + 0] | ((uint)blockStorage[2 + 1] << 8);
+
+			ushort color0 = (ushort)((ushort)blockStorage[ 8] | ((ushort)blockStorage[ 9] << 8));
+            ushort color1 = (ushort)((ushort)blockStorage[10] | ((ushort)blockStorage[11] << 8));
+
+            uint temp = (uint)(color0 >> 11) * 255 + 16;
+			byte r0 = (byte)((temp/32 + temp)/32);
+            temp = (uint)((color0 & 0x07E0) >> 5) * 255 + 32;
+			byte g0 = (byte)((temp/64 + temp)/64);
+            temp = (uint)(color0 & 0x001F) * 255 + 16;
+			byte b0 = (byte)((temp/32 + temp)/32);
+
+            temp = (uint)(color1 >> 11) * 255 + 16;
+			byte r1 = (byte)((temp/32 + temp)/32);
+            temp = (uint)((color1 & 0x07E0) >> 5) * 255 + 32;
+			byte g1 = (byte)((temp/64 + temp)/64);
+            temp = (uint)(color1 & 0x001F) * 255 + 16;
+			byte b1 = (byte)((temp/32 + temp)/32);
+
+			uint code = (uint)blockStorage[12] | ((uint)blockStorage[13] << 8) | ((uint)blockStorage[14] << 16) | ((uint)blockStorage[15] << 24);
+
+            for (int j = 0; j < 4; j++)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    int alphaCodeIndex = 3*(4*j+i);
+                    uint alphaCode;
+
+                    if (alphaCodeIndex <= 12)
+                    {
+                        alphaCode = (alphaCode2 >> alphaCodeIndex) & 0x07;
+                    }
+                    else if (alphaCodeIndex == 15)
+                    {
+                        alphaCode = (alphaCode2 >> 15) | ((alphaCode1 << 1) & 0x06);
+                    }
+                    else // alphaCodeIndex >= 18 && alphaCodeIndex <= 45
+                    {
+                        alphaCode = (alphaCode1 >> (alphaCodeIndex - 16)) & 0x07;
+                    }
+
+					byte finalAlpha;
+                    if (alphaCode == 0)
+                    {
+                        finalAlpha = alpha0;
+                    }
+                    else if (alphaCode == 1)
+                    {
+                        finalAlpha = alpha1;
+                    }
+                    else
+                    {
+                        if (alpha0 > alpha1)
+                        {
+                            finalAlpha = (byte)(((8 - alphaCode) * alpha0 + (alphaCode - 1) * alpha1) / 7);
+                        }
+                        else
+                        {
+                            if (alphaCode == 6)
+                                finalAlpha = 0;
+                            else if (alphaCode == 7)
+                                finalAlpha = 255;
+                            else
+                                finalAlpha = (byte)(((6 - alphaCode) * alpha0 + (alphaCode - 1) * alpha1) / 5);
+                        }
+                    }
+
+                    byte colorCode = (byte)((code >> 2 * (4 * j + i)) & 0x03);
+
+                    Color finalColor = Color.black;
+                    switch (colorCode)
+                    {
+                        case 0:
+                            finalColor = new Color(r0 / 255.0f, g0 / 255.0f, b0 / 255.0f, finalAlpha / 255.0f);
+                            break;
+                        case 1:
+                            finalColor = new Color(r1 / 255.0f, g1 / 255.0f, b1 / 255.0f, finalAlpha / 255.0f);
+                            break;
+                        case 2:
+                            finalColor = new Color(((2 * r0 + r1) / 3) / 255.0f, ((2 * g0 + g1) / 3) / 255.0f, ((2 * b0 + b1) / 3) / 255.0f, finalAlpha / 255.0f);
+                            break;
+                        case 3:
+                            finalColor = new Color(((r0 + 2 * r1) / 3) / 255.0f, ((g0 + 2 * g1) / 3) / 255.0f, ((b0 + 2 * b1) / 3) / 255.0f, finalAlpha / 255.0f);
+                            break;
+                    }
+
+                    if (x + i < width)
+                        image[(y + j)*width + (x + i)] = finalColor;
+                }
+            }
+        }
+
         /// <summary>
         /// Turn raw DXT5 bytes to a Color array that can be used in a Texture2D.
         /// </summary>
@@ -355,108 +464,26 @@ namespace Chisel.Import.Source.VPKTools
         /// <param name="width">Expected width of the image</param>
         /// <param name="height">Expected height of the image</param>
         /// <returns>Pixel color data</returns>
-        public static Color[] DecompressDXT5( Stream data, ushort width, ushort height, uint dataSize)
+        public static Color[] DecompressDXT5( Stream data, int width, int height, uint dataSize)
 		{
-			// TODO: replace this with our own DXT5 decompression code
 			var byteBuffer = new byte[dataSize];
 			data.Read(byteBuffer, 0, byteBuffer.Length);
 
-			Texture2D tex = new(width, height, UnityEngine.TextureFormat.DXT5, false, false, true);
-			tex.LoadRawTextureData(byteBuffer);
-			var pixels = tex.GetPixels();
-			UnityEngine.Object.DestroyImmediate(tex);
+			int blockCountX = (width + 3) / 4;
+			int blockCountY = (height + 3) / 4;
+			int blockWidth = (width < 4) ? width : 4;
+			int blockHeight = (height < 4) ? height : 4;
+
+			Color[] pixels = new Color[width * height];
+
+			int offset = 0;
+			for (int j = 0; j < blockCountY; j++)
+			{
+                for (int i = 0; i < blockCountX; i++) 
+                    DecompressBlockDXT5(i * 4, j * 4, width, byteBuffer.AsSpan(offset + (i * 16), 16), pixels);
+                offset += blockCountX * 16;
+			}
 			return pixels;
-#if false
-            Color[] texture2DColors = new Color[width * height];
-
-            for( int row = 0; row < height; row += 4 )
-            {
-                for( int col = 0; col < width; col += 4 )
-                {
-#region Alpha Information
-
-                    byte alpha0Data = 0;
-                    byte alpha1Data = 0;
-                    uint alphamask  = 0;
-
-                    alpha0Data = data.ReadValueByte();
-                    alpha1Data = data.ReadValueByte();
-                    byte[] amdata = new byte[6];
-                    data.Read( amdata, 0, amdata.Length );
-                    alphamask = BitConverter.ToUInt32( amdata, 0 );
-
-                    float[] alphaPalette = new float[]
-                    {
-                            alpha0Data                                      / 255f,
-                            alpha1Data                                      / 255f,
-                            ( ( 6 * alpha0Data + 1 * alpha1Data + 3 ) / 7 ) / 255f,
-                            ( ( 5 * alpha0Data + 2 * alpha1Data + 3 ) / 7 ) / 255f,
-                            ( ( 4 * alpha0Data + 3 * alpha1Data + 3 ) / 7 ) / 255f,
-                            ( ( 3 * alpha0Data + 4 * alpha1Data + 3 ) / 7 ) / 255f,
-                            ( ( 2 * alpha0Data + 5 * alpha1Data + 3 ) / 7 ) / 255f,
-                            ( ( 1 * alpha0Data + 6 * alpha1Data + 3 ) / 7 ) / 255f
-                    };
-
-                    if( alpha0Data <= alpha1Data )
-                    {
-                        alphaPalette[2] = ( 4 * alpha0Data + 1 * alpha1Data + 2 ) / 5;
-                        alphaPalette[3] = ( 3 * alpha0Data + 2 * alpha1Data + 2 ) / 5;
-                        alphaPalette[4] = ( 2 * alpha0Data + 3 * alpha1Data + 2 ) / 5;
-                        alphaPalette[5] = ( 1 * alpha0Data + 4 * alpha1Data + 2 ) / 5;
-                        alphaPalette[6] = 0;
-                        alphaPalette[7] = 1;
-                    }
-
-#endregion
-
-#region Color Information
-
-                    ushort color0Data = 0;
-                    ushort color1Data = 0;
-                    uint   bitmask    = 0;
-
-                    color0Data = DataParser.ReadUShort( data );
-                    color1Data = DataParser.ReadUShort( data );
-                    bitmask    = DataParser.ReadUInt( data );
-
-                    int[] colors0 = new int[] { ( ( color0Data >> 11 ) & 0x1F ) << 3, ( ( color0Data >> 5 ) & 0x3F ) << 2, ( color0Data & 0x1F ) << 3 };
-                    int[] colors1 = new int[] { ( ( color1Data >> 11 ) & 0x1F ) << 3, ( ( color1Data >> 5 ) & 0x3F ) << 2, ( color1Data & 0x1F ) << 3 };
-
-                    Color[] colorPalette = new Color[]
-                    {
-                            new Color( colors0[0]                                  / 255f, colors0[1]                                  / 255f, colors0[2]                                  / 255f ),
-                            new Color( colors1[0]                                  / 255f, colors1[1]                                  / 255f, colors1[2]                                  / 255f ),
-                            new Color( ( ( colors0[0] * 2 + colors1[0] + 1 ) / 3 ) / 255f, ( ( colors0[1] * 2 + colors1[1] + 1 ) / 3 ) / 255f, ( ( colors0[2] * 2 + colors1[2] + 1 ) / 3 ) / 255f ),
-                            new Color( ( ( colors1[0] * 2 + colors0[0] + 1 ) / 3 ) / 255f, ( ( colors1[1] * 2 + colors0[1] + 1 ) / 3 ) / 255f, ( ( colors1[2] * 2 + colors0[2] + 1 ) / 3 ) / 255f )
-                    };
-
-#endregion
-
-#region Place All Information
-
-                    int  blockIndex       = 0;
-                    uint alphaBlockIndex1 = alphamask & 0x07, alphaBlockIndex2 = alphamask & 0x38;
-                    for( int blockY = 0; blockY < 4; blockY++ )
-                    {
-                        for( int blockX = 0; blockX < 4; blockX++ )
-                        {
-                            Color colorInBlock = colorPalette[( bitmask & ( 0x03 << blockIndex * 2 ) ) >> blockIndex * 2];
-                            if( blockY < 2 ) colorInBlock.a = alphaPalette[alphaBlockIndex1 & 0x07];
-                            else colorInBlock.a             = alphaPalette[alphaBlockIndex2 & 0x07];
-                            texture2DColors[( ( row * width ) + col ) + ( ( blockY * width ) + blockX )] = colorInBlock;
-                            blockIndex++;
-                        }
-
-                        alphaBlockIndex1 >>= 3;
-                        alphaBlockIndex2 >>= 3;
-                    }
-
-#endregion
-                }
-            }
-
-            return texture2DColors.ToArray();
-#endif
 		}
 
         /// <summary>
