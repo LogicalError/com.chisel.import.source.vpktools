@@ -110,6 +110,7 @@ namespace Chisel.Import.Source.VPKTools
 			input = input.Trim();
 			if (string.IsNullOrWhiteSpace(input))
 				return false;
+			input = input.Replace("..", ".").Replace(',', '.');
 			if (input[0] == '-' && input[1] == '.')
 			{
 				input = "-0" + input.Substring(1);
@@ -120,7 +121,6 @@ namespace Chisel.Import.Source.VPKTools
 					input = "0" + input;
 				}
 			}
-			input = input.Replace("..", ".");
 			return Single.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out output);
 		}
 
@@ -130,6 +130,7 @@ namespace Chisel.Import.Source.VPKTools
 			input = input.Trim();
 			if (string.IsNullOrWhiteSpace(input))
 				return false;
+			input = input.Replace("..", ".").Replace(',', '.');
 			if (input[0] == '-' && input[1] == '.')
 			{
 				input = "-0" + input.Substring(1);
@@ -140,7 +141,6 @@ namespace Chisel.Import.Source.VPKTools
 					input = "0" + input;
 				}
 			}
-			input = input.Replace("..", ".");
 			return Double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out output);
 		}
 

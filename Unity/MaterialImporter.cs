@@ -14,11 +14,63 @@ namespace Chisel.Import.Source.VPKTools
 				return foundAsset;
 
 			string materialName = Path.GetFileNameWithoutExtension(destinationPath);
-			foundAsset = CreateUnityMaterial(gameResources, sourceMaterial, materialName);
+			foundAsset = CreateMaterial(gameResources, sourceMaterial, materialName);
 			UnityAssets.Save(foundAsset, destinationPath);
 			return foundAsset;
 		}
-		
+
+		internal static VmfMaterial ImportSkyboxSide(GameResources gameResources, string skyname)
+		{
+			var entry = gameResources.GetEntry(skyname);
+			if (entry == null && !skyname.StartsWith("materials/"))
+			{
+				if (skyname.StartsWith("skybox/"))
+					skyname = @"materials/" + skyname;
+				else
+					skyname = @"materials/skybox/" + skyname;
+				entry = gameResources.GetEntry(skyname);
+			}
+			if (entry == null)
+				return null;
+			
+			var outputPath = GameResources.GetOutputPath(entry.keyname);
+			return gameResources.LoadVmf(entry);
+		}
+
+		public static Material ImportSkybox(GameResources gameResources, string skyname)
+		{
+			string outputPath;
+			if (!skyname.StartsWith("materials/"))
+			{
+				if (skyname.StartsWith("skybox/"))
+					outputPath = GameResources.GetOutputPath(Path.ChangeExtension("materials/" + skyname, string.Empty));
+				else
+					outputPath = GameResources.GetOutputPath(Path.ChangeExtension("materials/skybox/" + skyname, string.Empty));
+			} else
+				outputPath = GameResources.GetOutputPath(Path.ChangeExtension(skyname, string.Empty));
+			
+			var destinationPath = Path.ChangeExtension(outputPath, ".mat");
+			var foundAsset = UnityAssets.Load<Material>(destinationPath);
+			if (foundAsset != null)
+				return foundAsset;
+
+			var skysidename = skyname;
+			if (skysidename.EndsWith(PackagePath.VmtExtension))
+				skysidename = skysidename.Remove(skysidename.Length - PackagePath.VmtExtension.Length);
+			
+			var vmfMaterialFt = ImportSkyboxSide(gameResources, skysidename + "ft" + PackagePath.VmtExtension);
+			var vmfMaterialBk = ImportSkyboxSide(gameResources, skysidename + "bk" + PackagePath.VmtExtension);
+			var vmfMaterialLf = ImportSkyboxSide(gameResources, skysidename + "lf" + PackagePath.VmtExtension);
+			var vmfMaterialRt = ImportSkyboxSide(gameResources, skysidename + "rt" + PackagePath.VmtExtension);
+			var vmfMaterialUp = ImportSkyboxSide(gameResources, skysidename + "up" + PackagePath.VmtExtension);
+			var vmfMaterialDn = ImportSkyboxSide(gameResources, skysidename + "dn" + PackagePath.VmtExtension);
+
+			PackagePath.EnsureDirectoriesExist(destinationPath);
+			foundAsset = CreateSkyboxMaterial(gameResources, skyname, vmfMaterialFt, vmfMaterialBk, vmfMaterialLf, vmfMaterialRt, vmfMaterialUp, vmfMaterialDn);
+			UnityAssets.Save(foundAsset, destinationPath);
+			return foundAsset;
+		}
+
 		private const string _standardShaderName				= "Standard (Specular setup)";
 		private const string _unlitShaderName					= "Unlit/Texture";
 		private const string _unlitTransparentShaderName		= "Unlit/Transparent";
@@ -31,7 +83,7 @@ namespace Chisel.Import.Source.VPKTools
 		private static Shader _unlitTransparentCutoutShader;
 		private static Shader _premultiplyShader;
 
-		private static Material CreateUnityMaterial(GameResources resources, VmfMaterial sourceMaterial, string materialName)
+		private static Material CreateMaterial(GameResources gameResources, VmfMaterial sourceMaterial, string materialName)
 		{
 			var haveCutout		 = sourceMaterial.HaveCutout;
 			var translucency	 = sourceMaterial.HaveTranslucency;
@@ -173,26 +225,26 @@ namespace Chisel.Import.Source.VPKTools
 			if (unityMaterial.HasProperty("_Glossiness")) unityMaterial.SetFloat("_Glossiness", 0);
 			if (unityMaterial.HasProperty("_SmoothnessTextureChannel")) unityMaterial.SetInt("_SmoothnessTextureChannel", 0);
 
-			Texture2D mainTexture = SetMaterialTexture(resources, unityMaterial, "_MainTex", sourceMaterial.BaseTextureName);
-			Texture2D normalMap = SetMaterialTexture(resources, unityMaterial, "_BumpMap", sourceMaterial.BumpMapName);
-			Texture2D selfIlluminationMap = SetMaterialTexture(resources, unityMaterial, "_EmissionMap", sourceMaterial.SelfIlluminationTexture);
+			Texture2D mainTexture = SetMaterialTexture(gameResources, unityMaterial, "_MainTex", sourceMaterial.BaseTextureName);
+			Texture2D normalMap = SetMaterialTexture(gameResources, unityMaterial, "_BumpMap", sourceMaterial.BumpMapName);
+			Texture2D selfIlluminationMap = SetMaterialTexture(gameResources, unityMaterial, "_EmissionMap", sourceMaterial.SelfIlluminationTexture);
 			if (selfIlluminationMap == null)
-				selfIlluminationMap = SetMaterialTexture(resources, unityMaterial, "_EmissionMap", sourceMaterial.SelfIlluminationMask);
+				selfIlluminationMap = SetMaterialTexture(gameResources, unityMaterial, "_EmissionMap", sourceMaterial.SelfIlluminationMask);
 
 
 			//var setSpecGlossMap	= SetMaterialTexture(resources, unityMaterial, "_MetallicGlossMap", PhongExponentTextureName) != null;
-			var setSpecMap = SetMaterialTexture(resources, unityMaterial, "_SpecGlossMap", sourceMaterial.PhongExponentTextureName) != null;
+			var setSpecMap = SetMaterialTexture(gameResources, unityMaterial, "_SpecGlossMap", sourceMaterial.PhongExponentTextureName) != null;
 			if (!setSpecMap && unityMaterial.HasProperty("_SpecColor"))
 				unityMaterial.SetColor("_SpecColor", UnityEngine.Color.black);
 
 			var setNormalMapOn = normalMap != null;
 
 			var setDetailTextureOn = false;
-			setDetailTextureOn = setDetailTextureOn || SetMaterialTexture(resources, unityMaterial, "_DetailAlbedoMap", sourceMaterial.DetailTextureName) != null;
-			setDetailTextureOn = setDetailTextureOn || SetMaterialTexture(resources, unityMaterial, "_DetailAlbedoMap", sourceMaterial.BaseTexture2Name) != null;
-			setDetailTextureOn = setDetailTextureOn || SetMaterialTexture(resources, unityMaterial, "_DetailMask", sourceMaterial.BlendModulateTextureName) != null;
+			setDetailTextureOn = setDetailTextureOn || SetMaterialTexture(gameResources, unityMaterial, "_DetailAlbedoMap", sourceMaterial.DetailTextureName) != null;
+			setDetailTextureOn = setDetailTextureOn || SetMaterialTexture(gameResources, unityMaterial, "_DetailAlbedoMap", sourceMaterial.BaseTexture2Name) != null;
+			setDetailTextureOn = setDetailTextureOn || SetMaterialTexture(gameResources, unityMaterial, "_DetailMask", sourceMaterial.BlendModulateTextureName) != null;
 
-			if (SetMaterialTexture(resources, unityMaterial, "_DetailNormalMap", sourceMaterial.BumpMap2Name) != null)
+			if (SetMaterialTexture(gameResources, unityMaterial, "_DetailNormalMap", sourceMaterial.BumpMap2Name) != null)
 			{
 				setDetailTextureOn = true;
 				setNormalMapOn = true;
@@ -325,7 +377,7 @@ namespace Chisel.Import.Source.VPKTools
 			return unityMaterial;
 		}
 		
-		private static Texture2D SetMaterialTexture(GameResources resources, Material material, string materialPropertyName, string textureName)
+		private static Texture2D SetMaterialTexture(GameResources gameResources, Material material, string materialPropertyName, string textureName)
 		{
 			if (string.IsNullOrEmpty(textureName) || !material)
 				return null;
@@ -336,7 +388,7 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			}
 
-			var image = resources.ImportTexture(textureName);
+			var image = gameResources.ImportTexture(textureName);
 			if (image == null)
 			{
 				return null;
@@ -430,11 +482,12 @@ namespace Chisel.Import.Source.VPKTools
 				colorMaterial = GenerateEditorColorMaterial(color);
 				if (!colorMaterial)
 					return null;
-				UnityAssets.Save<Material>(colorMaterial, destinationPath);
+				UnityAssets.Save(colorMaterial, destinationPath);
 			}
 			return colorMaterial;
 		}
-
+		
+		
 		// TODO: support "skybox" in Chisel, where we can tag a special material as skybox, 
 		//			and then replace it with the RenderSettings.skybox when building meshes
 		public static Material GetSkyBoxMaterial()
@@ -444,21 +497,40 @@ namespace Chisel.Import.Source.VPKTools
 				skybox = GetColorMaterial(Color.white);
 			return skybox;
 		}
+		
+		private static Shader _skyboxShader;
 
-		public static Vector2? GetMaterialResolution(Material unityMaterial)
+		public static Material CreateSkyboxMaterial(GameResources gameResources, 
+												   string materialName,
+												   VmfMaterial front, 
+												   VmfMaterial back, 
+												   VmfMaterial left, 
+												   VmfMaterial right, 
+												   VmfMaterial up, 
+												   VmfMaterial down)
 		{
-			if (!unityMaterial)
-				return null;
-			
-			Texture2D texture = null;
-			if (unityMaterial.HasProperty("_MainTex")) texture = unityMaterial.GetTexture("_MainTex") as Texture2D;
-			if (!texture && unityMaterial.HasProperty("_FrontTex")) texture = unityMaterial.GetTexture("_FrontTex") as Texture2D;
-			if (!texture && unityMaterial.HasProperty("_BackTex" )) texture = unityMaterial.GetTexture("_BackTex") as Texture2D;
-			if (!texture && unityMaterial.HasProperty("_LeftTex" )) texture = unityMaterial.GetTexture("_LeftTex") as Texture2D;
-			if (!texture && unityMaterial.HasProperty("_RightTex")) texture = unityMaterial.GetTexture("_RightTex") as Texture2D;
-			if (!texture && unityMaterial.HasProperty("_UpTex"   )) texture = unityMaterial.GetTexture("_UpTex") as Texture2D;
-			if (!texture && unityMaterial.HasProperty("_DownTex" )) texture = unityMaterial.GetTexture("_DownTex") as Texture2D;
-			return !texture ? (Vector2?)Vector2.one : (Vector2?)new Vector2(texture.width, texture.height);
+			if (!_skyboxShader)
+			{
+				_skyboxShader = Shader.Find("Skybox/6 Sided");
+				if (!_skyboxShader)
+					return null;
+			}
+
+			var unityMaterial = new Material(_skyboxShader) {name = materialName};
+			unityMaterial.hideFlags = HideFlags.DontUnloadUnusedAsset;
+
+			// we rotate the horizontal textures to make them align properly ...
+			if (front != null) SetMaterialTexture(gameResources, unityMaterial, "_LeftTex", front.BaseTextureName);
+			if (left  != null) SetMaterialTexture(gameResources, unityMaterial, "_BackTex", left .BaseTextureName);
+			if (back  != null) SetMaterialTexture(gameResources, unityMaterial, "_RightTex", back .BaseTextureName);
+			if (right != null) SetMaterialTexture(gameResources, unityMaterial, "_FrontTex", right.BaseTextureName);
+
+			if (up    != null) SetMaterialTexture(gameResources, unityMaterial, "_UpTex",    up   .BaseTextureName);
+			if (down  != null) SetMaterialTexture(gameResources, unityMaterial, "_DownTex",  down .BaseTextureName);
+
+			// ... and we use the rotation setting to rotate it back, so it matches the original game
+			unityMaterial.SetFloat("_Rotation", 270);
+			return unityMaterial;
 		}
 	}
 }

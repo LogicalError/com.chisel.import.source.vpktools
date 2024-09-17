@@ -286,9 +286,19 @@ namespace Chisel.Import.Source.VPKTools
 
                 case VTFImageFormat.IMAGE_FORMAT_DXT3:  format = Texture2DHelpers.TextureFormat.DXT3; break;
                 case VTFImageFormat.IMAGE_FORMAT_DXT5:  format = Texture2DHelpers.TextureFormat.DXT5; break;
+
+				case VTFImageFormat.IMAGE_FORMAT_I8:
+				case VTFImageFormat.IMAGE_FORMAT_P8:
+				case VTFImageFormat.IMAGE_FORMAT_A8: format = Texture2DHelpers.TextureFormat.R8; break;
+
+				case VTFImageFormat.IMAGE_FORMAT_UV88:
+				case VTFImageFormat.IMAGE_FORMAT_IA88: format = Texture2DHelpers.TextureFormat.RG88; break;
+
 				case VTFImageFormat.IMAGE_FORMAT_BGR888: format = Texture2DHelpers.TextureFormat.BGR888; break;
 				case VTFImageFormat.IMAGE_FORMAT_RGB888: format = Texture2DHelpers.TextureFormat.BGR888; break;
 
+				case VTFImageFormat.IMAGE_FORMAT_UVLX8888:
+				case VTFImageFormat.IMAGE_FORMAT_UVWQ8888:
 				case VTFImageFormat.IMAGE_FORMAT_BGRA8888: 
                 case VTFImageFormat.IMAGE_FORMAT_BGRX8888: format = Texture2DHelpers.TextureFormat.BGRA8888; break;
 				case VTFImageFormat.IMAGE_FORMAT_RGBA8888: format = Texture2DHelpers.TextureFormat.BGRA8888; break;

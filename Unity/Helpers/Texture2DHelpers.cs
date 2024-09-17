@@ -70,6 +70,10 @@ namespace Chisel.Import.Source.VPKTools
         public static Color[] DecompressRawBytes( Stream data, ushort width, ushort height, uint dataSize, TextureFormat textureFormat )
         {
             Color[] colors = null;
+			if (textureFormat == TextureFormat.R8)
+				colors = DecompressR8(data, width, height);
+			if ( textureFormat == TextureFormat.RG88)
+                colors = DecompressRG88( data, width, height );
             if( textureFormat == TextureFormat.BGR888 )
                 colors = DecompressBGR888( data, width, height );
             else if( textureFormat == TextureFormat.BGRA8888 )
@@ -84,16 +88,89 @@ namespace Chisel.Import.Source.VPKTools
                 Debug.LogError( "Texture2DHelpers: Texture format not supported " + textureFormat );
 
             return colors;
-        }
+		}
 
-        /// <summary>
-        /// Turn raw BGR888 bytes to a Color array that can be used in a Texture2D.
-        /// </summary>
-        /// <param name="data">Raw image byte data</param>
-        /// <param name="width">Expected width of the image</param>
-        /// <param name="height">Expected height of the image</param>
-        /// <returns>Pixel color data</returns>
-        public static Color[] DecompressBGR888( Stream data, ushort width, ushort height )
+		/// <summary>
+		/// Turn raw R8 bytes to a Color array that can be used in a Texture2D.
+		/// </summary>
+		/// <param name="data">Raw image byte data</param>
+		/// <param name="width">Expected width of the image</param>
+		/// <param name="height">Expected height of the image</param>
+		/// <returns>Pixel color data</returns>
+		public static Color[] DecompressR8(Stream data, ushort width, ushort height)
+		{
+			Color[] texture2DColors = new Color[width * height];
+
+			bool exceededArray = false;
+			for (int row = 0; row < height; row++)
+			{
+				for (int col = 0; col < width; col++)
+				{
+					byte red = data.ReadValueByte();
+
+					int flattenedIndex = row * width + col;
+					if (flattenedIndex < texture2DColors.Length)
+						texture2DColors[flattenedIndex] = new Color(((float)red) / byte.MaxValue, 1.0f, 1.0f);
+					else
+					{
+						Debug.LogError("BGR888: Exceeded expected texture size");
+						exceededArray = true;
+						break;
+					}
+				}
+
+				if (exceededArray)
+					break;
+			}
+
+			return texture2DColors;
+		}
+
+		/// <summary>
+		/// Turn raw RG88 bytes to a Color array that can be used in a Texture2D.
+		/// </summary>
+		/// <param name="data">Raw image byte data</param>
+		/// <param name="width">Expected width of the image</param>
+		/// <param name="height">Expected height of the image</param>
+		/// <returns>Pixel color data</returns>
+		public static Color[] DecompressRG88(Stream data, ushort width, ushort height)
+		{
+			Color[] texture2DColors = new Color[width * height];
+
+			bool exceededArray = false;
+			for (int row = 0; row < height; row++)
+			{
+				for (int col = 0; col < width; col++)
+				{
+					byte red = data.ReadValueByte();
+					byte green = data.ReadValueByte();
+
+					int flattenedIndex = row * width + col;
+					if (flattenedIndex < texture2DColors.Length)
+						texture2DColors[flattenedIndex] = new Color(((float)red) / byte.MaxValue, ((float)green) / byte.MaxValue, 1.0f);
+					else
+					{
+						Debug.LogError("BGR888: Exceeded expected texture size");
+						exceededArray = true;
+						break;
+					}
+				}
+
+				if (exceededArray)
+					break;
+			}
+
+			return texture2DColors;
+		}
+
+		/// <summary>
+		/// Turn raw BGR888 bytes to a Color array that can be used in a Texture2D.
+		/// </summary>
+		/// <param name="data">Raw image byte data</param>
+		/// <param name="width">Expected width of the image</param>
+		/// <param name="height">Expected height of the image</param>
+		/// <returns>Pixel color data</returns>
+		public static Color[] DecompressBGR888( Stream data, ushort width, ushort height )
         {
             Color[] texture2DColors = new Color[width * height];
 
@@ -386,8 +463,10 @@ namespace Chisel.Import.Source.VPKTools
         /// This enum only holds the formats this helper class can read.
         /// </summary>
         public enum TextureFormat
-        {
-            BGR888,
+		{
+			R8,
+			RG88,
+			BGR888,
             BGRA8888,
             DXT1,
             DXT3,
