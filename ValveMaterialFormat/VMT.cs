@@ -9,7 +9,7 @@ using System.Globalization;
 
 namespace Chisel.Import.Source.VPKTools
 {
-	public class VmfMaterial
+	public class VMT
 	{
 		public string		MaterialTypeName;
 
@@ -109,7 +109,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (EnvMapTextureName != null) outputTextureNames.Add(EnvMapTextureName);
 		}
 
-		public static VmfMaterial Read(Stream stream)
+		public static VMT Read(Stream stream)
 		{
 			var vmfString = TextParser.LoadStreamAsString(stream);
 			try
@@ -123,7 +123,7 @@ namespace Chisel.Import.Source.VPKTools
 			}
 		}
 
-		static VmfMaterial ParseString(string text)
+		static VMT ParseString(string text)
 		{
 			TextParser materialFile = TextParser.ParseString(text);
 			if (materialFile == null)
@@ -138,7 +138,7 @@ namespace Chisel.Import.Source.VPKTools
 			}
 
 
-			var vmfMaterial	= new VmfMaterial();
+			var vmfMaterial	= new VMT();
 			vmfMaterial.Color = UnityEngine.Color.white;
 			vmfMaterial.MaterialTypeName = materialFile.Properties[0].Name;
 			var properties	= materialFile.Properties[0].Children;

@@ -13,53 +13,34 @@ namespace Chisel.Import.Source.VPKTools
 	public class GameEntry
 	{
 		public string	keyname;
-		public int		extensionStart;
+		public string	extension;
+		public string	name;
 		public string	sourceFilename;
 		public VPKEntry entry;
-
-		public string Extension
-		{ 
-			get
-			{
-				if (extensionStart == keyname.Length)
-					return string.Empty;
-				return keyname.Substring(extensionStart);
-			}
-		}
-
-		public string Name
-		{
-			get
-			{
-				if (extensionStart == 0)
-					return string.Empty;
-				return keyname.Remove(extensionStart);
-			}
-		}
 	}
 
 	public class GameResources
 	{
-		public const string OutputPath = "import";
-
 		// TODO: make this work well with resource lookups in packages (lets avoid duplication of functionality)
 		readonly Dictionary<string, GameEntry> lookup = new();
 
 		public IEnumerable<string> GetEntryNames() { return lookup.Keys; }
 
-
-		public GameEntry GetEntry(string entryName)
+		
+		public GameEntry GetEntry(string entryName, string[] searchPaths = null)
 		{
-			if (entryName == null)
-				return null;
-			// TODO: use PackagePath instead
-			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
-			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
-			ArrayPool<char>.Shared.Return(rentedCharList);
-			if (entryName == null)
-				return null;
+			if (string.IsNullOrEmpty(entryName)) return null;
+			PackagePath.CleanFullPath(ref entryName);
+			if (string.IsNullOrEmpty(entryName)) return null;
 			if (lookup.TryGetValue(entryName, out var entry))
 				return entry;
+			if (searchPaths == null)
+				return null;
+			foreach(var searchPath in searchPaths)
+			{
+				if (lookup.TryGetValue(PackagePath.Combine(searchPath, entryName), out entry))
+					return entry;
+			}
 			return null;
 		}
 
@@ -68,7 +49,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (entry == null)
 				return false;
 			if (streamLoadDelegate == null) throw new NullReferenceException(nameof(streamLoadDelegate));
-			if (entry.sourceFilename.EndsWith(PackagePath.VpkExtension))
+			if (entry.sourceFilename.EndsWith($".{PackagePath.ExtensionVPK}"))
 			{
 				VPKResource resource = LoadResource(entry.sourceFilename);
 				if (resource == null)
@@ -80,19 +61,15 @@ namespace Chisel.Import.Source.VPKTools
 			return streamLoadDelegate.Invoke(file);
 		}
 
-		// TODO: Generalize ImportGetEntry to support multiple searchdirs
-		public Texture2D ImportTexture(string entryName)
+		public string LoadText(string entryName, string[] searchPaths = null)
 		{
-			entryName = entryName.Replace('\\', '/').ToLower();
-			string fullname = Path.ChangeExtension($"materials/{entryName}", PackagePath.VtfExtension);
-			return Import<Texture2D>(fullname);
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null)
+				return null;
+			return LoadText(entry);
 		}
 
-
-		public static string GetImportPath(string fullname) { return Path.Combine(OutputPath, fullname); }
-		public static string GetOutputPath(string fullname) { return Path.Combine(Application.dataPath, GetImportPath(fullname)); }
-
-		public string LoadSourceText(GameEntry entry)
+		public string LoadText(GameEntry entry)
 		{
 			string sourceText = null;
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
@@ -103,15 +80,36 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceText;
 		}
 
-		public VTF LoadVTF(string entryName)
+		public string ImportFile(string entryName, string[] searchPaths = null)
 		{
-			if (entryName == null)
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null)
 				return null;
-			// TODO: use PackagePath instead
-			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
-			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
-			ArrayPool<char>.Shared.Return(rentedCharList);
-			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
+			string outputPath = null;
+			if (!LoadFileAsStream(entry, delegate (Stream stream)
+			{
+				outputPath = PackagePath.GetOutputPath(entry.keyname);
+				if (!File.Exists(outputPath))
+				{
+					PackagePath.EnsureDirectoriesExist(outputPath);
+					var bytes = new byte[stream.Length];
+					stream.Read(bytes, 0, (int)stream.Length);
+					File.WriteAllBytes(outputPath, bytes);
+					var assetPath = PackagePath.GetAssetPath(entry.keyname);
+					AssetDatabase.ImportAsset(assetPath);
+				}
+				return true;
+			})) return null;
+			return outputPath;
+		}
+
+		public VTF LoadVTF(string entryName, string[] searchPaths = null)
+		{
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVTF);
+			if (searchPaths == null)
+				searchPaths = PackagePath.DefaultMaterialPaths;
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null)
 				return null;
 			return LoadVTF(entry);
 		}
@@ -127,25 +125,41 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceTexture;
 		}
 
-		public VmfMaterial LoadVmf(string entryName)
+		public Texture2D[] ImportVTF(string entryName, string[] searchPaths = null)
 		{
-			if (entryName == null)
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVTF);
+			if (searchPaths == null)
+				searchPaths = PackagePath.DefaultMaterialPaths;
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null)
 				return null;
-			// TODO: use PackagePath instead
-			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
-			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
-			ArrayPool<char>.Shared.Return(rentedCharList);
-			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
+			if (entry.extension != PackagePath.ExtensionVTF)
 				return null;
-			return LoadVmf(entry);
+			var sourceTexture = LoadVTF(entry);
+			if (sourceTexture == null)
+				return null;			
+			var outputPath = PackagePath.GetOutputPath(entry.keyname);
+			return Texture2DImporter.Import(sourceTexture, outputPath);
 		}
 
-		public VmfMaterial LoadVmf(GameEntry entry)
+
+		public VMT LoadVMT(string entryName, string[] searchPaths = null)
 		{
-			VmfMaterial sourceMaterial = null; 
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVMT);
+			if (searchPaths == null)
+				searchPaths = PackagePath.DefaultMaterialPaths;
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null)
+				return null;
+			return LoadVMT(entry);
+		}
+
+		public VMT LoadVMT(GameEntry entry)
+		{
+			VMT sourceMaterial = null; 
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
 			{
-				sourceMaterial = VmfMaterial.Read(stream);
+				sourceMaterial = VMT.Read(stream);
 				return true;
 			}))
 			{
@@ -154,31 +168,108 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceMaterial;
 		}
 
-		public MdlHeader LoadMdl(string entryName, Lookup _lookup)
+		public Material ImportVMT(string entryName, string[] searchPaths = null, bool isSprite = false)
 		{
-			if (entryName == null)
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVMT);
+			if (searchPaths == null)
+				searchPaths = PackagePath.DefaultMaterialPaths;
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null)
 				return null;
-			// TODO: use PackagePath instead
-			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
-			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
-			ArrayPool<char>.Shared.Return(rentedCharList);
-			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
-				return null;
-			return LoadMdl(entry, _lookup);
+			VMT sourceMaterial = LoadVMT(entry);
+			if (sourceMaterial == null)
+				return null;			
+			var outputPath = PackagePath.GetOutputPath(entry.keyname);
+			return MaterialImporter.Import(this, sourceMaterial, outputPath, isSprite);
 		}
 
-		public MdlHeader LoadMdl(GameEntry entry, Lookup lookup)
+		// any reference to a .spr file, is really a .vmt file
+		public VMT LoadSPR(string entryName, string[] searchPaths = null)
 		{
-			if (entry.Extension != PackagePath.MdlExtension)
+			PackagePath.CleanFullPath(ref entryName);
+			if (entryName.EndsWith($".{PackagePath.ExtensionSPR}"))
+				entryName = Path.ChangeExtension(entryName, string.Empty);
+			return LoadVMT(entryName, searchPaths);
+		}
+
+		// any reference to a .spr file, is really a .vmt file
+		public Material ImportSPR(string entryName, string[] searchPaths = null)
+		{
+			PackagePath.CleanFullPath(ref entryName);
+			if (entryName.EndsWith($".{PackagePath.ExtensionSPR}"))
+				entryName = entryName.Remove(entryName.Length - (PackagePath.ExtensionSPR.Length + 1));
+			return ImportVMT(entryName, searchPaths, isSprite: true);
+		}
+
+		public VTX LoadVTX(string entryName, string[] searchPaths = null)
+		{
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVTX);
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null)
+				return null;
+			return LoadVTX(entry);
+		}
+
+		public VTX LoadVTX(GameEntry entry)
+		{
+			if (entry.extension != PackagePath.ExtensionVTX)
 				return null;
 
-			MdlHeader header = null;
+			VTX header = null;
+			if (!LoadFileAsStream(entry, delegate (Stream stream)
+			{
+				using var reader = new BinaryReader(stream);
+				header = VTX.Read(reader);
+				return true;
+			})) return null;
+			return header;
+		}
+
+		public VVD LoadVVD(string entryName, MDL mdlHeader, string[] searchPaths = null)
+		{
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVVD);
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null)
+				return null;
+			return LoadVVD(entry, mdlHeader);
+		}
+
+		public VVD LoadVVD(GameEntry entry, MDL mdlHeader)
+		{
+			if (entry.extension != PackagePath.ExtensionVVD)
+				return null;
+
+			VVD header = null;
+			if (!LoadFileAsStream(entry, delegate (Stream stream)
+			{
+				using var reader = new BinaryReader(stream);
+				header = VVD.Load(reader, mdlHeader);
+				return true;
+			})) return null;
+			return header;
+		}
+
+		public MDL LoadMDL(string entryName, Lookup _lookup, string[] searchPaths = null)
+		{
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionMDL);
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null)
+				return null;
+			return LoadMDL(entry, _lookup);
+		}
+
+		public MDL LoadMDL(GameEntry entry, Lookup lookup)
+		{
+			if (entry.extension != PackagePath.ExtensionMDL)
+				return null;
+
+			MDL header = null;
 			try
 			{
 				if (!LoadFileAsStream(entry, delegate (Stream stream)
 				{
 					using var reader = new BinaryReader(stream);
-					header = MdlHeader.Read(reader, this, lookup);
+					header = MDL.Read(reader, this, lookup);
 					return true;
 				})) return null;
 			}
@@ -189,168 +280,86 @@ namespace Chisel.Import.Source.VPKTools
 			return header;
 		}
 
-		public VtxHeader LoadVtx(string entryName)
-		{
-			if (entryName == null)
-				return null;
-			// TODO: use PackagePath instead
-			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
-			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
-			ArrayPool<char>.Shared.Return(rentedCharList);
-			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
-				return null;
-			return LoadVtx(entry);
-		}
-
-		public VtxHeader LoadVtx(GameEntry entry)
-		{
-			if (entry.Extension != PackagePath.VtxExtension)
-				return null;
-
-			VtxHeader header = null;
-			if (!LoadFileAsStream(entry, delegate (Stream stream)
-			{
-				using var reader = new BinaryReader(stream);
-				header = VtxHeader.Read(reader);
-				return true;
-			})) return null;
-			return header;
-		}
-
-		public VvdHeader LoadVvd(string entryName, MdlHeader mdlHeader)
-		{
-			if (entryName == null)
-				return null;
-			// TODO: use PackagePath instead
-			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
-			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
-			ArrayPool<char>.Shared.Return(rentedCharList);
-			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
-				return null;
-			return LoadVvd(entry, mdlHeader);
-		}
-
-		public VvdHeader LoadVvd(GameEntry entry, MdlHeader mdlHeader)
-		{
-			if (entry.Extension != PackagePath.VvdExtension)
-				return null;
-
-			VvdHeader header = null;
-			if (!LoadFileAsStream(entry, delegate (Stream stream)
-			{
-				using var reader = new BinaryReader(stream);
-				header = VvdHeader.Load(reader, mdlHeader);
-				return true;
-			})) return null;
-			return header;
-		}
-
-		public MdlModel ImportMdlModel(string modelId)
+		public SourceModel LoadSourceModel(string modelId, string[] searchPaths = null)
 		{
 			var lookup = new Lookup();
 
-			var mdlEntry = GetEntry(modelId);
-			var mdlHeader = mdlEntry != null ? LoadMdl(mdlEntry, lookup) : null;
-			if (mdlHeader == null)
+			var mdlEntry = GetEntry(modelId, searchPaths);
+			var mdl = mdlEntry != null ? LoadMDL(mdlEntry, lookup) : null;
+			if (mdl == null)
 			{
 				Debug.LogError($"Failed to load mdlHeader {modelId}");
 				return null;
 			}
 
-			var vvdHeaderName = Path.ChangeExtension(modelId, PackagePath.VvdExtension);
+			var vvdHeaderName = Path.ChangeExtension(modelId, PackagePath.ExtensionVVD);
 			var vvdEntry = GetEntry(vvdHeaderName);
-			var vvdHeader = (vvdEntry != null) ? LoadVvd(vvdEntry, mdlHeader) : null;
-			if (vvdHeader == null)
+			var vvd = (vvdEntry != null) ? LoadVVD(vvdEntry, mdl) : null;
+			if (vvd == null)
 			{
 				Debug.LogError($"Failed to load vvdHeader {vvdHeaderName}");
 				return null;
 			}
 
-			var vtxHeaderName = Path.ChangeExtension(modelId, PackagePath.VtxDX90Extension);
+			var vtxHeaderName = Path.ChangeExtension(modelId, PackagePath.ExtensionVTX_DX90);
 			var vtxEntry = GetEntry(vtxHeaderName);
-			var vtxHeader = (vtxEntry != null) ? LoadVtx(vtxEntry) : null;
-			if (vtxHeader == null)
+			var vtx = (vtxEntry != null) ? LoadVTX(vtxEntry) : null;
+			if (vtx == null)
 			{
 				Debug.LogError($"Failed to load vtxHeader {vtxHeaderName}");
 				return null;
 			}
 			
-			for (var i = 0; i < mdlHeader.TextureDirs.Length; i++)
+			for (var i = 0; i < mdl.TextureDirs.Length; i++)
 			{
-				mdlHeader.TextureDirs[i] = 
-					PackagePath.CleanDirectory(mdlHeader.TextureDirs[i]);
+				mdl.TextureDirs[i] = 
+					PackagePath.CleanDirectory(mdl.TextureDirs[i]);
 			}
 
-			return new MdlModel
+			return new SourceModel
 			{
-				MdlHeader = mdlHeader,
-				VvdHeader = vvdHeader,
-				VtxHeader = vtxHeader
+				MDL = mdl,
+				VVD = vvd,
+				VTX = vtx,
+				MDLEntry = mdlEntry,
+				VVDEntry = vvdEntry,
+				VTXEntry = vtxEntry
 			};
 		}
 
-
-		public T Import<T>(string entryName) where T : UnityEngine.Object
+		public GameObject ImportModel(string entryName, string[] searchPaths = null)
 		{
-			if (entryName == null)
+			var sourceModel = LoadSourceModel(entryName, searchPaths);
+			if (sourceModel == null)
 				return null;
-			// TODO: use PackagePath instead
-			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
-			entryName = CleanedKeyname(entryName, 0, rentedCharList, out int extensionstart);
-			ArrayPool<char>.Shared.Return(rentedCharList);
-			if (entryName == null || !lookup.TryGetValue(entryName, out var entry))
-				return null;
-			if (!Import<T>(entry, out var asset))
-				return null;
-			return asset;
+			var outputPath = PackagePath.GetOutputPath(sourceModel.MDLEntry.keyname);
+			return ModelImporter.Import(this, sourceModel, outputPath, skin: 0);
 		}
 
-		public bool Import<T>(GameEntry entry, out T asset) where T : UnityEngine.Object
+		public T Import<T>(GameEntry entry) where T : UnityEngine.Object
 		{
-			asset = null;
 			if (entry == null)
-				return false;
+				return null;
+			return Import<T>(entry.keyname);
+		}
 
-			//Debug.Log($"Importing {entry.name}{entry.extension} from {entry.sourceFilename}");
-			UnityEngine.Object foundAsset = null;
-			if (!LoadFileAsStream(entry, delegate (Stream stream)
+		public T Import<T>(string entryName, string[] searchPaths = null) where T : UnityEngine.Object
+		{
+			if (string.IsNullOrEmpty(entryName)) return null;
+			var extension = PackagePath.GetExtension(entryName);
+			switch (extension)
 			{
-				var outputPath = GetOutputPath(entry.keyname);
-				PackagePath.EnsureDirectoriesExist(outputPath);
-				switch (entry.Extension.ToString()) // TODO: move this outside of LoadFileAsStream
+				case PackagePath.ExtensionVMT: return ImportVMT(entryName, searchPaths) as T; 
+				case PackagePath.ExtensionVTF: var textures = ImportVTF(entryName, searchPaths); return (textures == null || textures.Length == 0) ? null : textures[0] as T; 
+				case PackagePath.ExtensionMDL: return ImportModel(entryName, searchPaths) as T; 
+				default:
 				{
-					case PackagePath.VmtExtension:
-					{
-						VmfMaterial sourceMaterial = VmfMaterial.Read(stream);
-						foundAsset = MaterialImporter.Import(this, sourceMaterial, outputPath);
-						return foundAsset != null;
-					}
-					case PackagePath.VtfExtension:
-					{
-						VTF sourceTexture = VTF.Read(stream);
-						var foundAssets = Texture2DImporter.Import(sourceTexture, outputPath);
-						if (foundAssets != null)
-							foundAsset = foundAssets[0]; // TODO: handle frames better
-						return foundAsset != null;
-					}
-					default:
-					{
-						var assetPath = Path.Combine("Assets", Path.GetRelativePath(Application.dataPath, outputPath));
-						if (!File.Exists(outputPath))
-						{
-							var bytes = new byte[stream.Length];
-							stream.Read(bytes, 0, (int)stream.Length);
-							File.WriteAllBytes(outputPath, bytes);
-							AssetDatabase.ImportAsset(assetPath);
-						}
-						foundAsset = AssetDatabase.LoadAssetAtPath<T>(assetPath);
-						return true;
-					}
+					var outputPath = ImportFile(entryName, searchPaths);
+					if (outputPath == null) return null;
+					var assetPath = PackagePath.GetAssetPath(entryName);
+					return AssetDatabase.LoadAssetAtPath<T>(assetPath);
 				}
-			})) return false;
-
-			asset = foundAsset as T;
-			return true;
+			}
 		}
 
 		readonly Dictionary<string, VPKResource> resourceLookup = new();
@@ -368,40 +377,7 @@ namespace Chisel.Import.Source.VPKTools
 			return resource;
 		}
 
-		// TODO: get rid of this
-		static string CleanedKeyname(string input, int skip, char[] rentedCharList, out int extensionstart)
-		{
-			extensionstart = -1;
-			if (string.IsNullOrEmpty(input))
-				return string.Empty;
-
-			Profiler.BeginSample("cleaning");
-			input = input.Replace("//", "/");
-			int keynameLength = input.Length;
-			if (keynameLength > rentedCharList.Length)
-			{
-				ArrayPool<char>.Shared.Return(rentedCharList);
-				rentedCharList = ArrayPool<char>.Shared.Rent(keynameLength);
-			}
-			int extensionLength = -1;
-			for (int i = skip, o = 0; i < keynameLength; i++, o++)
-			{
-				var ch = input[i];
-				if (ch == '.') extensionLength = i;
-				if (ch == '\\') ch = '/';
-				else if (char.IsUpper(ch)) ch = char.ToLowerInvariant(ch);
-				rentedCharList[o] = ch;
-			}
-			extensionstart = ((extensionLength != -1) ? extensionLength : keynameLength) - skip;
-			Profiler.EndSample();
-
-			Profiler.BeginSample("new string");
-			var result = new string(rentedCharList, 0, keynameLength - skip);
-			Profiler.EndSample();
-			return result;
-		}
-
-		public void LoadPaths(string[] inputPaths)
+		public void InitializePaths(string[] inputPaths)
 		{
 			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
 			var vpkFiles = HashSetPool<string>.Get();
@@ -424,29 +400,32 @@ namespace Chisel.Import.Source.VPKTools
 
 					foreach (var filename in files)
 					{
-						if (filename.EndsWith(PackagePath.VpkExtension))
+						if (string.IsNullOrEmpty(filename))
+							continue;
+
+						if (filename.EndsWith($".{PackagePath.ExtensionVPK}"))
 						{
 							Profiler.BeginSample("vpkFiles.Add");
-							if (filename.EndsWith(PackagePath.VpkDirExtension))
+							if (filename.EndsWith(PackagePath.ExtensionVPK_Dir))
 								vpkFiles.Add(filename);
 							Profiler.EndSample();
 							continue;
 						}
 
-						// TODO: use PackagePath instead
-						var keyname = CleanedKeyname(filename, path.Length, rentedCharList, out int extensionstart);
-						if (keyname == null)
-							continue;
-
+						var relativefilename = filename.Substring(path.Length);
+						var keyname = relativefilename;
+						PackagePath.CleanFullPath(ref keyname);
 						if (lookup.ContainsKey(keyname))
-							continue;
+							continue; 
 
+						PackagePath.DecomposePath(relativefilename, out string directory, out string name, out string extension);
 						Profiler.BeginSample("lookup");						
 						var entry = new GameEntry()
 						{
 							keyname			= keyname,
-							extensionStart	= extensionstart,
-							sourceFilename	= filename,
+							extension		= extension,
+							name			= name,
+							sourceFilename	= relativefilename,
 							entry			= new VPKEntry { }
 						};
 						lookup[keyname] = entry;
@@ -458,6 +437,7 @@ namespace Chisel.Import.Source.VPKTools
 					{
 						try
 						{
+							// TODO: do we really need this log?
 							Profiler.BeginSample("new VPKArchive");
 							var logFileName = $"{Application.dataPath}\\{Path.GetFileNameWithoutExtension(vpkFile)}_log.txt";
 							var archive = new VPKArchive(vpkFile, logFileName, 2);
@@ -477,18 +457,21 @@ namespace Chisel.Import.Source.VPKTools
 							Profiler.BeginSample("archiveEntries Iteration");
 							foreach (var item in archiveEntries)
 							{
-								// TODO: use PackagePath instead
-								var keyname = CleanedKeyname(item.Key, 0, rentedCharList, out int extensionstart);
-								if (keyname == null)
-									continue;
+								var keyname = item.Key;
+								PackagePath.CleanFullPath(ref keyname);
 								if (lookup.ContainsKey(keyname))
 									continue;
 
+								if (lookup.ContainsKey(keyname))
+									continue;
+
+								PackagePath.DecomposePath(keyname, out string directory, out string name, out string extension);
 								Profiler.BeginSample("lookup");
 								var entry = new GameEntry()
 								{
 									keyname			= keyname,
-									extensionStart	= extensionstart,
+									extension		= extension,
+									name			= name,
 									sourceFilename	= vpkFile,
 									entry			= item.Value
 								};

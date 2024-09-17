@@ -28,7 +28,7 @@ namespace Chisel.Import.Source.VPKTools
 			Profiler.BeginSample("misc");
 			string logInfo    = "";
             Stream stream     = File.OpenRead( vpk );
-            bool   multichunk = Path.GetFileName( vpk ).Replace(PackagePath.VpkExtension, string.Empty ).EndsWith( "_dir" );
+            bool   multichunk = Path.GetFileName( vpk ).Replace($".{PackagePath.ExtensionVPK}", string.Empty ).EndsWith( "_dir" );
             Profiler.EndSample();
 
             if (version == 2)
@@ -44,7 +44,7 @@ namespace Chisel.Import.Source.VPKTools
 			Profiler.EndSample();
 
 			Profiler.BeginSample("Log");
-			Debug.Log( $"Loaded VPK [{name}{PackagePath.VpkExtension}] with [{m_Entries.Count}] entries." );
+			Debug.Log( $"Loaded VPK [{name}.{PackagePath.ExtensionVPK}] with [{m_Entries.Count}] entries." );
 			Profiler.EndSample();
 
             //foreach( KeyValuePair<string, VPKEntry> kvp in m_Entries ) { Debug.Log( $"Entry: [{kvp.Key}], File Name: [{kvp.Value.fileName}]" ); }

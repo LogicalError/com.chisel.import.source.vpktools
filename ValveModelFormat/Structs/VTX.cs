@@ -385,7 +385,7 @@ namespace Chisel.Import.Source.VPKTools
 	};
 
 	// vtxheader_t
-	public class VtxHeader // FileHeader_t
+	public class VTX // FileHeader_t
 	{
 		// file version as defined by OPTIMIZED_MODEL_FILE_VERSION
 		public int    Version; // OPTIMIZED_MODEL_FILE_VERSION 7
@@ -403,9 +403,9 @@ namespace Chisel.Import.Source.VPKTools
 		public BodyPartHeader[]				BodyPartHeaders;
 
 			
-		public static VtxHeader Read(BinaryReader reader)
+		public static VTX Read(BinaryReader reader)
 		{
-			var vtx = new VtxHeader
+			var vtx = new VTX
 			{
 				Version			 = reader.ReadInt32(),
 				VertCacheSize	 = reader.ReadInt32(),

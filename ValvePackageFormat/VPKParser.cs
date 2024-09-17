@@ -178,7 +178,7 @@ namespace Chisel.Import.Source.VPKTools
 
         public string LocateInArchive( string filePath )
         {
-			PackagePath.DecomposePathNotCleaned(filePath, out string directory, out string fileName, out string extension);
+			PackagePath.DecomposePath(filePath, out string directory, out string fileName, out string extension);
 			return LocateInArchive( directory, fileName, extension);
         }
 
@@ -194,7 +194,7 @@ namespace Chisel.Import.Source.VPKTools
         
 		public bool LoadFileAsStream(string filePath, FileLoadDelegate streamActions)
 		{
-			PackagePath.DecomposePathNotCleaned(filePath, out string directory, out string fileName, out string extension);
+			PackagePath.DecomposePath(filePath, out string directory, out string fileName, out string extension);
             return LoadFileAsStream( directory, fileName, extension, streamActions);
         }
 
@@ -247,7 +247,7 @@ namespace Chisel.Import.Source.VPKTools
             //if( currentStream == null )
             {
                 string archiveName   = GetArchiveName( archiveIndex );
-                string archivePath   = Path.Combine( DirectoryLocation, Path.ChangeExtension(archiveName, PackagePath.VpkExtension));
+                string archivePath   = Path.Combine( DirectoryLocation, Path.ChangeExtension(archiveName, PackagePath.ExtensionVPK));
                 bool   archiveExists = File.Exists( archivePath );
                 if( archiveExists )
                 {
@@ -271,7 +271,7 @@ namespace Chisel.Import.Source.VPKTools
 
         private string GetArchiveName( ushort archiveIndex )
         {
-            string vpkPakDir = $"{DirectoryLocation.Replace(PackagePath.VpkExtension, "" ).Replace( "_dir", "" )}_";
+            string vpkPakDir = $"{DirectoryLocation.Replace($".{PackagePath.ExtensionVPK}", "" ).Replace( "_dir", "" )}_";
             /*if( archiveIndex      == DIR_PAK ) { vpkPakDir += "dir"; }
             else*/ if( archiveIndex < 1000 )
             {
@@ -304,7 +304,7 @@ namespace Chisel.Import.Source.VPKTools
 
         public bool FileExists(string filePath)
         {
-            PackagePath.DecomposePathNotCleaned(filePath, out string directory, out string fileName, out string extension);
+            PackagePath.DecomposePath(filePath, out string directory, out string fileName, out string extension);
             return FileExists(directory, fileName, extension);
         }
 
