@@ -1,18 +1,30 @@
+using System;
 using System.IO;
+
+using UnityEngine;
 
 namespace Chisel.Import.Source.VPKTools
 {
 	public static class PackagePath
 	{
-		public const string VpkExtension = ".vpk";
-		public const string VpkDirExtension = "_dir.vpk";
-		public const string VtfExtension = ".vtf";
-		public const string VmtExtension = ".vmt";
-		public const string MdlExtension = ".mdl";
-		public const string VvdExtension = ".vvd";
-		public const string VtxExtension = ".vtx";
-		public const string VtxDX90Extension = ".dx90.vtx";
-		public const string SprExtension = ".spr";
+		public const string OutputPath = "import"; // TODO: make this configurable
+
+		public const string ExtensionVPK = "vpk";
+		public const string ExtensionVPK_Dir = "_dir.vpk";
+		public const string ExtensionVTF = "vtf";
+		public const string ExtensionVMT = "vmt";
+		public const string ExtensionMDL = "mdl";
+		public const string ExtensionVVD = "vvd";
+		public const string ExtensionVTX = "vtx";
+		public const string ExtensionVTX_DX90 = "dx90.vtx";
+		public const string ExtensionSPR = "spr";
+
+		public static readonly string[] DefaultSkyBoxMaterialPaths = new string[] { "materials/", "materials/skybox/" };
+		public static readonly string[] DefaultMaterialPaths = new string[] { "materials/" };
+
+		public static string GetImportPath(string fullname) { return Path.Combine(OutputPath, fullname); }
+		public static string GetOutputPath(string fullname) { return Path.GetFullPath(Path.Combine(Application.dataPath, GetImportPath(fullname))); }
+		public static string GetAssetPath(string fullname) { return Path.Combine("Assets", Path.GetRelativePath(Application.dataPath, GetOutputPath(fullname))); }
 
 		public static string GetDirectory(string filePath)
 		{
@@ -28,13 +40,6 @@ namespace Chisel.Import.Source.VPKTools
 			return CleanExtension(Path.GetExtension(filePath));
 		}
 
-		public static void DecomposePathNotCleaned(string filePath, out string directory, out string filename, out string extension)
-		{
-			directory = Path.GetDirectoryName(filePath);
-			filename  = Path.GetFileNameWithoutExtension(filePath);
-			extension = Path.GetExtension(filePath);
-		}
-
 		public static void DecomposePath(string filePath, out string directory, out string filename, out string extension)
 		{
 			directory = GetDirectory(filePath);
@@ -44,9 +49,8 @@ namespace Chisel.Import.Source.VPKTools
 
 		public static string Combine(params string[] paths)
 		{
-			var combinedPath = Path.Combine(paths).ToLower().Replace('\\', '/');
-			while (combinedPath.Contains("//"))
-				combinedPath = combinedPath.Replace("//", "/");
+			var combinedPath = Path.Combine(paths);
+			CleanFullPath(ref combinedPath);
 			return combinedPath;
 		}
 
@@ -55,6 +59,13 @@ namespace Chisel.Import.Source.VPKTools
 			directory = CleanDirectory(directory);
 			filename = CleanFilename(filename);
 			extension = CleanExtension(extension);
+		}
+
+		public static void CleanFullPath(ref string fullName)
+		{
+			fullName = fullName.ToLower().Replace('\\', '/');
+			while (fullName.Contains("//"))
+				fullName = fullName.Replace("//", "/");
 		}
 
 		public static string CleanExtension(string extension)
@@ -87,25 +98,38 @@ namespace Chisel.Import.Source.VPKTools
 			return filename.ToLower();
 		}
 
-		/*
-		public static string FixLocation(VPKParser vpkParser, string rawPath)
-		{
-			string fixedLocation = rawPath.Replace("\\", "/").ToLower();
-
-			if (!Path.GetExtension(fixedLocation).Equals(VtfExtension) && (vpkParser == null || !vpkParser.FileExists(fixedLocation)))
-				fixedLocation += VtfExtension;
-			if ((vpkParser == null || !vpkParser.FileExists(fixedLocation)))
-				fixedLocation = Path.Combine("materials", fixedLocation).Replace("\\", "/");
-
-			return fixedLocation;
-		}
-		*/
-
 		public static void EnsureDirectoriesExist(string path)
 		{
 			var outputDirectory = Path.GetDirectoryName(path);
 			if (!Directory.Exists(outputDirectory))
 				Directory.CreateDirectory(outputDirectory);
+		}
+
+		internal static void EnsureExtension(ref string entryName, string extension)
+		{
+			if (string.IsNullOrEmpty(entryName))
+				return;
+			if (entryName.EndsWith($".{extension}"))
+				return;
+			entryName += $".{extension}";
+		}
+
+		internal static void EnsurePathStart(ref string entryName, string path)
+		{
+			if (string.IsNullOrEmpty(entryName))
+				return;
+			CleanFullPath(ref entryName);
+			path = CleanDirectory(path);
+			if (entryName.StartsWith(path))
+				return;
+
+			var pathPieces = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+			for (int i = pathPieces.Length - 1; i >= 0; i--)
+			{
+				if (entryName.StartsWith(pathPieces[i]))
+					continue;
+				entryName = Combine(pathPieces[i], entryName);
+			}
 		}
 	}
 }

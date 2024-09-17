@@ -24,7 +24,7 @@ namespace Chisel.Import.Source.VPKTools
 
 	public class MdlMaterialTable
 	{
-		public VmfMaterial[] sourceMaterials;
+		public VMT[] sourceMaterials;
 		public Material[] unityMaterials;
 	}
 
@@ -40,7 +40,7 @@ namespace Chisel.Import.Source.VPKTools
 		public float       SwitchPoint;
 		public bool		   isDoubleSided;
 		public string	   Name;
-		public MdlModel    Model;
+		public SourceModel    Model;
 		public Studioflags Flags;
 		public Renderer	   Renderer;
 		public GameObject  MeshObject;
@@ -127,7 +127,7 @@ namespace Chisel.Import.Source.VPKTools
 					uv			 = Uvs.ToArray(),
 					subMeshCount = SubMeshes.Count,
 					name	     = Name,
-					bounds		 = Model.MdlHeader.ViewBounds
+					bounds		 = Model.MDL.ViewBounds
 				};
 
 				for (var i = 0; i < SubMeshes.Count; i++)
@@ -145,11 +145,11 @@ namespace Chisel.Import.Source.VPKTools
 					skinnedMeshRenderer.sharedMesh			= Mesh;
 					skinnedMeshRenderer.bones				= skeleton.Bones.ToArray();
 					skinnedMeshRenderer.updateWhenOffscreen = true;
-					if ((Model.MdlHeader.Flags & Studioflags.DoNotCastShadows) == Studioflags.DoNotCastShadows)
+					if ((Model.MDL.Flags & Studioflags.DoNotCastShadows) == Studioflags.DoNotCastShadows)
 						skinnedMeshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
 					else
 					if (isDoubleSided ||
-						(Model.MdlHeader.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass)
+						(Model.MDL.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass)
 						skinnedMeshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.TwoSided;
 
 					// TODO: figure out the root-bones (zombie -> headcrab needs a different rootbone than body? maybe?)
@@ -161,11 +161,11 @@ namespace Chisel.Import.Source.VPKTools
 					var meshFilter = MeshObject.AddComponent<MeshFilter>();
 					var meshRenderer = MeshObject.AddComponent<MeshRenderer>();
 					meshFilter.sharedMesh = Mesh;
-					if ((Model.MdlHeader.Flags & Studioflags.DoNotCastShadows) == Studioflags.DoNotCastShadows)
+					if ((Model.MDL.Flags & Studioflags.DoNotCastShadows) == Studioflags.DoNotCastShadows)
 						meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
 					else
 					if (isDoubleSided ||
-						(Model.MdlHeader.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass)
+						(Model.MDL.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass)
 						meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.TwoSided;
 
 					if (MeshObject.GetComponent<MeshCollider>() == null)
@@ -182,9 +182,9 @@ namespace Chisel.Import.Source.VPKTools
 	}
 	#endregion
 
-	public static class MdlModelImporter
+	public static class ModelImporter
 	{
-		public static GameObject Import(GameResources gameResources, MdlModel model, string outputPath, int skin)
+		public static GameObject Import(GameResources gameResources, SourceModel model, string outputPath, int skin)
 		{
 			if (skin == 0)
 			{
@@ -219,7 +219,7 @@ namespace Chisel.Import.Source.VPKTools
 			return prefab;
 		}
 
-		public static GameObject[] Import(GameResources gameResources, MdlModel model, string outputPath)
+		public static GameObject[] Import(GameResources gameResources, SourceModel model, string outputPath)
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, ".prefab");
 			var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
@@ -354,9 +354,9 @@ namespace Chisel.Import.Source.VPKTools
 			}
 		}
 
-		public static void PopulatePrefab(GameObject prefab, MdlModel model, MdlModelEntry[] modelEntries, MdlSkeleton skeleton)
+		public static void PopulatePrefab(GameObject prefab, SourceModel model, MdlModelEntry[] modelEntries, MdlSkeleton skeleton)
 		{
-			var entryName = model.MdlHeader.Name;
+			var entryName = model.MDL.Name;
 
 			var hasMultipleLods = new HashSet<string>();
 			for (var i = 0; i < modelEntries.Length; i++)
@@ -384,7 +384,7 @@ namespace Chisel.Import.Source.VPKTools
 				}
 			}
 
-			bool staticPropHack = (model.MdlHeader.Flags & Studioflags.StaticProp) == Studioflags.StaticProp;
+			bool staticPropHack = (model.MDL.Flags & Studioflags.StaticProp) == Studioflags.StaticProp;
 
 			for (var i = 0; i < modelEntries.Length; i++)
 			{
@@ -482,11 +482,11 @@ namespace Chisel.Import.Source.VPKTools
 			};
 		}
 
-		private static MdlModelMaterials ImportModelTextures(GameResources gameResources, MdlModel model)
+		private static MdlModelMaterials ImportModelTextures(GameResources gameResources, SourceModel model)
 		{
-			var mdlHeader = model.MdlHeader;
+			var mdlHeader = model.MDL;
 
-			var sourceMaterials = new VmfMaterial[mdlHeader.TextureFilenames.Length];
+			var sourceMaterials = new VMT[mdlHeader.TextureFilenames.Length];
 			var outputPaths = new string[mdlHeader.TextureFilenames.Length];
 			var unityMaterials = new Material[mdlHeader.TextureFilenames.Length];
 			for (var i = 0; i < mdlHeader.TextureFilenames.Length; i++)
@@ -494,9 +494,9 @@ namespace Chisel.Import.Source.VPKTools
 				outputPaths[i] = default;
 				sourceMaterials[i] = default;
 
-				string fileName = Path.ChangeExtension(mdlHeader.TextureFilenames[i].Name, PackagePath.VmtExtension);
+				string fileName = Path.ChangeExtension(mdlHeader.TextureFilenames[i].Name, PackagePath.ExtensionVMT);
 				string entryName = fileName;
-				var sourceMaterial = gameResources.LoadVmf(entryName);
+				var sourceMaterial = gameResources.LoadVMT(entryName);
 				if (sourceMaterials[i] != null)
 				{
 					sourceMaterials[i] = sourceMaterial;
@@ -505,7 +505,7 @@ namespace Chisel.Import.Source.VPKTools
 				}
 
 				entryName = PackagePath.Combine("materials", fileName);
-				sourceMaterial = gameResources.LoadVmf(entryName);
+				sourceMaterial = gameResources.LoadVMT(entryName);
 				if (sourceMaterial != null)
 				{
 					sourceMaterials[i] = sourceMaterial;
@@ -516,7 +516,7 @@ namespace Chisel.Import.Source.VPKTools
 				for (int j = 0; j < mdlHeader.TextureDirs.Length; j++)
 				{
 					entryName = PackagePath.Combine(mdlHeader.TextureDirs[j], fileName);
-					sourceMaterial = gameResources.LoadVmf(entryName);
+					sourceMaterial = gameResources.LoadVMT(entryName);
 					if (sourceMaterial != null)
 					{
 						sourceMaterials[i] = sourceMaterial;
@@ -525,7 +525,7 @@ namespace Chisel.Import.Source.VPKTools
 					}
 
 					entryName = PackagePath.Combine("materials", mdlHeader.TextureDirs[j], fileName);
-					sourceMaterial = gameResources.LoadVmf(entryName);
+					sourceMaterial = gameResources.LoadVMT(entryName);
 					if (sourceMaterial != null)
 					{
 						sourceMaterials[i] = sourceMaterial;
@@ -540,9 +540,13 @@ namespace Chisel.Import.Source.VPKTools
 				if (sourceMaterials[i] == null)
 					continue;
 
-				var entry = gameResources.GetEntry(outputPaths[i]);
-				var outputPath = GameResources.GetOutputPath(entry.keyname);
-				unityMaterials[i] = MaterialImporter.Import(gameResources, sourceMaterials[i], outputPath);
+				var entry = gameResources.GetEntry(outputPaths[i], PackagePath.DefaultMaterialPaths);
+				if (entry != null)
+				{
+					var outputPath = PackagePath.GetOutputPath(entry.keyname);
+					unityMaterials[i] = MaterialImporter.Import(gameResources, sourceMaterials[i], outputPath);
+				} else
+					unityMaterials[i] = null;
 			}
 
 			MdlMaterialTable[] skins = null;
@@ -562,7 +566,7 @@ namespace Chisel.Import.Source.VPKTools
 
 					var skinTable = new MdlMaterialTable
 					{
-						sourceMaterials = new VmfMaterial[skinLookup.Length],
+						sourceMaterials = new VMT[skinLookup.Length],
 						unityMaterials = new Material[skinLookup.Length]
 					};
 					for (int i = 0; i < skinLookup.Length; i++)
@@ -582,12 +586,12 @@ namespace Chisel.Import.Source.VPKTools
 			};
 		}
 
-		private static MdlModelEntry[] ImportModelLods(GameResources gameResources, MdlModel model, //MdlModelMaterials modelMaterials, 
+		private static MdlModelEntry[] ImportModelLods(GameResources gameResources, SourceModel model, //MdlModelMaterials modelMaterials, 
 			out MdlSkeleton skeleton)//, int skin = 0)
 		{
-			var mdlHeader = model.MdlHeader;
-			var vvdHeader = model.VvdHeader;
-			var vtxHeader = model.VtxHeader;
+			var mdlHeader = model.MDL;
+			var vvdHeader = model.VVD;
+			var vtxHeader = model.VTX;
 			/*
 			var sourceMaterials = modelMaterials.sourceMaterials;
 			var unityMaterials = modelMaterials.unityMaterials;
@@ -713,7 +717,7 @@ namespace Chisel.Import.Source.VPKTools
 							//var isTransparent  = sourceMaterial.HaveTransparency;
 							var isDoubleSided  = //material.NoCull || 
 												 (//isTransparent & 
-												((model.MdlHeader.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass));
+												((model.MDL.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass));
 
 							modelEntry.isDoubleSided = isDoubleSided;
 
@@ -887,7 +891,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		// TODO: clean up below
 
-		private static StudioSequenceDescription pSeqdesc(MdlHeader header, int i )
+		private static StudioSequenceDescription pSeqdesc(MDL header, int i )
 		{
 			var localSequences = header.LocalSequences;
 			Debug.Assert( ( i >= 0 && i < localSequences.Length ) || ( i == 1 && localSequences.Length <= 1 ) );
@@ -911,19 +915,19 @@ namespace Chisel.Import.Source.VPKTools
 			//	return localSequences[i];
 			//}
 
-			MdlHeader pStudioHdr = header;//GroupStudioHdr( m_pVModel.m_seq[i].group );
+			MDL pStudioHdr = header;//GroupStudioHdr( m_pVModel.m_seq[i].group );
 
 			return pStudioHdr.LocalSequences[i];// m_pVModel.m_seq[i].index ];
 		}
 
-		private static StudioAnimationDescription pLocalAnimdesc(MdlHeader header, int i )
+		private static StudioAnimationDescription pLocalAnimdesc(MDL header, int i )
 		{
 			var localAnimationDescriptions = header.LocalAnimationDescriptions;
 			if (i < 0 || i >= localAnimationDescriptions.Length) i = 0;
 			return localAnimationDescriptions[i];
 		}
 
-		private static StudioAnimationDescription pAnimdesc(MdlHeader header,  int i ) 
+		private static StudioAnimationDescription pAnimdesc(MDL header,  int i ) 
 		{ 
 			if (header.IncludeModels.Length == 0)
 			{
@@ -1067,7 +1071,7 @@ namespace Chisel.Import.Source.VPKTools
 		}
 		*/
 
-		private static void SetupSingleBoneMatrix(MdlHeader					 header, 
+		private static void SetupSingleBoneMatrix(MDL					 header, 
 										  StudioSequenceDescription	 seqdesc, 
 										  StudioAnimationDescription animdesc, 
 										  StudioAnimation			 panim, 
@@ -1107,7 +1111,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		static List<AnimationClip> localClips = new List<AnimationClip>();
 
-		private static AnimationClip[] ModelToClips(MdlHeader header, string modelName, string modelLabel)
+		private static AnimationClip[] ModelToClips(MDL header, string modelName, string modelLabel)
 		{
 			AnimationClip[] modelClips;
 			if (modelAnimationClips.TryGetValue(modelName + ":" + modelLabel, out modelClips))

@@ -81,7 +81,7 @@ namespace Chisel.Import.Source.VPKTools
 			};
 		}
 
-		public static void Fixup(BinaryReader reader, int count, int offset, VvdHeader vvd, int rootLod)
+		public static void Fixup(BinaryReader reader, int count, int offset, VVD vvd, int rootLod)
 		{
 			for (int i = 0; i < rootLod; i++)
 			{
@@ -144,7 +144,7 @@ namespace Chisel.Import.Source.VPKTools
 		}
 	};
 		
-	public class VvdHeader	// vertexFileHeader_t
+	public class VVD	// vertexFileHeader_t
 	{
 		public string				ID;					// MODEL_VERTEX_FILE_ID			VSDI
 														// MODEL_VERTEX_FILE_THIN_ID	VCDI
@@ -158,9 +158,9 @@ namespace Chisel.Import.Source.VPKTools
 		public ThinModelVertices[]	ThinVertices;
 		public Vector4[]			Tangents;
 			
-		public static VvdHeader Load(BinaryReader reader, MdlHeader mdlHeader)
+		public static VVD Load(BinaryReader reader, MDL mdlHeader)
 		{
-			var vvd = new VvdHeader
+			var vvd = new VVD
 			{	
 				ID					= reader.ReadStringWithLength(4), // Model format ID, such as "IDST" (0x49 0x44 0x53 0x54)
 				Version				= reader.ReadInt32(),

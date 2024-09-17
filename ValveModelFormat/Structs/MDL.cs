@@ -1087,13 +1087,13 @@ namespace Chisel.Import.Source.VPKTools
 			return (3 * valueSquared - 2 * valueSquared * value);
 		}
 
-		public StudioAnimation pAnim(MdlHeader header, ref int piFrame)
+		public StudioAnimation pAnim(MDL header, ref int piFrame)
 		{
 			float flStall = 0;
 			return pAnim(header, ref piFrame, out flStall);
 		}
 			
-		public StudioAnimation pAnim(MdlHeader header, ref int piFrame, out float flStall )
+		public StudioAnimation pAnim(MDL header, ref int piFrame, out float flStall )
 		{
 			StudioAnimation panim = null;
 
@@ -2125,7 +2125,7 @@ namespace Chisel.Import.Source.VPKTools
 	{
 		public string label;
 		public string name; // = other model file ..
-		public MdlHeader header;
+		public MDL header;
 
 		public static StudioModelGroup[] Load(BinaryReader reader, GameResources gameResources, Lookup lookup, int count, long offset)
 		{
@@ -2153,7 +2153,7 @@ namespace Chisel.Import.Source.VPKTools
 				var mdlEntry = gameResources.GetEntry(items[i].name);
 				if (mdlEntry != null)
 				{
-					items[i].header = gameResources.LoadMdl(mdlEntry, lookup);
+					items[i].header = gameResources.LoadMDL(mdlEntry, lookup);
 				}
 				else
 					items[i].header = null;
@@ -2430,7 +2430,7 @@ namespace Chisel.Import.Source.VPKTools
 	}
 
 	// studiohdr_t
-	public class MdlHeader
+	public class MDL
 	{
 		public string							Id;				// Model format ID, such as "IDST" (0x49 0x44 0x53 0x54)
 		public int								Version;		// Format version number, such as 48 (0x30,0x00,0x00,0x00)
@@ -2603,11 +2603,11 @@ namespace Chisel.Import.Source.VPKTools
 			return materialSearchPaths;
 		}
 
-		public static MdlHeader Read(BinaryReader reader, GameResources gameResources, Lookup lookup)
+		public static MDL Read(BinaryReader reader, GameResources gameResources, Lookup lookup)
 		{
 			var id		= reader.ReadStringWithLength(4);
 			var version = reader.ReadInt32();
-			var header = new MdlHeader
+			var header = new MDL
 			{ 
 				Id								= id,
 				Version							= version,

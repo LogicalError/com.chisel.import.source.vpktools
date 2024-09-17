@@ -6,7 +6,7 @@ namespace Chisel.Import.Source.VPKTools
 {
 	public static class MaterialImporter
 	{
-		public static Material Import(GameResources gameResources, VmfMaterial sourceMaterial, string outputPath)
+		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, ".mat");
 			var foundAsset = UnityAssets.Load<Material>(destinationPath);
@@ -14,40 +14,26 @@ namespace Chisel.Import.Source.VPKTools
 				return foundAsset;
 
 			string materialName = Path.GetFileNameWithoutExtension(destinationPath);
-			foundAsset = CreateMaterial(gameResources, sourceMaterial, materialName);
+			foundAsset = CreateMaterial(gameResources, sourceMaterial, materialName, isSprite);
 			UnityAssets.Save(foundAsset, destinationPath);
 			return foundAsset;
 		}
 
-		internal static VmfMaterial ImportSkyboxSide(GameResources gameResources, string skyname)
+		internal static VMT ImportSkyboxSide(GameResources gameResources, string skyname)
 		{
-			var entry = gameResources.GetEntry(skyname);
-			if (entry == null && !skyname.StartsWith("materials/"))
-			{
-				if (skyname.StartsWith("skybox/"))
-					skyname = @"materials/" + skyname;
-				else
-					skyname = @"materials/skybox/" + skyname;
-				entry = gameResources.GetEntry(skyname);
-			}
+			var entry = gameResources.GetEntry(skyname, PackagePath.DefaultSkyBoxMaterialPaths);
 			if (entry == null)
 				return null;
 			
-			var outputPath = GameResources.GetOutputPath(entry.keyname);
-			return gameResources.LoadVmf(entry);
+			var outputPath = PackagePath.GetOutputPath(entry.keyname);
+			return gameResources.LoadVMT(entry);
 		}
 
 		public static Material ImportSkybox(GameResources gameResources, string skyname)
 		{
-			string outputPath;
-			if (!skyname.StartsWith("materials/"))
-			{
-				if (skyname.StartsWith("skybox/"))
-					outputPath = GameResources.GetOutputPath(Path.ChangeExtension("materials/" + skyname, string.Empty));
-				else
-					outputPath = GameResources.GetOutputPath(Path.ChangeExtension("materials/skybox/" + skyname, string.Empty));
-			} else
-				outputPath = GameResources.GetOutputPath(Path.ChangeExtension(skyname, string.Empty));
+			string outputPath = skyname;
+			PackagePath.EnsurePathStart(ref outputPath, "materials/skybox");
+			outputPath = Path.ChangeExtension(outputPath, string.Empty);
 			
 			var destinationPath = Path.ChangeExtension(outputPath, ".mat");
 			var foundAsset = UnityAssets.Load<Material>(destinationPath);
@@ -55,15 +41,15 @@ namespace Chisel.Import.Source.VPKTools
 				return foundAsset;
 
 			var skysidename = skyname;
-			if (skysidename.EndsWith(PackagePath.VmtExtension))
-				skysidename = skysidename.Remove(skysidename.Length - PackagePath.VmtExtension.Length);
+			if (skysidename.EndsWith($".{PackagePath.ExtensionVMT}"))
+				skysidename = skysidename.Remove(skysidename.Length - (PackagePath.ExtensionVMT.Length + 1));
 			
-			var vmfMaterialFt = ImportSkyboxSide(gameResources, skysidename + "ft" + PackagePath.VmtExtension);
-			var vmfMaterialBk = ImportSkyboxSide(gameResources, skysidename + "bk" + PackagePath.VmtExtension);
-			var vmfMaterialLf = ImportSkyboxSide(gameResources, skysidename + "lf" + PackagePath.VmtExtension);
-			var vmfMaterialRt = ImportSkyboxSide(gameResources, skysidename + "rt" + PackagePath.VmtExtension);
-			var vmfMaterialUp = ImportSkyboxSide(gameResources, skysidename + "up" + PackagePath.VmtExtension);
-			var vmfMaterialDn = ImportSkyboxSide(gameResources, skysidename + "dn" + PackagePath.VmtExtension);
+			var vmfMaterialFt = ImportSkyboxSide(gameResources, skysidename + "ft." + PackagePath.ExtensionVMT);
+			var vmfMaterialBk = ImportSkyboxSide(gameResources, skysidename + "bk." + PackagePath.ExtensionVMT);
+			var vmfMaterialLf = ImportSkyboxSide(gameResources, skysidename + "lf." + PackagePath.ExtensionVMT);
+			var vmfMaterialRt = ImportSkyboxSide(gameResources, skysidename + "rt." + PackagePath.ExtensionVMT);
+			var vmfMaterialUp = ImportSkyboxSide(gameResources, skysidename + "up." + PackagePath.ExtensionVMT);
+			var vmfMaterialDn = ImportSkyboxSide(gameResources, skysidename + "dn." + PackagePath.ExtensionVMT);
 
 			PackagePath.EnsureDirectoriesExist(destinationPath);
 			foundAsset = CreateSkyboxMaterial(gameResources, skyname, vmfMaterialFt, vmfMaterialBk, vmfMaterialLf, vmfMaterialRt, vmfMaterialUp, vmfMaterialDn);
@@ -82,8 +68,9 @@ namespace Chisel.Import.Source.VPKTools
 		private static Shader _unlitTransparentShader;
 		private static Shader _unlitTransparentCutoutShader;
 		private static Shader _premultiplyShader;
+		private static Shader _softParticleShader;
 
-		private static Material CreateMaterial(GameResources gameResources, VmfMaterial sourceMaterial, string materialName)
+		private static Material CreateMaterial(GameResources gameResources, VMT sourceMaterial, string materialName, bool isSprite)
 		{
 			var haveCutout		 = sourceMaterial.HaveCutout;
 			var translucency	 = sourceMaterial.HaveTranslucency;
@@ -99,111 +86,121 @@ namespace Chisel.Import.Source.VPKTools
 			if (string.IsNullOrEmpty(sourceMaterial.MaterialTypeName))
 				sourceMaterial.MaterialTypeName = "lightmappedgeneric";
 
-			switch (sourceMaterial.MaterialTypeName.ToLowerInvariant())
+			if (isSprite)
 			{
-				case "unlitgeneric":
+				if (_softParticleShader == null)
 				{
-					if (!complexShader && translucency && additiveBlending)
-					{
-						if (!_premultiplyShader)
-						{
-							_premultiplyShader = Shader.Find(_premultiplyShaderName);
-							if (!_premultiplyShader)
-								Debug.LogWarning("premultiplyShader not found");
-						}
-						if (_premultiplyShader)
-						{
-							shader = _premultiplyShader;
-							break;
-						}
-					}
-					if (!complexShader && translucency && haveCutout)
-					{
-						if (!_unlitTransparentCutoutShader)
-						{
-							_unlitTransparentCutoutShader = Shader.Find(_unlitTransparentCutoutShaderName);
-							if (!_unlitTransparentCutoutShader)
-								Debug.LogWarning("unlitTransparentCutoutShader not found");
-						}
-						if (_unlitTransparentCutoutShader)
-						{
-							shader = _unlitTransparentCutoutShader;
-							break;
-						}
-					}
-					if (!complexShader && translucency)
-					{
-						if (!_unlitTransparentShader)
-						{
-							_unlitTransparentShader = Shader.Find(_unlitTransparentShaderName);
-							if (!_unlitTransparentShader)
-								Debug.LogWarning("unlitTransparentShader not found");
-						}
-						if (_unlitTransparentShader)
-						{
-							shader = _unlitTransparentShader;
-							break;
-						}
-					}
-
-					if (!complexShader)
-					{
-						if (!_unlitShader)
-						{
-							_unlitShader = Shader.Find(_unlitShaderName);
-							if (!_unlitShader)
-								Debug.LogWarning("unlitShader not found");
-						}
-						if (_unlitShader)
-						{
-							shader = _unlitShader;
-							break;
-						}
-					}
-
-					if (!_standardShader)
-					{
-						_standardShader = Shader.Find(_standardShaderName);
-						if (!_standardShader)
-						{
-							Debug.LogWarning("standardShader not found");
-							return null;
-						}
-					}
-					shader = _standardShader;
-					break;
+					_softParticleShader = Shader.Find("Particles/Additive (Soft) Camera Aligned");
 				}
-				default:
-				//case "vertexlitgeneric":
-				//case "lightmappedgeneric":
-				//case "worldvertextransition":
+				shader = _softParticleShader;
+			} else
+			{
+				switch (sourceMaterial.MaterialTypeName.ToLowerInvariant())
 				{
-					if (!complexShader && translucency && additiveBlending)
+					case "unlitgeneric":
 					{
-						if (!_premultiplyShader)
+						if (!complexShader && translucency && additiveBlending)
 						{
-							_premultiplyShader = Shader.Find(_premultiplyShaderName);
 							if (!_premultiplyShader)
-								Debug.LogWarning("premultiplyShader not found");
+							{
+								_premultiplyShader = Shader.Find(_premultiplyShaderName);
+								if (!_premultiplyShader)
+									Debug.LogWarning("premultiplyShader not found");
+							}
+							if (_premultiplyShader)
+							{
+								shader = _premultiplyShader;
+								break;
+							}
 						}
-						if (_premultiplyShader)
+						if (!complexShader && translucency && haveCutout)
 						{
-							shader = _premultiplyShader;
-							break;
+							if (!_unlitTransparentCutoutShader)
+							{
+								_unlitTransparentCutoutShader = Shader.Find(_unlitTransparentCutoutShaderName);
+								if (!_unlitTransparentCutoutShader)
+									Debug.LogWarning("unlitTransparentCutoutShader not found");
+							}
+							if (_unlitTransparentCutoutShader)
+							{
+								shader = _unlitTransparentCutoutShader;
+								break;
+							}
 						}
-					}
+						if (!complexShader && translucency)
+						{
+							if (!_unlitTransparentShader)
+							{
+								_unlitTransparentShader = Shader.Find(_unlitTransparentShaderName);
+								if (!_unlitTransparentShader)
+									Debug.LogWarning("unlitTransparentShader not found");
+							}
+							if (_unlitTransparentShader)
+							{
+								shader = _unlitTransparentShader;
+								break;
+							}
+						}
 
-					if (!_standardShader)
-					{
-						_standardShader = Shader.Find(_standardShaderName);
+						if (!complexShader)
+						{
+							if (!_unlitShader)
+							{
+								_unlitShader = Shader.Find(_unlitShaderName);
+								if (!_unlitShader)
+									Debug.LogWarning("unlitShader not found");
+							}
+							if (_unlitShader)
+							{
+								shader = _unlitShader;
+								break;
+							}
+						}
+
 						if (!_standardShader)
 						{
-							Debug.LogWarning("standardShader not found");
-							return null;
+							_standardShader = Shader.Find(_standardShaderName);
+							if (!_standardShader)
+							{
+								Debug.LogWarning("standardShader not found");
+								return null;
+							}
 						}
+						shader = _standardShader;
+						break;
 					}
-					shader = _standardShader;
-					break;
+					default:
+					//case "vertexlitgeneric":
+					//case "lightmappedgeneric":
+					//case "worldvertextransition":
+					{
+						if (!complexShader && translucency && additiveBlending)
+						{
+							if (!_premultiplyShader)
+							{
+								_premultiplyShader = Shader.Find(_premultiplyShaderName);
+								if (!_premultiplyShader)
+									Debug.LogWarning("premultiplyShader not found");
+							}
+							if (_premultiplyShader)
+							{
+								shader = _premultiplyShader;
+								break;
+							}
+						}
+
+						if (!_standardShader)
+						{
+							_standardShader = Shader.Find(_standardShaderName);
+							if (!_standardShader)
+							{
+								Debug.LogWarning("standardShader not found");
+								return null;
+							}
+						}
+						shader = _standardShader;
+						break;
+					}
 				}
 			}
 
@@ -376,7 +373,7 @@ namespace Chisel.Import.Source.VPKTools
 			//unityMaterial.enableInstancing
 			return unityMaterial;
 		}
-		
+
 		private static Texture2D SetMaterialTexture(GameResources gameResources, Material material, string materialPropertyName, string textureName)
 		{
 			if (string.IsNullOrEmpty(textureName) || !material)
@@ -388,12 +385,14 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			}
 
-			var image = gameResources.ImportTexture(textureName);
-			if (image == null)
+
+			var images = gameResources.ImportVTF(textureName, PackagePath.DefaultMaterialPaths);
+			if (images == null || images.Length == 0)
 			{
 				return null;
 			}
 
+			var image = images[0];
 			try
 			{
 				material.SetTexture(materialPropertyName, image);
@@ -475,7 +474,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public static Material GetColorMaterial(Color color)
 		{
-			string destinationPath = GameResources.GetOutputPath("materials/colors/" + color.ToString().Replace(',','_').Replace('.', '_') + ".mat");
+			string destinationPath = PackagePath.GetOutputPath("materials/colors/" + color.ToString().Replace(',','_').Replace('.', '_') + ".mat");
 			Material colorMaterial = UnityAssets.Load<Material>(destinationPath);
 			if (colorMaterial == null)
 			{
@@ -502,12 +501,12 @@ namespace Chisel.Import.Source.VPKTools
 
 		public static Material CreateSkyboxMaterial(GameResources gameResources, 
 												   string materialName,
-												   VmfMaterial front, 
-												   VmfMaterial back, 
-												   VmfMaterial left, 
-												   VmfMaterial right, 
-												   VmfMaterial up, 
-												   VmfMaterial down)
+												   VMT front, 
+												   VMT back, 
+												   VMT left, 
+												   VMT right, 
+												   VMT up, 
+												   VMT down)
 		{
 			if (!_skyboxShader)
 			{
