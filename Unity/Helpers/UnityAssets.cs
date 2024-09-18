@@ -23,7 +23,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (!File.Exists(destinationPath))
 				return null;
 
-			var assetPath = GetAssetPath(destinationPath);
+			var assetPath = PackagePath.GetAssetPath(destinationPath);
 			try
 			{
 				return UnityEditor.AssetDatabase.LoadAssetAtPath<T>(assetPath);
@@ -38,9 +38,8 @@ namespace Chisel.Import.Source.VPKTools
 		public static void Save<T>(T asset, string destinationPath) where T : UnityEngine.Object
 		{
 			PackagePath.EnsureDirectoriesExist(destinationPath);
-			
-			var assetPath = GetAssetPath(destinationPath);
-			//Debug.Log($"Creating asset at: {assetPath}");
+
+			var assetPath = PackagePath.GetAssetPath(destinationPath);;
 			UnityEditor.AssetDatabase.CreateAsset(asset, assetPath);
 			UnityEditor.AssetDatabase.ImportAsset(assetPath);
 		}

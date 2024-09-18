@@ -63,6 +63,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public string LoadText(string entryName, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			GameEntry entry = GetEntry(entryName, searchPaths);
 			if (entry == null)
 				return null;
@@ -71,6 +72,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public string LoadText(GameEntry entry)
 		{
+			if (entry == null) return null;
 			string sourceText = null;
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
 			{
@@ -82,6 +84,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public string ImportFile(string entryName, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			GameEntry entry = GetEntry(entryName, searchPaths);
 			if (entry == null)
 				return null;
@@ -105,6 +108,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public VTF LoadVTF(string entryName, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVTF);
 			if (searchPaths == null)
 				searchPaths = PackagePath.DefaultMaterialPaths;
@@ -116,6 +120,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public VTF LoadVTF(GameEntry entry)
 		{
+			if (entry == null) return null;
 			VTF sourceTexture = null;
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
 			{
@@ -127,6 +132,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public Texture2D[] ImportVTF(string entryName, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVTF);
 			if (searchPaths == null)
 				searchPaths = PackagePath.DefaultMaterialPaths;
@@ -145,6 +151,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public VMT LoadVMT(string entryName, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVMT);
 			if (searchPaths == null)
 				searchPaths = PackagePath.DefaultMaterialPaths;
@@ -156,6 +163,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public VMT LoadVMT(GameEntry entry)
 		{
+			if (entry == null) return null;
 			VMT sourceMaterial = null; 
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
 			{
@@ -170,6 +178,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public Material ImportVMT(string entryName, string[] searchPaths = null, bool isSprite = false)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVMT);
 			if (searchPaths == null)
 				searchPaths = PackagePath.DefaultMaterialPaths;
@@ -186,6 +195,7 @@ namespace Chisel.Import.Source.VPKTools
 		// any reference to a .spr file, is really a .vmt file
 		public VMT LoadSPR(string entryName, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.CleanFullPath(ref entryName);
 			if (entryName.EndsWith($".{PackagePath.ExtensionSPR}"))
 				entryName = Path.ChangeExtension(entryName, string.Empty);
@@ -195,6 +205,7 @@ namespace Chisel.Import.Source.VPKTools
 		// any reference to a .spr file, is really a .vmt file
 		public Material ImportSPR(string entryName, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.CleanFullPath(ref entryName);
 			if (entryName.EndsWith($".{PackagePath.ExtensionSPR}"))
 				entryName = entryName.Remove(entryName.Length - (PackagePath.ExtensionSPR.Length + 1));
@@ -203,6 +214,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public VTX LoadVTX(string entryName, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVTX);
 			GameEntry entry = GetEntry(entryName, searchPaths);
 			if (entry == null)
@@ -212,9 +224,8 @@ namespace Chisel.Import.Source.VPKTools
 
 		public VTX LoadVTX(GameEntry entry)
 		{
-			if (entry.extension != PackagePath.ExtensionVTX)
-				return null;
-
+			if (entry == null) return null;
+			if (entry.extension != PackagePath.ExtensionVTX) return null;
 			VTX header = null;
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
 			{
@@ -227,6 +238,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public VVD LoadVVD(string entryName, MDL mdlHeader, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVVD);
 			GameEntry entry = GetEntry(entryName, searchPaths);
 			if (entry == null)
@@ -236,9 +248,8 @@ namespace Chisel.Import.Source.VPKTools
 
 		public VVD LoadVVD(GameEntry entry, MDL mdlHeader)
 		{
-			if (entry.extension != PackagePath.ExtensionVVD)
-				return null;
-
+			if (entry == null) return null;
+			if (entry.extension != PackagePath.ExtensionVVD) return null;
 			VVD header = null;
 			if (!LoadFileAsStream(entry, delegate (Stream stream)
 			{
@@ -251,6 +262,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public MDL LoadMDL(string entryName, Lookup _lookup, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionMDL);
 			GameEntry entry = GetEntry(entryName, searchPaths);
 			if (entry == null)
@@ -260,9 +272,8 @@ namespace Chisel.Import.Source.VPKTools
 
 		public MDL LoadMDL(GameEntry entry, Lookup lookup)
 		{
-			if (entry.extension != PackagePath.ExtensionMDL)
-				return null;
-
+			if (entry == null) return null;
+			if (entry.extension != PackagePath.ExtensionMDL) return null;
 			MDL header = null;
 			try
 			{
@@ -280,19 +291,19 @@ namespace Chisel.Import.Source.VPKTools
 			return header;
 		}
 
-		public SourceModel LoadSourceModel(string modelId, string[] searchPaths = null)
+		public SourceModel LoadSourceModel(string entryName, string[] searchPaths = null)
 		{
-			var lookup = new Lookup();
-
-			var mdlEntry = GetEntry(modelId, searchPaths);
+			if (string.IsNullOrEmpty(entryName)) return null;
+			var lookup = new Lookup(); // TODO: get rid of this?
+			var mdlEntry = GetEntry(entryName, searchPaths);
 			var mdl = mdlEntry != null ? LoadMDL(mdlEntry, lookup) : null;
 			if (mdl == null)
 			{
-				Debug.LogError($"Failed to load mdlHeader {modelId}");
+				Debug.LogError($"Failed to load mdlHeader {entryName}");
 				return null;
 			}
 
-			var vvdHeaderName = Path.ChangeExtension(modelId, PackagePath.ExtensionVVD);
+			var vvdHeaderName = Path.ChangeExtension(entryName, PackagePath.ExtensionVVD);
 			var vvdEntry = GetEntry(vvdHeaderName);
 			var vvd = (vvdEntry != null) ? LoadVVD(vvdEntry, mdl) : null;
 			if (vvd == null)
@@ -301,7 +312,7 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			}
 
-			var vtxHeaderName = Path.ChangeExtension(modelId, PackagePath.ExtensionVTX_DX90);
+			var vtxHeaderName = Path.ChangeExtension(entryName, PackagePath.ExtensionVTX_DX90);
 			var vtxEntry = GetEntry(vtxHeaderName);
 			var vtx = (vtxEntry != null) ? LoadVTX(vtxEntry) : null;
 			if (vtx == null)
@@ -329,6 +340,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public GameObject ImportModel(string entryName, string[] searchPaths = null)
 		{
+			if (string.IsNullOrEmpty(entryName)) return null;
 			var sourceModel = LoadSourceModel(entryName, searchPaths);
 			if (sourceModel == null)
 				return null;
@@ -338,8 +350,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public T Import<T>(GameEntry entry) where T : UnityEngine.Object
 		{
-			if (entry == null)
-				return null;
+			if (entry == null) return null;
 			return Import<T>(entry.keyname);
 		}
 

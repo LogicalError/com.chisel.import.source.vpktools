@@ -59,12 +59,12 @@ namespace Chisel.Import.Source.VPKTools
 				}
 			}
 
-			values[0] = Math.Pow( values[0] / 255.0, 2.2);
 			
 			switch (values.Length)
 			{
 				case 1:
 				{
+					values[0] = Math.Pow( values[0] / 255.0, 2.2);
 					values = new[] { values[0], values[0], values[0] };
 					break;
 				}
