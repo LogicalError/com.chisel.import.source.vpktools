@@ -24,8 +24,6 @@ namespace Chisel.Import.Source.VPKTools
 			var entry = gameResources.GetEntry(skyname, PackagePath.DefaultSkyBoxMaterialPaths);
 			if (entry == null)
 				return null;
-			
-			var outputPath = PackagePath.GetOutputPath(entry.keyname);
 			return gameResources.LoadVMT(entry);
 		}
 
@@ -36,6 +34,7 @@ namespace Chisel.Import.Source.VPKTools
 			outputPath = Path.ChangeExtension(outputPath, string.Empty);
 			
 			var destinationPath = Path.ChangeExtension(outputPath, ".mat");
+			destinationPath = PackagePath.GetOutputPath(destinationPath);
 			var foundAsset = UnityAssets.Load<Material>(destinationPath);
 			if (foundAsset != null)
 				return foundAsset;
@@ -43,7 +42,7 @@ namespace Chisel.Import.Source.VPKTools
 			var skysidename = skyname;
 			if (skysidename.EndsWith($".{PackagePath.ExtensionVMT}"))
 				skysidename = skysidename.Remove(skysidename.Length - (PackagePath.ExtensionVMT.Length + 1));
-			
+
 			var vmfMaterialFt = ImportSkyboxSide(gameResources, skysidename + "ft." + PackagePath.ExtensionVMT);
 			var vmfMaterialBk = ImportSkyboxSide(gameResources, skysidename + "bk." + PackagePath.ExtensionVMT);
 			var vmfMaterialLf = ImportSkyboxSide(gameResources, skysidename + "lf." + PackagePath.ExtensionVMT);
@@ -51,8 +50,19 @@ namespace Chisel.Import.Source.VPKTools
 			var vmfMaterialUp = ImportSkyboxSide(gameResources, skysidename + "up." + PackagePath.ExtensionVMT);
 			var vmfMaterialDn = ImportSkyboxSide(gameResources, skysidename + "dn." + PackagePath.ExtensionVMT);
 
+			var frontVTF = gameResources.LoadVTF(vmfMaterialFt?.BaseTextureName ?? null, PackagePath.DefaultMaterialPaths);
+			var backVTF  = gameResources.LoadVTF(vmfMaterialBk?.BaseTextureName ?? null, PackagePath.DefaultMaterialPaths);
+			var upVTF    = gameResources.LoadVTF(vmfMaterialUp?.BaseTextureName ?? null, PackagePath.DefaultMaterialPaths);
+			var downVTF  = gameResources.LoadVTF(vmfMaterialDn?.BaseTextureName ?? null, PackagePath.DefaultMaterialPaths);
+			var leftVTF  = gameResources.LoadVTF(vmfMaterialLf?.BaseTextureName ?? null, PackagePath.DefaultMaterialPaths);
+			var rightVTF = gameResources.LoadVTF(vmfMaterialRt?.BaseTextureName ?? null, PackagePath.DefaultMaterialPaths);
+
 			PackagePath.EnsureDirectoriesExist(destinationPath);
-			foundAsset = CreateSkyboxMaterial(gameResources, skyname, vmfMaterialFt, vmfMaterialBk, vmfMaterialLf, vmfMaterialRt, vmfMaterialUp, vmfMaterialDn);
+
+			var cubemapPath = Path.ChangeExtension(destinationPath, ".png");
+			var cubemap = Texture2DImporter.ImportSkybox(frontVTF, backVTF, upVTF, downVTF, leftVTF, rightVTF, cubemapPath);
+			
+			foundAsset = CreateSkyboxMaterial(gameResources, skyname, cubemap);
 			UnityAssets.Save(foundAsset, destinationPath);
 			return foundAsset;
 		}
@@ -61,9 +71,11 @@ namespace Chisel.Import.Source.VPKTools
 		private const string _unlitShaderName					= "Unlit/Texture";
 		private const string _unlitTransparentShaderName		= "Unlit/Transparent";
 		private const string _unlitTransparentCutoutShaderName	= "Unlit/Transparent Cutout";
-		private const string _premultiplyShaderName				= "Particles/Alpha Blended Premultiply";
+		private const string _premultiplyShaderName				= "FX/Flare";
+		private const string _additiveShaderName				= "Particles/Standard Unlit";
 
 		private static Shader _standardShader;
+		private static Shader _additiveShader;
 		private static Shader _unlitShader;
 		private static Shader _unlitTransparentShader;
 		private static Shader _unlitTransparentCutoutShader;
@@ -138,6 +150,22 @@ namespace Chisel.Import.Source.VPKTools
 							if (_unlitTransparentShader)
 							{
 								shader = _unlitTransparentShader;
+								break;
+							}
+						}
+
+						if (!complexShader && additiveBlending)
+						{
+							if (!_additiveShader)
+							{
+								_additiveShader = Shader.Find(_additiveShaderName);
+								if (!_additiveShader)
+									Debug.LogWarning("additiveShaderName not found");
+
+							}
+							if (_additiveShader)
+							{
+								shader = _additiveShader;
 								break;
 							}
 						}
@@ -331,7 +359,7 @@ namespace Chisel.Import.Source.VPKTools
 				unityMaterial.SetFloat("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
 			}
 
-			if (shader == _standardShader)
+			if (_standardShader && shader == _standardShader)
 			{
 				if (haveCutout)
 				{
@@ -344,6 +372,10 @@ namespace Chisel.Import.Source.VPKTools
 					unityMaterial.SetFloat("_Mode", (int)BlendMode.Transparent);
 					ChangeRenderMode(unityMaterial, BlendMode.Transparent);
 				}
+			}
+			if (_additiveShader && shader == _additiveShader)
+			{
+				unityMaterial.SetFloat("_Mode", 4); // additive
 			}
 
 			if (setNormalMapOn)
@@ -485,32 +517,16 @@ namespace Chisel.Import.Source.VPKTools
 			}
 			return colorMaterial;
 		}
-		
-		
-		// TODO: support "skybox" in Chisel, where we can tag a special material as skybox, 
-		//			and then replace it with the RenderSettings.skybox when building meshes
-		public static Material GetSkyBoxMaterial()
-		{
-			var skybox = RenderSettings.skybox;
-			if (!skybox)
-				skybox = GetColorMaterial(Color.white);
-			return skybox;
-		}
-		
+
 		private static Shader _skyboxShader;
 
 		public static Material CreateSkyboxMaterial(GameResources gameResources, 
-												   string materialName,
-												   VMT front, 
-												   VMT back, 
-												   VMT left, 
-												   VMT right, 
-												   VMT up, 
-												   VMT down)
+												    string materialName,
+													Cubemap cubemap)
 		{
 			if (!_skyboxShader)
 			{
-				_skyboxShader = Shader.Find("Skybox/6 Sided");
+				_skyboxShader = Shader.Find("Skybox/Surface Skybox");
 				if (!_skyboxShader)
 					return null;
 			}
@@ -518,17 +534,18 @@ namespace Chisel.Import.Source.VPKTools
 			var unityMaterial = new Material(_skyboxShader) {name = materialName};
 			unityMaterial.hideFlags = HideFlags.DontUnloadUnusedAsset;
 
-			// we rotate the horizontal textures to make them align properly ...
-			if (front != null) SetMaterialTexture(gameResources, unityMaterial, "_LeftTex", front.BaseTextureName);
-			if (left  != null) SetMaterialTexture(gameResources, unityMaterial, "_BackTex", left .BaseTextureName);
-			if (back  != null) SetMaterialTexture(gameResources, unityMaterial, "_RightTex", back .BaseTextureName);
-			if (right != null) SetMaterialTexture(gameResources, unityMaterial, "_FrontTex", right.BaseTextureName);
+			try
+			{
+				unityMaterial.SetTexture("_MainTex", cubemap);
 
-			if (up    != null) SetMaterialTexture(gameResources, unityMaterial, "_UpTex",    up   .BaseTextureName);
-			if (down  != null) SetMaterialTexture(gameResources, unityMaterial, "_DownTex",  down .BaseTextureName);
+				// ... we use the rotation setting to rotate it back (cubemap has rotated surfaces), so it matches the original game
+				unityMaterial.SetFloat("_Rotation", 270);
+			}
+			catch (System.Exception ex)
+			{
+				Debug.LogException(ex, unityMaterial);
+			}
 
-			// ... and we use the rotation setting to rotate it back, so it matches the original game
-			unityMaterial.SetFloat("_Rotation", 270);
 			return unityMaterial;
 		}
 	}
