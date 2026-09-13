@@ -44,6 +44,39 @@ namespace Chisel.Import.Source.VPKTools
 			return null;
 		}
 
+		/// <summary>
+		/// The entire contents of an entry as bytes.
+		/// <para>
+		/// Needed by the animation decoder, which walks run-length encoded data by offset rather than
+		/// reading fields in order, and follows offsets that point backwards as often as forwards.
+		/// Handing it the bytes keeps that out of the structured readers, and keeps the buffer alive
+		/// only for as long as the caller holds it rather than for the lifetime of the model.
+		/// </para>
+		/// </summary>
+		public byte[] LoadFileAsBytes(GameEntry entry)
+		{
+			if (entry == null)
+				return null;
+
+			byte[] result = null;
+			LoadFileAsStream(entry, delegate (Stream stream)
+			{
+				using var memory = new MemoryStream();
+				stream.CopyTo(memory);
+				result = memory.ToArray();
+				return true;
+			});
+			return result;
+		}
+
+		/// <inheritdoc cref="LoadFileAsBytes(GameEntry)"/>
+		public byte[] LoadFileAsBytes(string entryName, string[] searchPaths = null)
+		{
+			if (string.IsNullOrEmpty(entryName))
+				return null;
+			return LoadFileAsBytes(GetEntry(entryName, searchPaths));
+		}
+
 		public bool LoadFileAsStream(GameEntry entry, VPKParser.FileLoadDelegate streamLoadDelegate)
 		{
 			if (entry == null)
@@ -176,6 +209,13 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceMaterial;
 		}
 
+		// A map references the same handful of materials from tens of thousands of brush sides -
+		// a map resolves 34040 sides down to 1393 distinct materials. Without this, every one
+		// of those sides re-reads the VMT out of the VPK, re-parses it, and does an AssetDatabase
+		// lookup, only to arrive at the Material we already had. Keyed on the GameEntry instance
+		// because entries are interned in `lookup`, so the same name always yields the same object.
+		readonly Dictionary<(GameEntry entry, bool isSprite), Material> importedMaterials = new();
+
 		public Material ImportVMT(string entryName, string[] searchPaths = null, bool isSprite = false)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
@@ -185,11 +225,22 @@ namespace Chisel.Import.Source.VPKTools
 			GameEntry entry = GetEntry(entryName, searchPaths);
 			if (entry == null)
 				return null;
+
+			if (importedMaterials.TryGetValue((entry, isSprite), out var cachedMaterial))
+				return cachedMaterial;
+
+			Material material = null;
 			VMT sourceMaterial = LoadVMT(entry);
-			if (sourceMaterial == null)
-				return null;			
-			var outputPath = PackagePath.GetOutputPath(entry.keyname);
-			return MaterialImporter.Import(this, sourceMaterial, outputPath, isSprite);
+			if (sourceMaterial != null)
+			{
+				var outputPath = PackagePath.GetOutputPath(entry.keyname);
+				material = MaterialImporter.Import(this, sourceMaterial, outputPath, isSprite);
+			}
+
+			// Cached even when null: a VMT that failed to load will fail identically next time,
+			// and a miss is exactly as expensive as a hit.
+			importedMaterials[(entry, isSprite)] = material;
+			return material;
 		}
 
 		// any reference to a .spr file, is really a .vmt file
@@ -260,20 +311,40 @@ namespace Chisel.Import.Source.VPKTools
 			return header;
 		}
 
-		public MDL LoadMDL(string entryName, Lookup _lookup, string[] searchPaths = null)
+		public MDL LoadMDL(string entryName, Lookup lookup = null, string[] searchPaths = null)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionMDL);
 			GameEntry entry = GetEntry(entryName, searchPaths);
 			if (entry == null)
 				return null;
-			return LoadMDL(entry, _lookup);
+			return LoadMDL(entry, lookup);
 		}
 
-		public MDL LoadMDL(GameEntry entry, Lookup lookup)
+		/// <summary>
+		/// The models currently being read, so <c>$includemodel</c> cannot recurse into one of them.
+		/// <para>
+		/// Reading a model reads the models it shares animation with, and nothing in the format says
+		/// those cannot point back. Sharing one interning table across files used to break such a
+		/// cycle by accident - the second visit found the first one's structures at the same offsets
+		/// and stopped - which is no longer true now that each file interns separately.
+		/// </para>
+		/// </summary>
+		readonly HashSet<string> mdlLoadsInProgress = new();
+
+		public MDL LoadMDL(GameEntry entry, Lookup lookup = null)
 		{
 			if (entry == null) return null;
 			if (entry.extension != PackagePath.ExtensionMDL) return null;
+
+			if (!mdlLoadsInProgress.Add(entry.keyname))
+				return null;
+
+			// A Lookup resolves offsets against one file, so it has to belong to THIS one. Done here
+			// rather than at the call sites because a caller that gets it wrong produces structures
+			// read out of the wrong file, which looks like corrupt model data rather than a mistake.
+			lookup = Lookup.ForFile(lookup, entry.keyname);
+
 			MDL header = null;
 			try
 			{
@@ -288,15 +359,19 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				Debug.LogException(ex);
 			}
+			finally
+			{
+				mdlLoadsInProgress.Remove(entry.keyname);
+			}
 			return header;
 		}
 
 		public SourceModel LoadSourceModel(string entryName, string[] searchPaths = null)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
-			var lookup = new Lookup(); // TODO: get rid of this?
 			var mdlEntry = GetEntry(entryName, searchPaths);
-			var mdl = mdlEntry != null ? LoadMDL(mdlEntry, lookup) : null;
+			// LoadMDL scopes its own interning to the file it reads; nothing here needs to see it.
+			var mdl = mdlEntry != null ? LoadMDL(mdlEntry) : null;
 			if (mdl == null)
 			{
 				Debug.LogError($"Failed to load mdlHeader {entryName}");
@@ -388,8 +463,73 @@ namespace Chisel.Import.Source.VPKTools
 			return resource;
 		}
 
+		// Model declared for an entity class by the game's own entity definitions.
+		readonly Dictionary<string, string> entityClassModels = new(StringComparer.OrdinalIgnoreCase);
+
+		/// <summary>
+		/// The model an entity class uses, as declared by the game's FGD, or null if it declares
+		/// none. Entities such as NPCs and items store no model path in the .vmf - the model comes
+		/// from the entity class - so this is the only place that mapping exists outside game code.
+		/// Hammer reads the same files for the same reason.
+		/// </summary>
+		public string GetEntityClassModel(string className)
+		{
+			if (string.IsNullOrEmpty(className))
+				return null;
+			return entityClassModels.TryGetValue(className, out var model) ? model : null;
+		}
+
+		// "@NPCClass base(...) studio("models/humans/guard.mdl") = npc_human_security : "..."".
+		// [^=\[]* keeps the match from running past the '=' into the class body.
+		static readonly System.Text.RegularExpressions.Regex kFgdStudioClass =
+			new(@"studio\s*\(\s*""([^""]+)""\s*\)[^=\[]*=\s*([A-Za-z0-9_]+)",
+				System.Text.RegularExpressions.RegexOptions.Compiled);
+
+		/// <summary>
+		/// Loads entity definitions from whatever FGDs the configured game ships. The game's mod
+		/// directory sits next to its "bin" directory, which is where Source games keep them, so
+		/// this is derived from the paths already being mounted rather than hardcoded per title.
+		/// </summary>
+		void LoadEntityDefinitions(string[] inputPaths)
+		{
+			var searched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			foreach (var path in inputPaths)
+			{
+				if (string.IsNullOrEmpty(path))
+					continue;
+
+				// <game>/<mod>/ -> <game>/bin/
+				var binPath = Path.GetFullPath(Path.Combine(path, @"..", "bin"));
+				if (!searched.Add(binPath) || !Directory.Exists(binPath))
+					continue;
+
+				foreach (var fgdFile in Directory.GetFiles(binPath, "*.fgd", SearchOption.TopDirectoryOnly))
+				{
+					string text;
+					try { text = File.ReadAllText(fgdFile); }
+					catch { continue; }
+
+					foreach (System.Text.RegularExpressions.Match match in kFgdStudioClass.Matches(text))
+					{
+						var modelPath = match.Groups[1].Value;
+						var className = match.Groups[2].Value;
+						if (string.IsNullOrEmpty(modelPath) || string.IsNullOrEmpty(className))
+							continue;
+						// First definition wins; later FGDs in the chain are usually the bases.
+						if (!entityClassModels.ContainsKey(className))
+							entityClassModels[className] = modelPath;
+					}
+				}
+			}
+
+			if (entityClassModels.Count > 0)
+				Debug.Log($"Loaded {entityClassModels.Count} entity class -> model definitions from the game's FGD files.");
+		}
+
 		public void InitializePaths(string[] inputPaths)
 		{
+			LoadEntityDefinitions(inputPaths);
+
 			var rentedCharList = ArrayPool<char>.Shared.Rent(255);
 			var vpkFiles = HashSetPool<string>.Get();
 			try

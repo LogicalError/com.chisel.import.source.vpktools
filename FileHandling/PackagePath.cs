@@ -23,6 +23,35 @@ namespace Chisel.Import.Source.VPKTools
 		public static readonly string[] DefaultMaterialPaths = new string[] { "materials/" };
 
 		public static string GetImportPath(string fullname) { return Path.Combine(OutputPath, fullname); }
+
+		/// <summary>
+		/// Where a model's shared animation goes, which is deliberately NOT alongside the models.
+		/// <para>
+		/// Animation-only models are by far the slowest thing this importer writes - one of them is
+		/// 462 sequences over 56 bones - and they are shared, so re-importing a character has no
+		/// reason to regenerate them. Keeping them in their own tree means the models can be deleted
+		/// and rebuilt without taking the animation with them.
+		/// </para>
+		/// </summary>
+		public const string AnimationSubPath = "animations";
+
+		/// <summary>
+		/// Rewrites a model entry name so it lands under <see cref="AnimationSubPath"/>: Source's own
+		/// names all begin with "models/", which is replaced rather than nested so the result reads
+		/// as import/animations/humans/... instead of import/animations/models/humans/...
+		/// </summary>
+		public static string GetAnimationEntryName(string entryName)
+		{
+			if (string.IsNullOrEmpty(entryName))
+				return entryName;
+
+			var cleaned = entryName.Replace('\\', '/');
+			const string modelsPrefix = "models/";
+			if (cleaned.StartsWith(modelsPrefix, StringComparison.OrdinalIgnoreCase))
+				cleaned = cleaned.Substring(modelsPrefix.Length);
+
+			return Combine(AnimationSubPath, cleaned);
+		}
 		public static string GetOutputPath(string fullname) { return Path.GetFullPath(Path.Combine(Application.dataPath, GetImportPath(fullname))); }
 		public static string GetAssetPath(string fullname) { return Path.Combine("Assets", Path.GetRelativePath(Application.dataPath, GetOutputPath(fullname))); }
 

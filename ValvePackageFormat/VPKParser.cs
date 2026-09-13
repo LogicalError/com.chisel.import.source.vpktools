@@ -130,7 +130,7 @@ namespace Chisel.Import.Source.VPKTools
             while( currentStream.Position < header.TreeSize )
             {
                 string extension = DataParser.ReadNullTerminatedString( currentStream ).ToLower();
-                Debug.Log( $"Extension [{extension}] VPKParser.ParseTree(Stream stream)" );
+                //Debug.Log( $"Extension [{extension}] VPKParser.ParseTree(Stream stream)" );
                 if( extension.Length <= 0 )
                     extension = tree.Keys.ElementAt( tree.Count - 1 );
                 else

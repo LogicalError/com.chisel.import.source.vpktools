@@ -3,6 +3,7 @@
 Shader "Particles/Additive (Soft) Camera Aligned" {
 Properties {
 	_MainTex ("Particle Texture", 2D) = "white" {}
+	_TintColor ("Tint Color", Color) = (1,1,1,1)
 	_InvFade ("Soft Particles Factor", Range(0.01,3.0)) = 1.0
 	_Alpha ("Alpha", Range(0.01,1.0)) = 1.0
 }
@@ -81,9 +82,16 @@ Category {
 			{
 				v2f o;
 				
+				// The quad is built in view space around the object's origin so it always faces
+				// the camera, which means the model matrix cannot size it the way it sizes an
+				// ordinary mesh. Take the scale off the matrix by hand - the length of each
+				// basis column - so a shared unit quad can still be sized by its transform.
+				float2 objectScale = float2(length(unity_ObjectToWorld._m00_m10_m20),
+											length(unity_ObjectToWorld._m01_m11_m21));
+
 				o.vertex = mul(UNITY_MATRIX_P,
 					mul(UNITY_MATRIX_MV, float4(0.0, 0.0, 0.0, 1.0))
-					- float4(v.vertex.x, v.vertex.y, -0.5, 0.0));
+					- float4(v.vertex.x * objectScale.x, v.vertex.y * objectScale.y, -0.5, 0.0));
 				#ifdef SOFTPARTICLES_ON
 				o.projPos = ComputeScreenPos (o.vertex);
 				COMPUTE_EYEDEPTH(o.projPos.z);
@@ -108,7 +116,10 @@ Category {
 				i.color.a *= fade * _Alpha;
 				#endif
 				
-				half4 col = i.color * tex2D(_MainTex, i.texcoord);
+				// _TintColor carries the per-sprite colour: a Source env_sprite tints and dims a
+				// shared glow material with its own rendercolor/renderamt, and the alpha rides
+				// through the premultiply below as the brightness.
+				half4 col = i.color * _TintColor * tex2D(_MainTex, i.texcoord);
 				col.rgb *= col.a;
 				UNITY_APPLY_FOG_COLOR(i.fogCoord, col, fixed4(0,0,0,0)); // fog towards black due to our blend mode
 				return col; 

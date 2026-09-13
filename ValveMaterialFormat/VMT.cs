@@ -18,6 +18,10 @@ namespace Chisel.Import.Source.VPKTools
 		public int?			BaseTextureFrame;
 		public string       BaseTextureName;
 		public string       BaseTexture2Name;
+		/// <summary>TextureScroll proxies on $basetexturetransform and $texture2transform: a texture
+		/// offset per second, in Source's texture space (t runs down the image).</summary>
+		public Vector2?     BaseTextureScroll;
+		public Vector2?     Texture2Scroll;
 		public float?       BaseAlphaEnvMapMask;
 
 		public bool?		BumpSelfShadowing;
@@ -40,7 +44,12 @@ namespace Chisel.Import.Source.VPKTools
 		public string		PhongExponentTextureName;	
 		public float?		PhongExponentValue;
 		public float?		PhongBoost;
-		//public Vector3?	PhongFresnelRanges;
+		/// <summary>$phongfresnelranges [facing middle grazing] - Source shapes the phong term with
+		/// this, and 1330 of the 1334 materials that use $phong set it.</summary>
+		public Vector3?		PhongFresnelRanges;
+		/// <summary>$basemapalphaphongmask - take the phong mask from the BASE texture's alpha
+		/// instead of the normal map's.</summary>
+		public bool?		BaseMapAlphaPhongMask;
 		public RGBColor		PhongTint;
 		public bool?		PhongAlbedoTint;
 		
@@ -277,7 +286,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$animatedtexturevar": // '$basetexture'.
 						case "$basealmapalphaenvmapmask": // '1'.
 						case "$baseapalphaenvmapmask": // '1'.
-						case "$basemapalphaphongmask": // '1'.
 						case "$basemapluminancephongmask": // '1'.
 						case "$basenormalmap2": // 'nature\bnc_dirt_rocky_large_001_norm'. 'xen/xen_swamp_roots_01a_ssbump'. 'xen/xen_tree_roots_01a_n'. 'xen/xen_wetmud_01a_normal'.
 						case "$basetexture3": // 'xen\xen_rockwall_001a'. 'xen/xen_sludge_02a'. 'xen/xen_wetmud_01a_diff'.
@@ -956,7 +964,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "nodecal": // '1'.
 						case "nomip": // '1'.
 						case "normalmapalphaenvmapmask": // '1'.
-						case "proxies":
 						{
 							// no documentation?
 							break;
@@ -1134,13 +1141,13 @@ namespace Chisel.Import.Source.VPKTools
 						case "$phong": { TryParseBoolProperty(property, ref vmfMaterial.Phong); break; }
 						case "$phongwarptexture": { vmfMaterial.PhongWarpTextureName = property.Value; break; }
 						case "$phongalbedotint": { TryParseBoolProperty(property, ref vmfMaterial.PhongAlbedoTint); break; }
+						case "$basemapalphaphongmask": { TryParseBoolProperty(property, ref vmfMaterial.BaseMapAlphaPhongMask); break; }
 						case "$phongtint": { vmfMaterial.PhongTint = TextParser.ParseColor(property.Value); break; }
 						case "$phongboost": { TryParseFloatProperty(property, ref vmfMaterial.PhongBoost); break; }
-						//case "$phongfresnelranges":	{ vmfMaterial.PhongFresnelRanges = TextParser.ParseVector3(property.Value); break; }
+						case "$phongfresnelranges": { vmfMaterial.PhongFresnelRanges = TextParser.ParseVector3(property.Value); break; }
 
 						case "$phongexponent": { TryParseFloatProperty(property, ref vmfMaterial.PhongExponentValue); break; }
 
-						case "$phongfresnelranges":
 						case "$phongexponentfactor": // '4'. '4.5999970436'.
 						{
 							// no documentation?
@@ -1148,6 +1155,43 @@ namespace Chisel.Import.Source.VPKTools
 						}
 
 						case "$phongexponenttexture": { vmfMaterial.PhongExponentTextureName = property.Value; break; }
+
+						// Material proxies animate a material at runtime. TextureScroll is the one simple
+						// enough to carry over - a fixed rate in a fixed direction - so it is kept and the
+						// others are left at their defaults.
+						case "proxies":
+						{
+							if (property.Children == null)
+								break;
+							foreach (var proxy in property.Children)
+							{
+								if (proxy.Children == null ||
+									!string.Equals(proxy.Name, "texturescroll", StringComparison.OrdinalIgnoreCase))
+									continue;
+
+								string target = null;
+								float rate = 0, angle = 0;
+								foreach (var parameter in proxy.Children)
+								{
+									switch (parameter.Name.ToLowerInvariant())
+									{
+										case "texturescrollvar": target = parameter.Value?.Trim().ToLowerInvariant(); break;
+										case "texturescrollrate": float.TryParse(parameter.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out rate); break;
+										case "texturescrollangle": float.TryParse(parameter.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out angle); break;
+									}
+								}
+
+								// CTextureScrollMaterialProxy offsets s by cos(angle) and t by sin(angle), each
+								// times rate and time.
+								var radians = angle * Math.PI / 180.0;
+								var scroll = new Vector2((float)(Math.Cos(radians) * rate), (float)(Math.Sin(radians) * rate));
+								if (target == "$basetexturetransform")
+									vmfMaterial.BaseTextureScroll = scroll;
+								else if (target == "$texture2transform")
+									vmfMaterial.Texture2Scroll = scroll;
+							}
+							break;
+						}
 
 						default:
 						{

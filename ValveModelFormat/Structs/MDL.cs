@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using DebuggerDisplayAttribute = System.Diagnostics.DebuggerDisplayAttribute;
@@ -23,28 +23,62 @@ namespace Chisel.Import.Source.VPKTools
 	};
 
 	// TODO: get rid of this
+	/// <summary>
+	/// Interns the structures read out of ONE model file, keyed by the offset they live at.
+	/// <para>
+	/// An MDL is a graph of offsets and the same structure is referenced from several places, so
+	/// reading it without interning would produce a separate copy per reference. An offset only
+	/// identifies a structure WITHIN A SINGLE FILE, though, which is why this carries the name of the
+	/// file it belongs to: reusing one across files hands back whatever happened to sit at the same
+	/// offset in the other one. That is not hypothetical - the same instance used to be passed to
+	/// every <c>$includemodel</c>, and models/Kleiner_animations.mdl came back with 4 animation
+	/// descriptions when read as an include against 7 read on its own.
+	/// </para>
+	/// </summary>
 	public class Lookup
 	{
 		readonly Dictionary<Type, Dictionary<long, object>> TypeOffsetLookup = new();
 
+		/// <summary>The file whose offsets this holds, or null for one that has not been scoped yet.</summary>
+		public string SourceName { get; private set; }
+
+		public Lookup(string sourceName = null) { SourceName = sourceName; }
+
+		/// <summary>
+		/// Returns a lookup that belongs to <paramref name="sourceName"/> - the one passed in if it
+		/// already does, a new one otherwise. Readers go through this rather than trusting the
+		/// caller, so an offset can never be resolved against the wrong file however it was reached.
+		/// </summary>
+		public static Lookup ForFile(Lookup existing, string sourceName)
+		{
+			if (existing == null)
+				return new Lookup(sourceName);
+			if (existing.SourceName == null)
+			{
+				// Adopt an unscoped lookup rather than discarding it: it is empty at this point, and
+				// this is the path callers who just say `new Lookup()` take.
+				existing.SourceName = sourceName;
+				return existing;
+			}
+			return (existing.SourceName == sourceName) ? existing : new Lookup(sourceName);
+		}
+
 		public T Get<T>(long position) where T : class
 		{
-			var type = typeof(T);
-			Dictionary<long, object> lookup;
-			if (!TypeOffsetLookup.TryGetValue(type, out lookup))
-			{
-				lookup = new Dictionary<long, object>();
-				TypeOffsetLookup[type] = lookup;
-			}
-			object obj;
-			if (!lookup.TryGetValue(position, out obj))
+			if (!TypeOffsetLookup.TryGetValue(typeof(T), out var lookup))
 				return null;
-			return obj as T;
+			return lookup.TryGetValue(position, out var obj) ? obj as T : null;
 		}
 
 		public void Set<T>(long position, T item) where T : class
 		{
-			var lookup = TypeOffsetLookup[typeof(T)];
+			// Creates the bucket rather than indexing one that Get happened to have made. Relying on
+			// that meant any future Set without a preceding Get would throw KeyNotFoundException.
+			if (!TypeOffsetLookup.TryGetValue(typeof(T), out var lookup))
+			{
+				lookup = new Dictionary<long, object>();
+				TypeOffsetLookup[typeof(T)] = lookup;
+			}
 			lookup[position] = item;
 		}
 	}
@@ -803,185 +837,7 @@ namespace Chisel.Import.Source.VPKTools
 	}
 		
 	//mstudioanimvalue_t
-	public class StudioAnimValue
-	{
-		public byte	 Valid;
-		public byte	 Total;
-		public short Value
-		{
-			get
-			{
-				unchecked { return (short)(Valid + (Total >> 8)); }
-			}
-			set
-			{
-				unchecked
-				{
-					Valid = (byte)value;
-					Total = (byte)(value << 8);
-				}
-			}
-		}
-	};
-
-	// mstudioanim_t
-	// per bone per animation DOF and weight pointers
-	public class StudioAnimation
-	{
-		public byte				    Bone;
-		public StudioAnimationFlags Flags;      // weighing options
-
-		public Quaternion        Rotation;
-		public short[]			 AnimOffsets;
-		public StudioAnimValue[] AnimValues;
-
-		// valid for animating data only
-		//inline byte				*pData( void ) const { return (((byte *)this) + sizeof( struct mstudioanim_t )); };
-		//inline mstudioanim_valueptr_t	*pRotV( void ) const { return (mstudioanim_valueptr_t *)(pData()); };
-		//inline mstudioanim_valueptr_t	*pPosV( void ) const { return (mstudioanim_valueptr_t *)(pData()) + ((flags & STUDIO_ANIM_ANIMROT) != 0); };
-
-		// valid if animation unvaring over timeline
-		//inline Quaternion48		*pQuat48( void ) const { return (Quaternion48 *)(pData()); };
-		//inline Quaternion64		*pQuat64( void ) const { return (Quaternion64 *)(pData()); };
-		//inline Vector48			*pPos( void ) const { return (Vector48 *)(pData() + ((flags & STUDIO_ANIM_RAWROT) != 0) * sizeof( *pQuat48() ) + ((flags & STUDIO_ANIM_RAWROT2) != 0) * sizeof( *pQuat64() ) ); };
-
-		public StudioAnimation Next;
-		//inline mstudioanim_t	*pNext( void ) const { if (nextoffset != 0) return  (mstudioanim_t *)(((byte *)this) + nextoffset); else return NULL; };
-			
-		private static StudioAnimation LoadItem(BinaryReader reader, Lookup lookup, long currentOffset, out short next)
-		{
-			var startSeek = reader.BaseStream.Position;
-				
-			var item = lookup.Get<StudioAnimation>(currentOffset);
-			if (item != null)
-			{
-				reader.BaseStream.Seek(currentOffset, SeekOrigin.Begin);
-				reader.ReadByte();
-				reader.ReadByte();
-				next = reader.ReadInt16();
-				return item;
-			}
-				
-			reader.BaseStream.Seek(currentOffset, SeekOrigin.Begin);
-
-			item = new StudioAnimation
-			{
-				Bone  = reader.ReadByte(),
-				Flags = (StudioAnimationFlags)reader.ReadByte()
-			};
-			next = reader.ReadInt16();
-
-			//inline mstudioanim_valueptr_t	*pRotV( void ) const { return (mstudioanim_valueptr_t *)(pData()); };
-			//inline mstudioanim_valueptr_t	*pPosV( void ) const { return (mstudioanim_valueptr_t *)(pData()) + ((flags & STUDIO_ANIM_ANIMROT) != 0); };
-
-			// valid if animation unvaring over timeline
-			//inline Quaternion48		*pQuat48( void ) const { return (Quaternion48 *)(pData()); };
-			//inline Quaternion64		*pQuat64( void ) const { return (Quaternion64 *)(pData()); };
-			//inline Vector48			*pPos( void ) const { return (Vector48 *)(pData() + ((flags & STUDIO_ANIM_RAWROT) != 0) * sizeof( *pQuat48() ) + ((flags & STUDIO_ANIM_RAWROT2) != 0) * sizeof( *pQuat64() ) ); };
-
-			if ((item.Flags & StudioAnimationFlags.RawRotation) != 0)
-			{
-				ushort x = reader.ReadUInt16();
-				ushort y = reader.ReadUInt16();
-				ushort t = reader.ReadUInt16();
-				ushort z = (ushort)(t & (ushort)16384);
-				bool wneg = (t > 16384);
-										
-				var qx = ((int)x - 32768) * (1 / 32768.0);
-				var qy = ((int)y - 32768) * (1 / 32768.0);
-				var qz = ((int)z - 16384) * (1 / 16384.0);
-				var qw = Math.Sqrt( 1 - x * x - y * y - z * z );
-				if (wneg)
-					qw = -qw;
-				item.Rotation = new Quaternion((float)qx, (float)qy, (float)qz, (float)qw);
-			} else
-			if ((item.Flags & StudioAnimationFlags.RawRotation2) != 0)
-			{
-				UInt64 v = reader.ReadUInt64();
-
-				UInt64 x = (v & (1<<21)); v >>= 21;
-				UInt64 y = (v & (1<<21)); v >>= 21;
-				UInt64 z = (v & (1<<21)); v >>= 21;
-				bool wneg = (v > 0);
-					
-				// shift to -1048576, + 1048575, then round down slightly to -1.0 < x < 1.0
-				var qx = ((int)x - 1048576) * (1 / 1048576.5f);
-				var qy = ((int)y - 1048576) * (1 / 1048576.5f);
-				var qz = ((int)z - 1048576) * (1 / 1048576.5f);
-				var qw = Math.Sqrt( 1 - qx * qx - qy * qy - qz * qz );
-				if (wneg)
-					qw = -qw;
-				item.Rotation = new Quaternion((float)qx, (float)qy, (float)qz, (float)qw);
-			} else
-			if ((item.Flags & StudioAnimationFlags.AnimRotation) != 0)
-			{
-				var offsets = new []
-				{						
-					reader.ReadInt16(),
-					reader.ReadInt16(),
-					reader.ReadInt16()
-				};
-
-				var startAnimSeek = reader.BaseStream.Position;
-				StudioAnimValue[] animValues = new StudioAnimValue[3];
-				for (int o = 0; o < 3; o++)
-				{
-					if (offsets[o] <= 0)
-					{
-						animValues[o] = null;
-						continue;
-					}
-						
-					reader.BaseStream.Seek(startAnimSeek + offsets[o], SeekOrigin.Begin);
-					animValues[o] = new StudioAnimValue
-					{
-						Value = reader.ReadByte(),
-						Total = reader.ReadByte()
-					};
-				}
-				item.AnimOffsets = offsets;
-				item.AnimValues  = animValues;
-			}
-
-
-			reader.BaseStream.Seek(startSeek, SeekOrigin.Begin);
-
-			lookup.Set<StudioAnimation>(startSeek, item);
-			return item;
-		}
-
-		public static StudioAnimation[] Load(BinaryReader reader, Lookup lookup, long offset, int endOffset)
-		{
-			//if (offset == 0)
-				return new StudioAnimation[0];
-
-			#if false
-			var items = new List<StudioAnimation>();
-			var startSeek = reader.BaseStream.Position;
-			var currentOffset = offset;
-			StudioAnimation prev = null;
-			while (currentOffset < endOffset)
-			{
-				short next = 0;
-				var item = LoadItem(reader, lookup, currentOffset, out next);
-				items.Add(item);
-				if (prev != null)
-					prev.Next = item;
-				prev = item;
-				if (next == 0)
-				{
-					break;
-				}
-				currentOffset += next;
-			}
-
-			reader.BaseStream.Seek(startSeek, SeekOrigin.Begin);
-			return items.ToArray();
-			#endif
-		}
-	};
-		
-	[Flags]
+		[Flags]
 	public enum AnimationType
 	{
 		None		= 0,
@@ -1004,38 +860,7 @@ namespace Chisel.Import.Source.VPKTools
 		EventClient = 0x10000,	// Has been updated at runtime to event index on client
 	}
 
-	// mstudioanimsections_t
-	public class StudioAnimationSections
-	{
-		public int animblock;
-		public int animindex;
-
-		public static StudioAnimationSections[] Load(BinaryReader reader, int count, long offset)
-		{
-			var items = new StudioAnimationSections[count];
-			if (count == 0 || offset == 0)
-				return items;
-
-			var startSeek = reader.BaseStream.Position;
-			const int itemSize = 100;
-			for (var i = 0; i < count; i++)
-			{
-				var currentOffset = offset + (i * itemSize);
-
-				reader.BaseStream.Seek(currentOffset, SeekOrigin.Begin);
-				items[i] = new StudioAnimationSections()
-				{
-					animblock = reader.ReadInt32(),
-					animindex = reader.ReadInt32()
-				};
-			}
-
-			reader.BaseStream.Seek(startSeek, SeekOrigin.Begin);
-			return items;
-		}
-	}
-
-	// mstudioanimdesc_t
+		// mstudioanimdesc_t
 	public class StudioAnimationDescription
 	{
 		public string name;
@@ -1067,10 +892,15 @@ namespace Chisel.Import.Source.VPKTools
 		//mstudiolocalhierarchy_t* pHierarchy(int i) const;
 
 
-		public StudioAnimationSections[] sections;
-		//public int sectionindex;
-		//public int sectionframes; // number of frames used in each fast lookup section, zero if not used
-		//inline mstudioanimsections_t * const pSection(int i ) const { return (mstudioanimsections_t*)(((byte*)this) + sectionindex) + i; }
+		/// <summary>Offset of this animation description inside the file. Section offsets and the
+		/// animation data itself are stored relative to it, so it has to be kept.</summary>
+		public long fileOffset;
+
+		/// <summary>Offset (relative to <see cref="fileOffset"/>) of the section table, which redirects
+		/// each span of frames to its own block and data offset. Zero when the animation is not split.</summary>
+		public int sectionIndex;
+		/// <summary>Frames per section - NOT the number of sections.</summary>
+		public int sectionFrames;
 
 		public short zeroframespan;    // frames per span
 		public short zeroframecount; // number of spans
@@ -1078,112 +908,6 @@ namespace Chisel.Import.Source.VPKTools
 		//byte* pZeroFrameData() const { if (zeroframeindex) return (((byte*)this) + zeroframeindex); else return NULL; };
 		public float zeroframestalltime;       // saved during read stalls
 
-		// value should be between 0 & 1 inclusive
-		public static float SimpleSpline( float value )
-		{
-			float valueSquared = value * value;
-
-			// Nice little ease-in, ease-out spline-like curve
-			return (3 * valueSquared - 2 * valueSquared * value);
-		}
-
-		public StudioAnimation pAnim(MDL header, ref int piFrame)
-		{
-			float flStall = 0;
-			return pAnim(header, ref piFrame, out flStall);
-		}
-			
-		public StudioAnimation pAnim(MDL header, ref int piFrame, out float flStall )
-		{
-			StudioAnimation panim = null;
-
-			int block = animblock;
-			int index = animindex;
-			int section = 0;
-
-			if (sections.Length != 0)
-			{
-				if (numframes > sections.Length && piFrame == numframes - 1)
-				{
-					// last frame on long anims is stored separately
-					piFrame = 0;
-					section = (numframes / sections.Length) + 1;
-				}
-				else
-				{
-					section = piFrame / sections.Length;
-					piFrame -= section * sections.Length;
-				}
-
-				block = sections[section].animblock;
-				index = sections[section].animindex;
-			}
-
-			if (block == -1)
-			{
-				flStall = 0.0f;
-				// model needs to be recompiled
-				return null;
-			}
-
-			panim = header.pAnimBlock( block, index );
-
-			// force a preload on the next block
-			if ( sections.Length != 0 )
-			{
-				int count = ( numframes / sections.Length) + 2;
-				for ( int i = section + 1; i < count; i++ )
-				{
-					if ( sections[i].animblock != block )
-					{
-						header.pAnimBlock( sections[i].animblock, sections[i].animindex );
-						break;
-					}
-				}
-			}
-
-			if (panim == null)
-			{
-				// back up until a previously loaded block is found
-				while (--section >= 0)
-				{
-					block = sections[section].animblock;
-					index = sections[section].animindex;
-					panim = header.pAnimBlock( block, index );
-					if (panim != null)
-					{
-						// set it to the last frame in the last valid section
-						piFrame = sections.Length - 1;
-						break;
-					}
-				}
-			}
-
-			// try to guess a valid stall time interval (tuned for the X360)
-			flStall = 0.0f;
-			if (panim == null && section <= 0)
-			{
-				// TODO: investigate this
-				zeroframestalltime = 1;//Time.timeSinceLevelLoad;
-				flStall = 1.0f;
-			}
-			else if (panim != null && zeroframestalltime != 0.0f)
-			{
-				// TODO: investigate this
-				float dt = 1;// Time.timeSinceLevelLoad - zeroframestalltime;
-				if (dt >= 0.0)
-				{
-					flStall = SimpleSpline( Mathf.Clamp( (0.200f - dt) * 5.0f, 0.0f, 1.0f ) );
-				}
-
-				if (flStall == 0.0f)
-				{
-					// disable stalltime
-					zeroframestalltime = 0.0f;
-				}
-			}
-			return panim;
-		}
 
 		public static StudioAnimationDescription[] Load(BinaryReader reader, Lookup lookup, int count, long offset)
 		{
@@ -1206,6 +930,8 @@ namespace Chisel.Import.Source.VPKTools
 				reader.ReadInt32();
 				items[i] = new StudioAnimationDescription()
 				{
+					fileOffset			 = currentOffset,
+
 					name				 = reader.ReadNullString(currentOffset + reader.ReadInt32()),
 
 					fps					 = reader.ReadSingle(),
@@ -1227,9 +953,8 @@ namespace Chisel.Import.Source.VPKTools
 					numlocalhierarchy	 = reader.ReadInt32(),
 					localhierarchyindex	 = reader.ReadInt32(),
 			
-					sections			 = StudioAnimationSections.Load(reader, offset: reader.ReadInt32(), count: reader.ReadInt32()),
-					//sectionindex		 = reader.ReadInt32(),
-					//sectionframes		 = reader.ReadInt32(), 
+					sectionIndex		 = reader.ReadInt32(),
+					sectionFrames		 = reader.ReadInt32(),
 
 					zeroframespan		 = reader.ReadInt16(),  
 					zeroframecount		 = reader.ReadInt16(), 
@@ -2153,7 +1878,10 @@ namespace Chisel.Import.Source.VPKTools
 				var mdlEntry = gameResources.GetEntry(items[i].name);
 				if (mdlEntry != null)
 				{
-					items[i].header = gameResources.LoadMDL(mdlEntry, lookup);
+					// Deliberately NOT this model's lookup: the included file is a different file,
+					// and its offsets mean nothing here. LoadMDL would re-scope it anyway; passing
+					// nothing says so.
+					items[i].header = gameResources.LoadMDL(mdlEntry);
 				}
 				else
 					items[i].header = null;
@@ -2169,9 +1897,9 @@ namespace Chisel.Import.Source.VPKTools
 	// mstudioanimblock_t
 	public class StudioAnimationBlock
 	{
-		public StudioAnimation[] Animations;
-		//public int datastart;
-		//public int dataend;
+		/// <summary>Where this block's data starts inside the external .ani file.</summary>
+		public int DataStart;
+		public int DataEnd;
 
 		public static StudioAnimationBlock[] Load(BinaryReader reader, Lookup lookup, int count, long offset)
 		{
@@ -2197,7 +1925,8 @@ namespace Chisel.Import.Source.VPKTools
 
 				items[i] = new StudioAnimationBlock
 				{
-					Animations = StudioAnimation.Load(reader, lookup, dataStart, dataEnd)
+					DataStart = dataStart,
+					DataEnd   = dataEnd
 				};
 
 				lookup.Set<StudioAnimationBlock>(currentOffset, items[i]);
@@ -2494,31 +2223,11 @@ namespace Chisel.Import.Source.VPKTools
 		[NonSerialized]
 		internal int							VirtualModel;			// Placeholder for mutable-void*
 			
+		/// <summary>Name of the external .ani file holding any animation not stored in this .mdl.</summary>
 		public string							AnimblocksName;
+		/// <summary>Where each block of external animation lives inside that .ani file.</summary>
 		public StudioAnimationBlock[]			Animblocks;
 			
-		public StudioAnimation pAnimBlock(int block, int index )
-		{
-			if (block == -1)
-			{
-				return null;
-			}
-
-			if (Animblocks == null ||
-				Animblocks.Length == 0 ||
-				block >= Animblocks.Length ||
-				block < 0 ||
-				index < 0)
-				return null;
-
-			var animBlock = Animblocks[block];
-			if (animBlock.Animations == null || 
-				index >= animBlock.Animations.Length)
-				return null;
-
-			//StudioAnimation
-			return Animblocks[block].Animations[index];
-		}
 
 		[NonSerialized]
 		internal int							AnimblockModel;			// Placeholder for mutable-void*

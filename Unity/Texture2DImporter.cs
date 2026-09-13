@@ -9,16 +9,32 @@ namespace Chisel.Import.Source.VPKTools
 {
 	public static class Texture2DImporter
 	{
+		/// <summary>
+		/// The version of what this writes for a texture: the pixels, the importer settings, and the
+		/// conversions a material's claim applies to them (<see cref="MarkAsColor"/>,
+		/// <see cref="MarkAsNormalMap"/>). Bump it whenever any of that changes. Every texture then
+		/// rebuilds on its next import, and so does every material: a material records the texture
+		/// version it was built with, because rebuilding a texture resets what its materials claimed it
+		/// as, and a material claims its textures again as it rebuilds. See
+		/// <see cref="GeneratedAssetVersion"/>.
+		/// </summary>
+		public static readonly (string generator, int version) GeneratedVersion = ("texture", 1);
+
+		static bool IsCurrent(Texture texture)
+		{
+			return GeneratedAssetVersion.IsCurrent(AssetDatabase.GetAssetPath(texture), GeneratedVersion);
+		}
+
 		public static Texture2D[] Import(VTF sourceTexture, string outputPath)
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, ".png");
 			var foundAsset = UnityAssets.Load<Texture2D>(destinationPath);
-			if (foundAsset != null)
+			if (foundAsset != null && IsCurrent(foundAsset))
 				return new Texture2D[] { foundAsset };
 
 			var filePath = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + "[0].png");
 			foundAsset = UnityAssets.Load<Texture2D>(filePath);
-			if (foundAsset != null)
+			if (foundAsset != null && IsCurrent(foundAsset))
 			{
 				var frameTextureList = new List<Texture2D>();
 				int index = 0;
@@ -32,7 +48,8 @@ namespace Chisel.Import.Source.VPKTools
 				return frameTextureList.ToArray();
 			}
 
-			// Write texture as a png file
+			// Write texture as a png file - over the outdated one, if there is one, which keeps its .meta
+			// and so its GUID and every reference to it
 			var frameNames = SaveFramesAsPNG(sourceTexture, destinationPath);
 			if (frameNames == null || frameNames.Length == 0)
 				return null;
@@ -57,7 +74,7 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, ".png");
 			var foundAsset = UnityAssets.Load<Cubemap>(destinationPath);
-			if (foundAsset != null)
+			if (foundAsset != null && IsCurrent(foundAsset))
 				return foundAsset;
 
 			// Write texture as a png file
@@ -168,11 +185,191 @@ namespace Chisel.Import.Source.VPKTools
 			textureImporter.ReadTextureSettings(settings);
 
 			settings.textureShape = TextureImporterShape.TextureCube;
-			settings.sRGBTexture = false;
+			// The faces are written exactly as the VTFs store them - gamma-encoded, like every color
+			// texture (see MarkAsColor).
+			settings.sRGBTexture = true;
 			settings.generateCubemap = TextureImporterGenerateCubemap.FullCubemap;
+
+			// The faces were just written, so the cubemap is what the current code produces.
+			textureImporter.userData = GeneratedAssetVersion.Stamp(textureImporter.userData, GeneratedVersion);
 
 			textureImporter.SetTextureSettings(settings);
 			textureImporter.SaveAndReimport();
+		}
+
+		// Stamped into the texture importer's userData once the pixel conversion below has been done,
+		// so it happens exactly once per texture no matter how many materials claim it. The stamp
+		// rather than "is it already typed NormalMap?" is the guard on purpose: textures imported
+		// before this conversion existed ARE already typed NormalMap and still need converting, and
+		// this is the only thing standing between them and a second, ruinous inversion.
+		// It records work done to the pixels on disk; it is not a version. Never change the string:
+		// every texture converted under it would be converted again. Changing the conversion changes
+		// what a texture is, so it bumps GeneratedVersion instead, which rewrites the pixels from the
+		// VTF and drops this stamp in the same write (see UserDataForRewrittenPixels).
+		internal const string kNormalMapStamp = "chisel-sourcenormal-v1";
+
+		/// <summary>
+		/// The importer userData for pixels just written from the VTF: stamped current, and without the
+		/// normal-map conversion stamp, which described the pixels these replaced. A material claiming
+		/// the texture as a normal map then converts these exactly once, as it did those.
+		/// </summary>
+		internal static string UserDataForRewrittenPixels(string userData)
+		{
+			return GeneratedAssetVersion.Stamp(GeneratedAssetVersion.Remove(userData, kNormalMapStamp), GeneratedVersion);
+		}
+
+		// Valve's bumpvects.h: the three tangent-space directions an $ssbump's R/G/B channels carry
+		// the lighting for. Source tangent space, so the result needs the same green flip below.
+		static readonly Vector3[] kSourceBumpBasis =
+		{
+			new (-0.40824829f, -0.70710678f, 0.57735027f), // (-1/sqrt6, -1/sqrt2, 1/sqrt3)
+			new (-0.40824829f,  0.70710678f, 0.57735027f), // (-1/sqrt6,  1/sqrt2, 1/sqrt3)
+			new ( 0.81649658f,  0.00000000f, 0.57735027f), // ( 2/sqrt6,  0,       1/sqrt3)
+		};
+
+		/// <summary>
+		/// Re-imports a texture as sRGB once a material has claimed it for a color slot (see
+		/// MaterialImporter.IsColorSlot).
+		/// </summary>
+		/// <remarks>
+		/// Decided by use, like normal maps, because nothing in the file can say. The .png holds the
+		/// VTF's texels exactly as stored - compared against the decoded VTF they match to within DXT
+		/// rounding - and a color texture stores them gamma-encoded; Source's own shaders then choose
+		/// per sampler whether to decode (EnableSRGBRead). Imported linear in this Linear-space
+		/// project, a mid-grey texel reads 2.3 times too bright and darker ones worse, which is the
+		/// washed-out look. Only ever promotes: a texture any material samples as color is color,
+		/// whatever else also uses it.
+		/// </remarks>
+		public static void MarkAsColor(Texture texture)
+		{
+			if (texture == null)
+				return;
+
+			var assetPath = AssetDatabase.GetAssetPath(texture);
+			if (string.IsNullOrEmpty(assetPath))
+				return;
+
+			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter textureImporter)
+				return;
+
+			// Idempotent, and a normal map is never color, whichever slot names it.
+			if (textureImporter.sRGBTexture || textureImporter.textureType == TextureImporterType.NormalMap)
+				return;
+
+			textureImporter.sRGBTexture = true;
+			textureImporter.SaveAndReimport();
+		}
+
+		/// <summary>
+		/// Re-imports a texture as a normal map, converting the pixels out of Source's tangent-space
+		/// conventions first. Called once a material has claimed the texture for a normal-map slot -
+		/// which is the only reliable statement that it IS one, since a VTF's own normal flag is set
+		/// on many textures that are not (see ConfigureTextureImporter).
+		/// Unity's NormalMap type also forces the texture linear, which a normal map needs.
+		/// </summary>
+		/// <param name="selfShadowed">
+		/// The VMT said <c>$ssbump 1</c>. An ssbump is NOT a normal map - it stores how much light
+		/// reaches the texel from each of three fixed basis directions - so feeding it to a normal
+		/// map slot unconverted produces nonsense. Only the VMT key can say: the filename convention
+		/// disagrees with it on 62 of 253 materials, and the VTF's own SSBUMP flag is never set.
+		/// </param>
+		public static void MarkAsNormalMap(Texture2D texture, bool selfShadowed = false)
+		{
+			if (texture == null)
+				return;
+
+			var assetPath = AssetDatabase.GetAssetPath(texture);
+			if (string.IsNullOrEmpty(assetPath))
+				return;
+
+			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter textureImporter)
+				return;
+
+			// Idempotent: the same texture is claimed by every material that uses it, and a re-import
+			// is expensive.
+			if (textureImporter.userData != null && textureImporter.userData.Contains(kNormalMapStamp))
+				return;
+
+			if (ConvertSourceNormalMapFile(assetPath, selfShadowed))
+				textureImporter.userData = string.IsNullOrEmpty(textureImporter.userData)
+										 ? kNormalMapStamp
+										 : textureImporter.userData + ";" + kNormalMapStamp;
+
+			textureImporter.textureType = TextureImporterType.NormalMap;
+			textureImporter.SaveAndReimport();
+		}
+
+		/// <summary>
+		/// Rewrites the .png in place so it holds a Unity-convention tangent normal.
+		/// <para>
+		/// Source stores normal maps in the DirectX convention, where green measures -V while Unity
+		/// measures +V. That was measured over this project's own imported set rather than assumed:
+		/// correlating each base texture's luminance gradient (crevices read dark, from baked AO)
+		/// against its normal map, using the red channel - which both conventions agree on - as a
+		/// control, the agreement with Unity's convention falls monotonically as the control gets
+		/// cleaner, reaching 0 of the 17 strongest pairs. So: invert green.
+		/// </para>
+		/// <para>
+		/// Rewriting the FILE rather than compensating in the shader is deliberate. It keeps the
+		/// asset correct for everything that reads it, including the materials that fall back to
+		/// Unity's Standard shader, and writing the same path leaves the .meta - and therefore the
+		/// GUID and every reference to it - untouched.
+		/// </para>
+		/// </summary>
+		static bool ConvertSourceNormalMapFile(string assetPath, bool selfShadowed)
+		{
+			var fullPath = Path.GetFullPath(assetPath);
+			if (!File.Exists(fullPath))
+				return false;
+
+			Texture2D scratch = null;
+			try
+			{
+				// Loaded from the bytes rather than taken from the AssetDatabase so it is readable
+				// regardless of the importer's settings, and unaffected by compression.
+				scratch = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false, linear: true);
+				if (!scratch.LoadImage(File.ReadAllBytes(fullPath), markNonReadable: false))
+					return false;
+
+				var pixels = scratch.GetPixels32();
+				for (int i = 0; i < pixels.Length; i++)
+				{
+					var p = pixels[i];
+					if (selfShadowed)
+					{
+						// Reconstruct a normal from the three basis intensities. Approximate by
+						// nature - the self-shadowing term is baked in and cannot be separated
+						// again - but far closer than treating the channels as an xyz normal.
+						var n = kSourceBumpBasis[0] * (p.r / 255.0f)
+							  + kSourceBumpBasis[1] * (p.g / 255.0f)
+							  + kSourceBumpBasis[2] * (p.b / 255.0f);
+						n = n.sqrMagnitude > 1e-12f ? n.normalized : Vector3.forward;
+						p.r = (byte)Mathf.Clamp(Mathf.RoundToInt((n.x * 0.5f + 0.5f) * 255.0f), 0, 255);
+						p.g = (byte)Mathf.Clamp(Mathf.RoundToInt((n.y * 0.5f + 0.5f) * 255.0f), 0, 255);
+						p.b = (byte)Mathf.Clamp(Mathf.RoundToInt((n.z * 0.5f + 0.5f) * 255.0f), 0, 255);
+						p.a = 255;
+					}
+					// DirectX -> OpenGL. Exact in 8 bits: v encodes 2v/255-1, and 255-v encodes
+					// its negation.
+					p.g = (byte)(255 - p.g);
+					pixels[i] = p;
+				}
+
+				scratch.SetPixels32(pixels);
+				scratch.Apply(updateMipmaps: false);
+				File.WriteAllBytes(fullPath, scratch.EncodeToPNG());
+				return true;
+			}
+			catch (System.Exception ex)
+			{
+				Debug.LogException(ex);
+				return false;
+			}
+			finally
+			{
+				if (scratch != null)
+					Object.DestroyImmediate(scratch);
+			}
 		}
 
 		public static void ConfigureTextureImporter(VTF sourceTexture, string destinationPath)
@@ -189,17 +386,12 @@ namespace Chisel.Import.Source.VPKTools
 			if (textureImporter == null)
 				return;
 
-			// TODO: unfortunately VTF files seem to have normal flags set when they're not a normal
-			//		 so we'll have to check how they're actually used in a material, and set the normal flag THEN
-			/*
-			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_NORMAL) != (VTFImageFlag)0)
-				textureImporter.textureType = TextureImporterType.NormalMap;
-			else*/
-				textureImporter.textureType = TextureImporterType.Default;
-
-			textureImporter.alphaIsTransparency = sourceTexture.HasAlpha;
-			if (!sourceTexture.HasAlpha)
-				textureImporter.alphaSource = TextureImporterAlphaSource.None;
+			// A VTF's TEXTUREFLAGS_NORMAL is set on plenty of textures that are not normal maps,
+			// so it cannot decide this. What a texture IS gets decided by how a material uses it:
+			// the VMT names it under $bumpmap/$bumpmap2, and MarkAsNormalMap below is called from
+			// there. Start every texture off as Default; a normal map is promoted when a material
+			// claims it.
+			textureImporter.textureType = TextureImporterType.Default;
 
 			// TODO: handle these somehow
 			//if ((sourceTexture.flags & VTFImageFlag.TEXTUREFLAGS_PROCEDURAL) != (VTFImageFlag)0) stringBuilder.Append("PROCEDURAL ");
@@ -211,15 +403,18 @@ namespace Chisel.Import.Source.VPKTools
 			TextureImporterSettings settings = new();
 			textureImporter.ReadTextureSettings(settings);
 
-			if (!sourceTexture.HasAlpha)
-			{
-				settings.alphaSource = TextureImporterAlphaSource.None;
-			}
-			else
-			{
-				settings.alphaSource = TextureImporterAlphaSource.FromInput;
-				settings.alphaIsTransparency = sourceTexture.HasAlpha;
-			}
+			// alphaSource decides whether the alpha channel is imported at all, which is safe to
+			// decide from the VTF: it either has one or it does not.
+			settings.alphaSource = sourceTexture.HasAlpha ? TextureImporterAlphaSource.FromInput
+														  : TextureImporterAlphaSource.None;
+
+			// alphaIsTransparency is a different question, and nothing in the VTF can answer it. It
+			// makes Unity dilate the colour outward into transparent texels, rewriting the RGB it
+			// ships - correct when the alpha really is opacity, destructive whenever it is not, and
+			// in Source it very often is not: the base texture's alpha carries $selfillum masks,
+			// $basealphaenvmapmask, $basemapalphaphongmask and detail blend factors. Only the VMT
+			// knows, and by the time one is read the texture is already imported. So: never.
+			settings.alphaIsTransparency = false;
 
 			settings.mipmapEnabled = true;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_NOMIP) != (VTFImageFlag)0) settings.mipmapEnabled = false;
@@ -227,13 +422,14 @@ namespace Chisel.Import.Source.VPKTools
 			settings.borderMipmap = false;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_BORDER) != (VTFImageFlag)0) settings.borderMipmap = true;
 
-			settings.alphaIsTransparency = false;
-			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ONEBITALPHA) != (VTFImageFlag)0 ||
-				(sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_EIGHTBITALPHA) != (VTFImageFlag)0)
-				settings.alphaIsTransparency = true;
+			// NOTE: TEXTUREFLAGS_ONEBITALPHA/EIGHTBITALPHA say the texture HAS an alpha channel, not
+			//       that the channel is opacity, so they must not drive alphaIsTransparency - that is
+			//       what alphaSource above is for.
 
+			// Linear until a material claims the texture for a color slot (MarkAsColor). The VTF's
+			// TEXTUREFLAGS_SRGB cannot decide it: it used to mean NOCOMPRESS, and in this game it is set
+			// on only 191 of the 1468 textures materials sample as color, and on a few that hold masks.
 			settings.sRGBTexture = false;
-			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_SRGB) != (VTFImageFlag)0) settings.sRGBTexture = true;
 
 			settings.filterMode = FilterMode.Bilinear;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_POINTSAMPLE) != (VTFImageFlag)0) settings.filterMode = FilterMode.Point;
@@ -248,6 +444,9 @@ namespace Chisel.Import.Source.VPKTools
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_CLAMPS) != (VTFImageFlag)0) settings.wrapModeU = TextureWrapMode.Clamp;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_CLAMPT) != (VTFImageFlag)0) settings.wrapModeV = TextureWrapMode.Clamp;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_CLAMPU) != (VTFImageFlag)0) settings.wrapModeW = TextureWrapMode.Clamp;
+
+			// Only ever called for pixels Import has just written from the VTF.
+			textureImporter.userData = UserDataForRewrittenPixels(textureImporter.userData);
 
 			textureImporter.SetTextureSettings(settings);
 			textureImporter.SaveAndReimport();

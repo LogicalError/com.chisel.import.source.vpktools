@@ -41,10 +41,17 @@ public static class BinaryReaderExtension
 
 	public static Matrix4x4 ReadMatrix3x4(this BinaryReader reader)
 	{
+		// Source's matrix3x4_t is float[3][4]: three ROWS of four floats, each row holding an
+		// axis plus that axis' translation in its 4th element. Unity's Matrix4x4 is
+		// column-vector, so these go in as rows - which puts the translation in column 3, where
+		// MultiplyPoint expects it - and row 3 stays (0,0,0,1).
+		// Reading them into columns instead transposes the matrix (for a rotation, that is its
+		// inverse) and strands the translation in row 3 where nothing looks for it.
+		// NOTE: still in Source's coordinate system; converting to Unity's is the caller's job.
 		var result = Matrix4x4.identity;
-		result.SetColumn(0, ReadVector4(reader));
-		result.SetColumn(1, ReadVector4(reader));
-		result.SetColumn(2, ReadVector4(reader));
+		result.SetRow(0, ReadVector4(reader));
+		result.SetRow(1, ReadVector4(reader));
+		result.SetRow(2, ReadVector4(reader));
 		return result;
 	}
 
@@ -52,7 +59,10 @@ public static class BinaryReaderExtension
 	{
 		var min = ReadVector3(reader);
 		var max = ReadVector3(reader);
-		return new Bounds((max + min) * 0.5f, (max - min) * 0.5f);
+		// Bounds' second argument is the full SIZE, not the extents - it halves it internally.
+		// Passing (max - min) * 0.5f made every bounds read out of an MDL exactly half its real
+		// size (Hull, ViewBounds, and the per-model/per-mesh bounds).
+		return new Bounds((max + min) * 0.5f, max - min);
 	}
 
 	public static string ReadNullString(this BinaryReader reader)

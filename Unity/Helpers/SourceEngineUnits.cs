@@ -73,24 +73,30 @@ namespace Chisel.Import.Source.VPKTools
 				float.IsNaN(position.z))
 				position = Vector3.zero;
 
-			SourceEngineUnits.AngleVectors(angles, out Vector3 right, out Vector3 forward, out Vector3 up);
+			// NOTE: these are Source's basis vectors, in Source's own axis convention. They do not
+			//       line up with Unity's meaning of the same words - Source's forward ends up in
+			//       Unity's x column and Source's right in Unity's y column, which is what the
+			//       swizzle and the negations below are for. Naming them after what AngleVectors
+			//       actually returns keeps that explicit; it used to bind them in swapped order,
+			//       which read as though the columns were wrong when they are not.
+			SourceEngineUnits.AngleVectors(angles, out Vector3 forward, out Vector3 right, out Vector3 up);
 
 			Quaternion quaternion = Quaternion.identity;
 			Vector3 scale = Vector3.one;
 			var translation = SourceEngineUnits.VmfSourceToUnity.MultiplyPoint(position);
-			right = SourceEngineUnits.VmfSwizzle.MultiplyPoint(right);
 			forward = SourceEngineUnits.VmfSwizzle.MultiplyPoint(forward);
+			right = SourceEngineUnits.VmfSwizzle.MultiplyPoint(right);
 			up = SourceEngineUnits.VmfSwizzle.MultiplyPoint(up);
 
 			switch (sourceEntity)
 			{
-				case SourceEntity.Light: quaternion = Quaternion.AngleAxis(180, Vector3.up) * Quaternion.LookRotation(-right, up); break;
+				case SourceEntity.Light: quaternion = Quaternion.AngleAxis(180, Vector3.up) * Quaternion.LookRotation(-forward, up); break;
 				case SourceEntity.Model:
 				{
 					var matrix = Matrix4x4.identity;
 					matrix.SetColumn(3, new Vector4(translation.x, translation.y, translation.z, 1));
-					matrix.SetColumn(0, right);
-					matrix.SetColumn(1, -forward);
+					matrix.SetColumn(0, forward);
+					matrix.SetColumn(1, -right);
 					matrix.SetColumn(2, -up);
 					matrix = matrix * ModelFixupMatrix;
 
@@ -101,8 +107,8 @@ namespace Chisel.Import.Source.VPKTools
 				{
 					var matrix = Matrix4x4.identity;
 					matrix.SetColumn(3, new Vector4(translation.x, translation.y, translation.z, 1));
-					matrix.SetColumn(0, right);
-					matrix.SetColumn(1, -forward);
+					matrix.SetColumn(0, forward);
+					matrix.SetColumn(1, -right);
 					matrix.SetColumn(2, -up);
 
 					matrix.Decompose(out translation, out quaternion, out scale);

@@ -1,4 +1,4 @@
-//#define USE_MdlModelComponent 
+﻿//#define USE_MdlModelComponent 
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -6,6 +6,7 @@ using Object = UnityEngine.Object;
 using System.Collections.Generic;
 using System;
 using System.Text;
+using Chisel.Import.Source.VPKTools.Fbx;
 using DebuggerDisplayAttribute = System.Diagnostics.DebuggerDisplayAttribute;
 
 namespace Chisel.Import.Source.VPKTools
@@ -44,7 +45,6 @@ namespace Chisel.Import.Source.VPKTools
 		public Studioflags Flags;
 		public Renderer	   Renderer;
 		public GameObject  MeshObject;
-		public Animation   Animation;
 		public Mesh		   Mesh;
 
 		public readonly List<Vector3>		Vertices	= new();
@@ -54,7 +54,8 @@ namespace Chisel.Import.Source.VPKTools
 		public readonly List<BoneWeight>	BoneWeights = new();
 		public readonly List<MdlMeshEntry>	SubMeshes   = new();
 		
-		public void GenerateMesh(GameObject parentGameObject, MdlSkeleton skeleton, bool staticPropHack)
+
+		public void GenerateMesh(GameObject parentGameObject, MdlSkeleton skeleton, Matrix4x4 sourceRestPose)
 		{
 			if (string.IsNullOrWhiteSpace(Name))
 				Name = "unnamed mesh";
@@ -77,43 +78,85 @@ namespace Chisel.Import.Source.VPKTools
 				var vertices = Vertices.ToArray();
 				var normals = Normals.ToArray();
 				var tangents = (Tangents.Count != Vertices.Count) ? null : Tangents.ToArray();
-				var transformation = SourceEngineUnits.VmfSourceToUnity;
 
-				if (staticPropHack)
+				// The pose the engine actually draws this mesh in. Source renders every model as
+				//     animation * poseToBone * vertex
+				// and a model with no skeleton of its own still plays its default sequence on its single bone.
+				// Unity poses a skinned model from its animation by itself, but a single-bone model is imported
+				// as a plain mesh, so that bone's default pose has to go into the vertices here - or the mesh
+				// sits at its reference pose instead of where the level was laid out against it
+				// (props_canteen/soda_machine and props_vehicles/inbound_tram_door: +90 degrees about Source Z;
+				// props_vehicles/cargo_tram_02 and props_office/office_phone: 120 degrees, a cyclic swap of the
+				// axes). It is the identity for every model whose default pose is its reference pose, which is
+				// most of them.
+				//
+				// This replaces ApplyHullAxisRotation, which compared the vertex bounds with the studiohdr hull
+				// and permuted the axes to match. For the phone that permutation was exactly this rotation,
+				// found through its side effect on the bounds; and it had to refuse every model whose rotation
+				// swaps two axes as though it were a mirror, which a 90 degree turn is not.
+				if (sourceRestPose != Matrix4x4.identity)
 				{
-					transformation = new Matrix4x4(
-							new Vector4( 1, 0, 0, 0),
-							new Vector4( 0, 0,-1, 0),
-							new Vector4( 0, 1, 0, 0),
-							new Vector4( 0, 0, 0, 1)) * transformation;
-					transformation = SourceEngineUnits.InvModelMatrix * transformation;
-				} else
-				{
-					var rotation = Quaternion.identity;
-					rotation.eulerAngles = new Vector3(90, 0, 90);
-					transformation = new Matrix4x4(
-							new Vector4( 0, 0, 1, 0),
-							new Vector4( 1, 0, 0, 0),
-							new Vector4( 0, 1, 0, 0),
-							new Vector4( 0, 0, 0, 1)) *
-							Matrix4x4.Rotate(rotation) *
-							transformation;
-					transformation = SourceEngineUnits.InvModelMatrix * transformation;
+					for (int i = 0; i < vertices.Length; i++)
+						vertices[i] = sourceRestPose.MultiplyPoint3x4(vertices[i]);
+					for (int i = 0; i < normals.Length; i++)
+						normals[i] = sourceRestPose.MultiplyVector(normals[i]);
+					if (tangents != null)
+					{
+						for (int i = 0; i < tangents.Length; i++)
+						{
+							var direction = sourceRestPose.MultiplyVector(new Vector3(tangents[i].x, tangents[i].y, tangents[i].z));
+							tangents[i] = new Vector4(direction.x, direction.y, direction.z, tangents[i].w);
+						}
+					}
 				}
+
+				// ONE basis for every model, skinned or not - and the same one the bones and their
+				// animation go through (ConvertBoneTransform), because a skin only deforms correctly
+				// when its vertices and its bones share a frame.
+				//
+				// There used to be two. The non-skinned one was InvModelMatrix * Rx(-90) *
+				// VmfSourceToUnity, whose first two factors are exact inverses: it was always just
+				// VmfSourceToUnity. The skinned one added Quaternion.Euler(90, 0, 90) and a swizzle,
+				// which works out to exactly a +90 degree rotation about Source's up axis applied to
+				// the vertices. That is not a property of skinned meshes. It is the rotation studiomdl
+				// compiles into the root bone of a model's ANIMATION relative to its reference pose -
+				// in 380 of 458 root-bone animations sampled across 230 multi-bone models it is exactly
+				// +90 degrees about +Z - and
+				// the engine renders the animated pose, which is what the level was laid out against.
+				// Baking it into the vertices made the bind pose look right for as long as nothing was
+				// animated. Once the model file carried its animation, Unity posed the root from it and
+				// the rotation was applied a second time, turning every skinned model 90 degrees in the
+				// map; and it had always been wrong for the models whose animation carries no such
+				// rotation (the rest are 0 or 180 degrees, or genuinely move). With a single basis, a
+				// model with a skeleton is posed exactly as Source renders it, whichever kind it is.
+				var transformation = SourceEngineUnits.VmfSourceToUnity;
 
 				for (int i = 0; i < vertices.Length; i++)
 				{
 					vertices[i] = transformation.MultiplyPoint(vertices[i]);
 				}
+				// transformation is a uniform scale times an orthogonal matrix, so it leaves
+				// directions pointing where they were and only rescales them; normalizing
+				// restores exactly the authored direction at unit length, which is what Unity
+				// expects to find in a mesh's normals and tangents.
 				for (int i = 0; i < normals.Length; i++)
-				{ 
-					normals[i] = transformation.MultiplyVector(normals[i]);
+				{
+					normals[i] = transformation.MultiplyVector(normals[i]).normalized;
 				}
 				if (tangents != null)
 				{
 					for (int i = 0; i < tangents.Length; i++)
 					{
-						tangents[i] = transformation.MultiplyVector(tangents[i]);
+						// GOTCHA: MultiplyVector takes a Vector3, so a Vector4 argument converts
+						//		   down (dropping w) and the Vector3 result converts back up with
+						//		   w = 0 - both implicitly, so it compiles and reads as correct.
+						//		   w is Source's tangent-space handedness, and Unity builds the
+						//		   bitangent as cross(normal, tangent.xyz) * tangent.w, so losing
+						//		   it left every imported mesh with a zero bitangent and no usable
+						//		   tangent frame. Carry the direction through here; w is recovered
+						//		   below, once the triangles exist to derive it from.
+						var direction = transformation.MultiplyVector(tangents[i]).normalized;
+						tangents[i] = new Vector4(direction.x, direction.y, direction.z, tangents[i].w);
 					}
 				}
 
@@ -136,7 +179,35 @@ namespace Chisel.Import.Source.VPKTools
 				}
 
 				if (tangents == null)
+				{
 					Mesh.RecalculateTangents();
+				} else
+				{
+					// Recover the handedness dropped above. Source's own w cannot simply be
+					// carried across: the conversion mirrors the model (VmfSwizzle has
+					// determinant -1) and VmfFixTexcoord negates v - each of which flips
+					// handedness - and Source's bitangent convention need not match Unity's to
+					// begin with. That is three sign conventions to get right by inspection, and
+					// getting them wrong inverts normal mapping everywhere instead of just at a
+					// seam, which is far harder to notice.
+					// So derive w from the finished mesh instead: Unity's own tangent frame is by
+					// definition the convention its shaders use. Take only its w and keep the
+					// direction studiomdl authored, which carries the model's smoothing that a
+					// per-triangle recalculation does not.
+					Mesh.RecalculateTangents();
+					var generated = Mesh.tangents;
+					for (int i = 0; i < tangents.Length; i++)
+					{
+						var w = (generated[i].w < 0) ? -1 : 1;
+						// A vertex whose uvs are degenerate gets no meaningful frame from either
+						// side; a disagreement about which way u runs means the two frames only
+						// line up with the handedness flipped along with the tangent.
+						if (Vector3.Dot(tangents[i], generated[i]) < 0)
+							w = -w;
+						tangents[i].w = w;
+					}
+					Mesh.tangents = tangents;
+				}
 				Mesh.RecalculateBounds();
 
 				if (skeleton != null && skeleton.Bones.Count > 0)
@@ -155,7 +226,6 @@ namespace Chisel.Import.Source.VPKTools
 					// TODO: figure out the root-bones (zombie -> headcrab needs a different rootbone than body? maybe?)
 					//skinnedMeshRenderer.rootBone = skeleton.Bones[0];
 					Renderer = skinnedMeshRenderer;
-					Animation = MeshObject.AddComponent<Animation>();
 				} else
 				{
 					var meshFilter = MeshObject.AddComponent<MeshFilter>();
@@ -186,20 +256,6 @@ namespace Chisel.Import.Source.VPKTools
 	{
 		public static GameObject Import(GameResources gameResources, SourceModel model, string outputPath, int skin)
 		{
-			if (skin == 0)
-			{
-				var destinationPath = Path.ChangeExtension(outputPath, ".prefab");
-				var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
-				if (foundAsset != null)
-					return foundAsset;
-			} else
-			{
-				var destinationPath = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + "[0].prefab");
-				var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
-				if (foundAsset != null)
-					return foundAsset;
-			}
-
 			var skinnedModels = Import(gameResources, model, outputPath);
 			if (skinnedModels == null || skinnedModels.Length == 0)
 				return null;
@@ -219,40 +275,56 @@ namespace Chisel.Import.Source.VPKTools
 			return prefab;
 		}
 
+		/// <summary>
+		/// Models are written out as FBX and then imported by Unity's own model importer, rather than
+		/// built directly as prefabs.
+		/// <para>
+		/// The prefab route could not express what a model actually is. LOD groups had to be assembled
+		/// by hand, meshes and clips had to be bolted on as sub-assets of the prefab (which is why it
+		/// had to be saved two and three times over), and animation had nowhere to live that Unity's
+		/// animation tooling could see. Going through a model file instead means Unity builds the LOD
+		/// group, the avatar and the clips itself, from a file that can be reimported, inspected and
+		/// swapped out - the same as any other model in the project.
+		/// </para>
+		/// </summary>
+		public const string kModelExtension = ".fbx";
+
+		/// <summary>
+		/// The versions of what this writes for a model. Bump the one that covers a change to the output,
+		/// and every file it covers rebuilds, in place, on its next import (see
+		/// <see cref="GeneratedAssetVersion"/>):
+		/// <list type="bullet">
+		/// <item><c>ModelVersion</c> - model files: meshes, LODs, the hierarchy, skins and skin variants,
+		/// and the default pose baked into single-bone meshes.</item>
+		/// <item><c>AnimationVersion</c> - animation and what it rests on: MdlAnimationDecoder,
+		/// BuildAnimationTakes, the skeleton, how FbxExporter writes nodes, skins and takes, and
+		/// ConfigureImportedModel. Model files carry skeletons and takes as well, so they record this
+		/// version too. The shared animation files record only this one, which keeps a model-only change
+		/// from exporting them again - they are by far the slowest thing this importer writes.</item>
+		/// </list>
+		/// When unsure which one a change falls under, bump AnimationVersion: it rebuilds both.
+		/// </summary>
+		static readonly (string generator, int version) ModelVersion     = ("model", 1);
+		static readonly (string generator, int version) AnimationVersion = ("animation", 1);
+
 		public static GameObject[] Import(GameResources gameResources, SourceModel model, string outputPath)
 		{
-			var destinationPath = Path.ChangeExtension(outputPath, ".prefab");
+			var destinationPath = Path.ChangeExtension(outputPath, kModelExtension);
+			var assetPath = UnityAssets.GetAssetPath(destinationPath);
 			var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
-			if (foundAsset != null)
+			if (foundAsset != null && (model == null || GeneratedAssetVersion.IsCurrent(assetPath, ModelVersion, AnimationVersion)))
 			{
-				return new GameObject[1] { foundAsset };
+				// The animation this model shares with others is versioned on its own, so it can be out of
+				// date when the model is not.
+				ImportIncludedAnimations(gameResources, model);
+				return LoadSkinVariants(outputPath, foundAsset);
 			}
-
-			{
-				var skinPath0 = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + "[0].prefab");
-				foundAsset = UnityAssets.Load<GameObject>(skinPath0);
-				if (foundAsset != null)
-				{
-					List<GameObject> foundAssets = new();
-					int index = 0;
-					do
-					{
-						foundAssets.Add(foundAsset);
-						index++;
-						var skinPathN = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + $"[{index}].prefab");
-						foundAsset = UnityAssets.Load<GameObject>(skinPathN);
-					} while (foundAsset != null);
-					return foundAssets.ToArray();
-				}
-			}
-
 
 			if (model == null)
 				return null;
 
 			var modelMaterials = ImportModelTextures(gameResources, model);
 
-			//var modelEntries = ImportModelLods(gameResources, model, modelMaterials, out MdlSkeleton skeleton, skin);
 			var modelEntries = ImportModelLods(gameResources, model, out MdlSkeleton skeleton);
 			if (modelEntries == null)
 			{
@@ -260,65 +332,546 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			}
 
-			// TODO: do this in a temporary scene so we don't dirty the scene or something?
-			// TODO: ideally we'd be exporting to fbx and importing that instead of a prefab
-
-			string assetPath = UnityAssets.GetAssetPath(destinationPath);
 			PackagePath.EnsureDirectoriesExist(outputPath);
-			GameObject prefabGameObject = new();
 
 			var haveMultipleSkins = modelMaterials.skins != null && modelMaterials.skins.Length > 0;
 			var defaultSkin = (!haveMultipleSkins || modelMaterials.skins[0] == null) ? modelMaterials : modelMaterials.skins[0];
 
-			var skinPath = assetPath;
-			if (haveMultipleSkins)
+			// The hierarchy exists only long enough to be written out. It is built outside any scene
+			// and destroyed below, so nothing is dirtied and nothing survives the import but the file.
+			var root = new GameObject(model.MDL.Name);
+			FbxExporter.Result exported;
+			try
 			{
-				skinPath = Path.Combine(Path.GetDirectoryName(assetPath), Path.GetFileNameWithoutExtension(assetPath) + "[0].prefab");
+				// A model with a skeleton is posed from its animation by Unity itself; one without has its
+				// default pose put into the mesh.
+				var restPose = (skeleton == null) ? DefaultPoseOfSingleBone(gameResources, model) : Matrix4x4.identity;
+				BuildHierarchy(root, model, modelEntries, skeleton, restPose);
+				SetSkin(root, modelEntries, defaultSkin);
+				var takes = BuildAnimationTakes(gameResources, model.MDL, model.MDLEntry, skeleton);
+				exported = FbxExporter.Export(destinationPath, root, takes);
 			}
-
-			// prefabs are wack. we need to save prefabs several times to be able to attach the meshes that it uses to it
-			var prefab = PrefabUtility.SaveAsPrefabAsset(prefabGameObject, skinPath);
-			
-			var instantiatedPrefab = PrefabUtility.InstantiatePrefab(prefab) as GameObject;
-			PopulatePrefab(instantiatedPrefab, model, modelEntries, skeleton);
-			foreach (var modelEntry in modelEntries)
+			finally
 			{
-				if (modelEntry.Mesh != null)
-					AssetDatabase.AddObjectToAsset(modelEntry.Mesh, prefab);
-			}
-			AssetDatabase.SaveAssets();
-
-			SetSkin(instantiatedPrefab, modelEntries, defaultSkin);
-
-			var prefab2 = PrefabUtility.SaveAsPrefabAsset(instantiatedPrefab, skinPath);
-			AssetDatabase.SaveAssets();
-
-			GameObject.DestroyImmediate(prefabGameObject);
-			GameObject.DestroyImmediate(instantiatedPrefab);
-
-			GameObject[] prefabs;
-			if (haveMultipleSkins)
-			{
-				prefabs = new GameObject[modelMaterials.skins.Length];
-				prefabs[0] = prefab2;
-				for (int i = 1; i < modelMaterials.skins.Length; i++)
+				// The meshes used to survive as sub-assets of the prefab. Nothing owns them now - the
+				// FBX carries the geometry and Unity builds its own meshes from it - so they have to
+				// be destroyed explicitly or every imported model leaks one per LOD per bodypart.
+				foreach (var modelEntry in modelEntries)
 				{
-					if (modelMaterials.skins[i] == null)
-						continue;
-					var basePrefab = PrefabUtility.InstantiatePrefab(prefab2) as GameObject;
-					SetSkin(basePrefab, modelEntries, modelMaterials.skins[i]);
-					skinPath = Path.Combine(Path.GetDirectoryName(assetPath), Path.GetFileNameWithoutExtension(outputPath) + $"[{i}].prefab");
-					PrefabUtility.SaveAsPrefabAsset(basePrefab, skinPath);
-					GameObject.DestroyImmediate(basePrefab);
-					prefabs[i] = UnityAssets.Load<GameObject>(skinPath);
+					if (modelEntry?.Mesh != null)
+						Object.DestroyImmediate(modelEntry.Mesh);
 				}
-			} else
-			{
-				prefabs = new GameObject[1];
-				prefabs[0] = prefab2;
+				GameObject.DestroyImmediate(root);
 			}
 
-			return prefabs;
+			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+			ConfigureImportedModel(assetPath, exported, ModelVersion, AnimationVersion);
+
+			// Whatever animation this model shares with others goes into its own file, once, rather
+			// than being baked into every model that references it.
+			ImportIncludedAnimations(gameResources, model);
+
+			var imported = UnityAssets.Load<GameObject>(destinationPath);
+			if (imported == null)
+			{
+				Debug.LogError($"Failed to import the model written to {assetPath}");
+				return null;
+			}
+
+			if (!haveMultipleSkins)
+				return new GameObject[1] { imported };
+
+			// One file, one mesh - the skins differ only in which materials the renderers use, so the
+			// rest become prefab variants over the imported model instead of copies of it.
+			var results = new GameObject[modelMaterials.skins.Length];
+			results[0] = imported;
+			for (int i = 1; i < modelMaterials.skins.Length; i++)
+			{
+				if (modelMaterials.skins[i] == null)
+					continue;
+
+				var instance = PrefabUtility.InstantiatePrefab(imported) as GameObject;
+				if (instance == null)
+					continue;
+
+				ApplySkinVariant(instance, defaultSkin, modelMaterials.skins[i]);
+				var skinPath = SkinVariantPath(outputPath, i);
+				PrefabUtility.SaveAsPrefabAsset(instance, UnityAssets.GetAssetPath(skinPath));
+				GameObject.DestroyImmediate(instance);
+				results[i] = UnityAssets.Load<GameObject>(skinPath);
+			}
+			return results;
+
+			// A skin differs from the default skin only in which material each slot uses, and the
+			// two tables are aligned slot for slot - so a variant is built by swapping one material
+			// for the other wherever it appears, not by finding each renderer by name. Names do not
+			// survive the model file: when a file has a single top-level node, Unity folds that node
+			// into the file's root and renames it after the file, so './traffic_warninglight
+			// +studio[0]' comes back as 'traffic_warninglight', every lookup missed, and every skin
+			// variant of every such model silently kept the default skin's materials.
+			static void ApplySkinVariant(GameObject instance, MdlMaterialTable fromSkin, MdlMaterialTable toSkin)
+			{
+				if (instance == null || fromSkin?.unityMaterials == null || toSkin?.unityMaterials == null)
+					return;
+
+				var replacements = new Dictionary<Material, Material>();
+				var ambiguous    = new HashSet<Material>();
+				var slots        = Mathf.Min(fromSkin.unityMaterials.Length, toSkin.unityMaterials.Length);
+				for (int slot = 0; slot < slots; slot++)
+				{
+					var from = fromSkin.unityMaterials[slot];
+					var to   = toSkin.unityMaterials[slot];
+					if (from == null)
+						continue;
+					if (replacements.TryGetValue(from, out var existing))
+					{
+						// The same default material in two slots that this skin replaces differently
+						// cannot be told apart by material alone. The first slot's replacement wins;
+						// saying so beats a variant that is quietly half right.
+						if (existing != to)
+							ambiguous.Add(from);
+						continue;
+					}
+					replacements.Add(from, to);
+				}
+
+				foreach (var renderer in instance.GetComponentsInChildren<Renderer>(true))
+				{
+					var materials = renderer.sharedMaterials;
+					var changed   = false;
+					for (int i = 0; i < materials.Length; i++)
+					{
+						// A skin slot with no material of its own keeps the default one rather than
+						// rendering with none.
+						if (materials[i] == null || !replacements.TryGetValue(materials[i], out var replacement) || replacement == null)
+							continue;
+						materials[i] = replacement;
+						changed = true;
+					}
+					if (changed)
+						renderer.sharedMaterials = materials;
+				}
+
+				foreach (var material in ambiguous)
+					Debug.LogWarning($"[Chisel] {instance.name}: material '{material.name}' fills more than one slot and this skin " +
+									 "replaces them differently; the variant uses the first slot's replacement for both");
+			}
+		}
+
+		/// <summary>
+		/// Builds the bone hierarchy of a model as Transforms.
+		/// <para>
+		/// Shared by the two kinds of model file Source has: one with a mesh, and one with nothing but
+		/// a skeleton and animation, which is how the game shares a set of animations across every
+		/// character that uses the same rig. Both need the identical skeleton - that is the whole
+		/// basis on which the shared animation applies to the character.
+		/// </para>
+		/// <para>
+		/// Returns null for a model with one bone or none. Source gives every model at least one bone
+		/// whether or not it is skinned, so a single bone means "not really a skeleton".
+		/// </para>
+		/// </summary>
+		public static MdlSkeleton BuildSkeleton(MDL mdlHeader)
+		{
+			if (mdlHeader?.Bones == null || mdlHeader.Bones.Length <= 1)
+				return null;
+
+			var skeleton = new MdlSkeleton();
+			for (int i = 0; i < mdlHeader.Bones.Length; i++)
+			{
+				var bone = mdlHeader.Bones[i];
+				if (string.IsNullOrWhiteSpace(bone.Name))
+					bone.Name = (i == 0) ? "Root" : "Bone";
+
+				var boneObject = new GameObject(bone.Name);
+				// Kept inactive until it has been placed, so nothing observes a bone at the origin.
+				boneObject.SetActive(false);
+				skeleton.Bones.Add(boneObject.transform);
+			}
+
+			for (int i = 0; i < mdlHeader.Bones.Length; i++)
+			{
+				var bone = mdlHeader.Bones[i];
+				var parentIndex = bone.ParentBone;
+				if (parentIndex >= 0 && parentIndex < mdlHeader.Bones.Length)
+					skeleton.Bones[i].SetParent(skeleton.Bones[parentIndex], true);
+
+				ConvertBoneTransform(bone.Position, bone.Quaternion,
+									 out var translation, out var rotation, out var scale);
+
+				skeleton.Bones[i].SetLocalPositionAndRotation(translation, rotation);
+				skeleton.Bones[i].localScale = scale;
+				skeleton.Bones[i].gameObject.SetActive(true);
+			}
+			return skeleton;
+		}
+
+		/// <summary>
+		/// Converts one bone transform out of Source's coordinate system.
+		/// <para>
+		/// Shared by the skeleton and by the animation on purpose. The animation has to land on
+		/// exactly the pose the bind skeleton was built from - frame 0 of a non-delta animation IS
+		/// the bind pose, because Source stores those frames as offsets from it - so the two must go
+		/// through the same conversion or every animation starts by snapping the model into a
+		/// slightly different shape.
+		/// </para>
+		/// </summary>
+		public static void ConvertBoneTransform(Vector3 sourcePosition, Quaternion sourceRotation,
+												out Vector3 position, out Quaternion rotation, out Vector3 scale)
+		{
+			// A bone transform is LOCAL - it maps its own space into its parent's - so converting it
+			// between coordinate systems is a similarity transform, S * m * inverse(S), not S * m.
+			// Leaving the inverse out leaves S itself sitting in the result: every bone came out with
+			// a localScale of (-0.019, -0.019, -0.019), which is mirrored and 52x too small, and
+			// because a bone inherits its parents' scale that compounded to 2e-21 by the eleventh
+			// joint. Decompose was being handed a matrix whose rotation part had determinant
+			// -0.000007 and had to invent a rotation and a negative scale to explain it.
+			//
+			// This survived for as long as models were built as prefabs because bindposes are derived
+			// from these very transforms: at the bind pose bones[i].localToWorld * bindposes[i] is the
+			// identity whatever the bones say, so the mesh rendered exactly as authored and nothing
+			// looked wrong. Writing the bones into a model file and letting Unity rebuild the skin
+			// from them is what made it visible - tiny, mirrored, and collapsed to a line on anything
+			// with a deep hierarchy.
+			position = SourceEngineUnits.VmfSourceToUnity.MultiplyPoint(sourcePosition);
+
+			// S is an axis swizzle times a uniform scale. The scale cancels against its own inverse,
+			// so all that is left is the swizzle conjugating the rotation - and W * R * W has
+			// determinant +1, an actual rotation, because the swizzle's own -1 appears twice.
+			var swizzle = SourceEngineUnits.VmfSwizzle;
+			rotation = (swizzle * Matrix4x4.Rotate(sourceRotation) * swizzle).rotation;
+
+			// Source has no per-bone scale, and there is none left over now that the conversion is a
+			// similarity transform.
+			scale = Vector3.one;
+		}
+
+		/// <summary>
+		/// Decodes the model's animations and samples them into the dense per-frame form the FBX
+		/// exporter writes.
+		/// </summary>
+		static List<FbxAnimationTake> BuildAnimationTakes(GameResources gameResources, MDL header,
+														  GameEntry mdlEntry, MdlSkeleton skeleton)
+		{
+			if (!ImportAnimations || gameResources == null || header == null || mdlEntry == null ||
+				skeleton == null || skeleton.Bones.Count == 0)
+				return null;
+
+			if (header.LocalAnimationDescriptions == null || header.LocalAnimationDescriptions.Length == 0)
+				return null;
+
+			// The decoder walks the file by offset, so it needs the bytes rather than the parsed
+			// structures. They are read here and dropped when this returns, instead of being held on
+			// the model for the whole import.
+			var mdlBytes = gameResources.LoadFileAsBytes(mdlEntry);
+			if (mdlBytes == null)
+				return null;
+
+			// Most of Black Mesa's animation is inside the .mdl, but the big shared NPC sets live in
+			// a companion .ani that the model names.
+			byte[] aniBytes = null;
+			if (!string.IsNullOrEmpty(header.AnimblocksName))
+			{
+				aniBytes = gameResources.LoadFileAsBytes(header.AnimblocksName);
+				if (aniBytes == null)
+					Debug.LogWarning($"[Chisel] {header.Name}: animation file '{header.AnimblocksName}' is missing, " +
+									 "so the animations stored in it were skipped");
+			}
+
+			var decoded = MdlAnimationDecoder.Decode(header, mdlBytes, aniBytes);
+			if (decoded.Count == 0)
+				return null;
+
+			var sequenceNames = BuildSequenceNameTable(header);
+
+			var takes = new List<FbxAnimationTake>(decoded.Count);
+			foreach (var animation in decoded)
+			{
+				var take = new FbxAnimationTake
+				{
+					Name       = sequenceNames.TryGetValue(animation.Index, out var label) ? label : animation.Name,
+					FrameRate  = animation.FrameRate,
+					FrameCount = animation.FrameCount,
+					Looping    = animation.Looping
+				};
+
+				foreach (var channel in animation.Channels)
+				{
+					if (channel.BoneIndex < 0 || channel.BoneIndex >= skeleton.Bones.Count)
+						continue;
+
+					var positions = new Vector3[animation.FrameCount];
+					var rotations = new Quaternion[animation.FrameCount];
+					for (int frame = 0; frame < animation.FrameCount; frame++)
+					{
+						ConvertBoneTransform(channel.Positions[frame], channel.Rotations[frame],
+											 out positions[frame], out rotations[frame], out _);
+					}
+
+					take.Nodes.Add(new FbxAnimationCurveSet
+					{
+						Node      = skeleton.Bones[channel.BoneIndex],
+						Positions = positions,
+						Rotations = rotations
+					});
+				}
+
+				if (take.Nodes.Count > 0)
+					takes.Add(take);
+			}
+			return takes;
+		}
+
+		/// <summary>
+		/// Maps each animation to the name of the first sequence that plays it.
+		/// <para>
+		/// Sequences are what the game and the level files refer to ("idle01", "walk_all"); the
+		/// animations underneath them are named after whatever file they were compiled from. Several
+		/// sequences can share one animation, so this takes the first and leaves the rest - the data
+		/// is exported once either way.
+		/// </para>
+		/// </summary>
+		static Dictionary<int, string> BuildSequenceNameTable(MDL header)
+		{
+			var names = new Dictionary<int, string>();
+			if (header.LocalSequences == null)
+				return names;
+
+			foreach (var sequence in header.LocalSequences)
+			{
+				if (sequence?.anim == null || string.IsNullOrEmpty(sequence.label))
+					continue;
+				if (sequence.anim.GetLength(0) == 0 || sequence.anim.GetLength(1) == 0)
+					continue;
+
+				var animationIndex = sequence.anim[0, 0];
+				if (!names.ContainsKey(animationIndex))
+					names.Add(animationIndex, sequence.label);
+			}
+			return names;
+		}
+
+		/// <summary>
+		/// Imports the animation-only models a model shares its animation with, as FBX files holding
+		/// a skeleton and takes but no geometry.
+		/// <para>
+		/// Source's <c>$includemodel</c> points a character at a separate model file that contains
+		/// nothing but sequences, so that every character on the same rig plays from one set. In Black
+		/// Mesa this is where most of the animation actually is: only 47 of 14,351 models use
+		/// <c>$includemodel</c>, but the files they point at are the big ones -
+		/// models/humans/male_choreo.mdl alone holds 526 sequences and is included by 9 models.
+		/// Exporting them once, rather than baking them into every character that uses them, is the
+		/// difference between 526 clips and around 4,700.
+		/// </para>
+		/// <para>
+		/// The skeletons match (measured across every include in the game: every bone an animation
+		/// model uses exists in the models that include it), which is what lets Unity play a clip from
+		/// one of these files on a character imported from another.
+		/// </para>
+		/// </summary>
+		static void ImportIncludedAnimations(GameResources gameResources, SourceModel model)
+		{
+			if (!ImportAnimations || model?.MDL?.IncludeModels == null)
+				return;
+
+			foreach (var include in model.MDL.IncludeModels)
+			{
+				// header is null when the referenced file is not shipped, which does happen.
+				if (include?.header == null || string.IsNullOrEmpty(include.name))
+					continue;
+
+				try
+				{
+					ImportAnimationOnlyModel(gameResources, include.header, include.name);
+				}
+				catch (Exception exception)
+				{
+					Debug.LogError($"[Chisel] failed to import shared animations from '{include.name}': {exception.Message}");
+				}
+			}
+		}
+
+		/// <summary>
+		/// Writes a model that has a skeleton and animation but no mesh out as an FBX, unless the file
+		/// already there is current, and returns its asset path - or null when there is nothing to write.
+		/// </summary>
+		public static string ImportAnimationOnlyModel(GameResources gameResources, MDL header, string entryName)
+		{
+			if (gameResources == null || header == null)
+				return null;
+
+			var entry = gameResources.GetEntry(entryName);
+			if (entry == null)
+				return null;
+
+			// Written under import/animations rather than next to the models: these are the slowest
+			// files this importer produces and they are shared between characters, so deleting the
+			// models to re-import them should not drag the animation along with it.
+			var outputPath      = PackagePath.GetOutputPath(PackagePath.GetAnimationEntryName(entry.keyname));
+			var destinationPath = Path.ChangeExtension(outputPath, kModelExtension);
+			var assetPath       = UnityAssets.GetAssetPath(destinationPath);
+
+			// Asked of the importer rather than by loading the file: every model that includes this
+			// animation asks, on every import, and these files run to tens of megabytes.
+			if (GeneratedAssetVersion.IsCurrent(assetPath, AnimationVersion))
+				return assetPath;
+
+			var skeleton = BuildSkeleton(header);
+			if (skeleton == null)
+				return null;
+
+			PackagePath.EnsureDirectoriesExist(outputPath);
+
+			var root = new GameObject(string.IsNullOrEmpty(header.Name) ? entryName : header.Name);
+			FbxExporter.Result exported;
+			try
+			{
+				foreach (var bone in skeleton.Bones)
+				{
+					if (bone.parent == null)
+						bone.SetParent(root.transform, true);
+				}
+
+				var takes = BuildAnimationTakes(gameResources, header, entry, skeleton);
+				if (takes == null || takes.Count == 0)
+					return null;
+
+				exported = FbxExporter.Export(destinationPath, root, takes);
+			}
+			finally
+			{
+				GameObject.DestroyImmediate(root);
+			}
+
+			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+			ConfigureImportedModel(assetPath, exported, AnimationVersion);
+
+			if (AssetDatabase.GetMainAssetTypeAtPath(assetPath) == null)
+			{
+				Debug.LogError($"[Chisel] failed to import the shared animations written to {assetPath}");
+				return null;
+			}
+			return assetPath;
+		}
+
+		/// <summary>
+		/// The transform the engine applies to a single-bone model's vertices when it draws it: the first
+		/// frame of the default sequence on bone 0, relative to that bone's reference pose, in Source's own
+		/// coordinates. The identity when the model has no animation, or its default pose is its reference.
+		/// </summary>
+		public static Matrix4x4 DefaultPoseOfSingleBone(GameResources gameResources, SourceModel model)
+		{
+			var header = model?.MDL;
+			if (gameResources == null || model.MDLEntry == null || header?.Bones == null ||
+				header.Bones.Length == 0 || header.Bones[0].ParentBone >= 0)
+				return Matrix4x4.identity;
+			if (header.LocalAnimationDescriptions == null || header.LocalAnimationDescriptions.Length == 0)
+				return Matrix4x4.identity;
+
+			// The sequence the engine plays when nothing names another one is the first.
+			var animationIndex = 0;
+			var sequences = header.LocalSequences;
+			if (sequences != null && sequences.Length > 0 && sequences[0]?.anim != null &&
+				sequences[0].anim.GetLength(0) > 0 && sequences[0].anim.GetLength(1) > 0)
+				animationIndex = sequences[0].anim[0, 0];
+
+			var mdlBytes = gameResources.LoadFileAsBytes(model.MDLEntry);
+			if (mdlBytes == null)
+				return Matrix4x4.identity;
+			var aniBytes = string.IsNullOrEmpty(header.AnimblocksName) ? null : gameResources.LoadFileAsBytes(header.AnimblocksName);
+
+			foreach (var animation in MdlAnimationDecoder.Decode(header, mdlBytes, aniBytes))
+			{
+				if (animation.Index != animationIndex)
+					continue;
+				foreach (var channel in animation.Channels)
+				{
+					if (channel.BoneIndex != 0 || channel.Positions == null || channel.Positions.Length == 0)
+						continue;
+					var bone = header.Bones[0];
+					return Matrix4x4.TRS(channel.Positions[0], channel.Rotations[0], Vector3.one) *
+						Matrix4x4.TRS(bone.Position, bone.Quaternion, Vector3.one).inverse;
+				}
+			}
+			return Matrix4x4.identity;
+		}
+
+		static string SkinVariantPath(string outputPath, int skin)
+		{
+			return Path.Combine(Path.GetDirectoryName(outputPath),
+								Path.GetFileNameWithoutExtension(outputPath) + $"[{skin}].prefab");
+		}
+
+		static GameObject[] LoadSkinVariants(string outputPath, GameObject imported)
+		{
+			var results = new List<GameObject> { imported };
+			for (int i = 1; ; i++)
+			{
+				var variant = UnityAssets.Load<GameObject>(SkinVariantPath(outputPath, i));
+				if (variant == null)
+					break;
+				results.Add(variant);
+			}
+			return results.ToArray();
+		}
+
+		/// <summary>
+		/// Points Unity's model importer at the materials this importer already created, and tells it
+		/// what the file does and does not contain.
+		/// </summary>
+		static void ConfigureImportedModel(string assetPath, FbxExporter.Result exported, params (string generator, int version)[] versions)
+		{
+			if (AssetImporter.GetAtPath(assetPath) is not UnityEditor.ModelImporter importer)
+				return;
+
+			// The normals and tangents in the file are the ones studiomdl authored, carrying the
+			// model's own smoothing. Letting Unity recalculate them throws that away and reintroduces
+			// exactly the seams this importer went to some trouble to remove.
+			importer.importNormals  = ModelImporterNormals.Import;
+			importer.importTangents = ModelImporterTangents.Import;
+
+			importer.importBlendShapes = false;
+			importer.importVisibility  = false;
+			importer.importCameras     = false;
+			importer.importLights      = false;
+			importer.useFileScale      = true;
+
+			// Materials are already assets in their own right, imported from the VMTs, so each name
+			// in the file is remapped onto the one it came from. Remapping - not the long deprecated
+			// "external materials" location - is what Unity supports for this now: the importer keeps
+			// its default location and every name we remap resolves to our asset instead of to a new
+			// empty material embedded in the model.
+			importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
+			if (exported?.MaterialNames != null)
+			{
+				for (int i = 0; i < exported.MaterialNames.Length; i++)
+				{
+					var material = (exported.Materials != null && i < exported.Materials.Length) ? exported.Materials[i] : null;
+					if (material == null)
+						continue;
+					importer.AddRemap(new AssetImporter.SourceAssetIdentifier(typeof(Material), exported.MaterialNames[i]), material);
+				}
+			}
+
+			var hasSkeleton = (exported != null && exported.BoneCount > 0);
+			var hasTakes    = (exported != null && exported.TakeCount > 0);
+
+			// Animation needs a rig type to bind to: leaving this at None imports the file with no
+			// clips at all, however much animation is in it.
+			importer.animationType   = (hasSkeleton || hasTakes) ? ModelImporterAnimationType.Generic
+																 : ModelImporterAnimationType.None;
+			importer.importAnimation = hasTakes;
+
+			// Generic on its own still leaves avatarSetup at NoAvatar, so the model imports without
+			// one. An Avatar is what lets a clip from one file play on a rig from another, which is
+			// the entire point of exporting the shared animation separately.
+			if (hasSkeleton || hasTakes)
+				importer.avatarSetup = ModelImporterAvatarSetup.CreateFromThisModel;
+
+			// What was just written is what the current code produces.
+			importer.userData = GeneratedAssetVersion.Stamp(importer.userData, versions);
+
+			importer.SaveAndReimport();
 		}
 
 		public static void SetSkin(GameObject parentGO, MdlModelEntry[] modelEntries, MdlMaterialTable skinMaterials)
@@ -330,7 +883,7 @@ namespace Chisel.Import.Source.VPKTools
 			// So we lookup the Renderers by name, assuming that all meshes are uniquely named 
 			// (since they're originated from fbx files this is more likely than not, but we probably should double check this / fixup when necessary)
 			var rendererLookup = new Dictionary<string, Renderer>();
-			var allChildRenderers = parentGO.GetComponentsInChildren<Renderer>();
+			var allChildRenderers = parentGO.GetComponentsInChildren<Renderer>(includeInactive: true);
 			foreach(var renderer in allChildRenderers)
 			{
 				rendererLookup[renderer.gameObject.name] = renderer;
@@ -349,12 +902,27 @@ namespace Chisel.Import.Source.VPKTools
 					materials[i] = (materialIndex >= 0 && materialIndex < unityMaterials.Length) ? unityMaterials[materialIndex] : null;
 				}
 
-				var modelRenderer = rendererLookup[modelEntry.Name];
+				// A name that is not there is not fatal: once a model has been through a file and back,
+				// the renderers are whatever the model importer produced, and a skin that cannot find
+				// one of them should leave the rest correct rather than abort the whole import.
+				if (!rendererLookup.TryGetValue(modelEntry.Name, out var modelRenderer))
+				{
+					Debug.LogWarning($"[Chisel] skin references '{modelEntry.Name}', which has no renderer on {parentGO.name}");
+					continue;
+				}
 				modelRenderer.sharedMaterials = materials;
 			}
 		}
 
-		public static void PopulatePrefab(GameObject prefab, SourceModel model, MdlModelEntry[] modelEntries, MdlSkeleton skeleton)
+		/// <returns>The animation clips created for this model. They are referenced by the
+		/// Animation components on the prefab but are not assets yet, so the caller has to add
+		/// them to the prefab asset or they are lost when it is saved.</returns>
+		/// <summary>
+		/// Builds the GameObject hierarchy for a model - bones, and one object per mesh per LOD -
+		/// ready to be written out. Animation is not built here: it goes into the model file as takes,
+		/// so Unity creates the clips on import rather than this importer creating them by hand.
+		/// </summary>
+		public static void BuildHierarchy(GameObject prefab, SourceModel model, MdlModelEntry[] modelEntries, MdlSkeleton skeleton, Matrix4x4? sourceRestPose = null)
 		{
 			var entryName = model.MDL.Name;
 
@@ -370,7 +938,6 @@ namespace Chisel.Import.Source.VPKTools
 
 			prefab.name = entryName;
 
-			var clips = new List<AnimationClip>();
 			var lods = new List<LOD>();
 			LODGroup lodGroup = null;
 			if (hasMultipleLods.Count > 0)
@@ -383,8 +950,6 @@ namespace Chisel.Import.Source.VPKTools
 						bone.transform.SetParent(prefab.transform, true);
 				}
 			}
-
-			bool staticPropHack = (model.MDL.Flags & Studioflags.StaticProp) == Studioflags.StaticProp;
 
 			for (var i = 0; i < modelEntries.Length; i++)
 			{
@@ -401,19 +966,7 @@ namespace Chisel.Import.Source.VPKTools
 				if (hasMultipleLods.Contains(modelEntry.Name))
 					modelEntry.Name += "_LOD" + modelEntry.LodIndex;
 
-				modelEntry.GenerateMesh(prefab, skeleton, staticPropHack);
-				if (modelEntry.Animation)
-				{
-					if (clips.Count > 0)
-					{
-						foreach (var clip in clips)
-						{
-							clip.legacy = true;
-							modelEntry.Animation.AddClip(clip, clip.name);
-						}
-						modelEntry.Animation.clip = clips[0];
-					}
-				}
+				modelEntry.GenerateMesh(prefab, skeleton, sourceRestPose ?? Matrix4x4.identity);
 				if (lodGroup == null)
 					continue;
 
@@ -611,61 +1164,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			var modelEntries = new List<MdlModelEntry>();
 
-			{ 
-				skeleton = null;
-				bool hasBones = mdlHeader.Bones.Length > 1;
-				if (hasBones)
-				{
-					skeleton = new MdlSkeleton();
-					for (int i = 0; i < mdlHeader.Bones.Length; i++)
-					{
-						var bone = mdlHeader.Bones[i];
-						if (string.IsNullOrWhiteSpace(bone.Name))
-						{
-							if (i == 0)
-								bone.Name = "Root";
-							else
-								bone.Name = "Bone";
-						}
-						var boneObject = new GameObject(bone.Name);
-						boneObject.SetActive(false);
-						var boneObjectTransform = boneObject.transform;
-						skeleton.Bones.Add(boneObjectTransform);
-					}
-
-					for (int i = 0; i < mdlHeader.Bones.Length; i++)
-					{
-						var bone = mdlHeader.Bones[i];
-						var parentIndex = bone.ParentBone;
-						if (parentIndex >= 0 && parentIndex < mdlHeader.Bones.Length)
-						{
-							/*
-							var lineDrawer = skeleton.Bones[i].gameObject.AddComponent<BoneConnectionDrawer>();
-							lineDrawer.parent = skeleton.Bones[parentIndex];
-							*/
-							skeleton.Bones[i].SetParent(skeleton.Bones[parentIndex], true);
-						}
-
-
-						// TODO: figure out PositionScale/RotationScale, are those necessary?
-						var translation = bone.Position;// new Vector3(bone.Position.x * bone.PositionScale.x, bone.Position.y * bone.PositionScale.y, bone.Position.z * bone.PositionScale.z);
-						var scale = Vector3.one;//bone.RotationScale 
-						var rotation = bone.Quaternion;
-
-						//if (parentIndex < 0)
-						{
-							var m = Matrix4x4.TRS(translation, rotation, scale);
-							m = SourceEngineUnits.VmfSourceToUnity * m;
-							m.Decompose(out translation, out rotation, out scale);
-						}
-
-						skeleton.Bones[i].SetLocalPositionAndRotation(translation, rotation);
-						skeleton.Bones[i].localScale = scale;
-
-						skeleton.Bones[i].gameObject.SetActive(true);
-					}
-				}
-			}
+			skeleton = BuildSkeleton(mdlHeader);
 
 			
 			for (int bodyID = 0; bodyID < mdlHeader.Bodyparts.Length; ++bodyID)
@@ -889,357 +1388,22 @@ namespace Chisel.Import.Source.VPKTools
 			return modelEntries.ToArray();
 		}
 
-		// TODO: clean up below
 
-		private static StudioSequenceDescription pSeqdesc(MDL header, int i )
-		{
-			var localSequences = header.LocalSequences;
-			Debug.Assert( ( i >= 0 && i < localSequences.Length ) || ( i == 1 && localSequences.Length <= 1 ) );
-			if ( i < 0 || i >= localSequences.Length )
-			{
-				if ( localSequences.Length <= 0 )
-				{
-					// Return a zero'd out struct reference if we've got nothing.
-					// C_BaseObject::StopAnimGeneratedSounds was crashing due to this function
-					//	returning a reference to garbage. It should now see numevents is 0,
-					//	and bail.
-					return StudioSequenceDescription.empty;
-				}
 
-				// Avoid reading random memory.
-				i = 0;
-			}
-	
-			//if (m_pVModel == null)
-			//{
-			//	return localSequences[i];
-			//}
+		/// <summary>
+		/// Whether to import MDL animations.
+		/// <para>
+		/// This used to be off because every sequence became an AnimationClip added as a sub-asset of
+		/// the model's prefab, and a map full of NPCs ran the editor out of memory doing it. Animation
+		/// now goes into the model file as takes and Unity creates the clips on import, so the cost is
+		/// a larger file rather than thousands of serialized sub-assets.
+		/// </para>
+		/// <para>
+		/// It is still not free. Most models have no sequences at all, but the shared NPC animation
+		/// models are enormous - models/humans/male_choreo.mdl alone holds 526 of them over 56 bones.
+		/// </para>
+		/// </summary>
+		public static bool ImportAnimations = true;
 
-			MDL pStudioHdr = header;//GroupStudioHdr( m_pVModel.m_seq[i].group );
-
-			return pStudioHdr.LocalSequences[i];// m_pVModel.m_seq[i].index ];
-		}
-
-		private static StudioAnimationDescription pLocalAnimdesc(MDL header, int i )
-		{
-			var localAnimationDescriptions = header.LocalAnimationDescriptions;
-			if (i < 0 || i >= localAnimationDescriptions.Length) i = 0;
-			return localAnimationDescriptions[i];
-		}
-
-		private static StudioAnimationDescription pAnimdesc(MDL header,  int i ) 
-		{ 
-			if (header.IncludeModels.Length == 0)
-			{
-				return pLocalAnimdesc(header, i );
-			}
-			var localAnimationDescriptions = header.LocalAnimationDescriptions;
-			if (i < 0 || i >= localAnimationDescriptions.Length) i = 0;
-			return localAnimationDescriptions[i];
-			/*
-			virtualmodel_t *pVModel = (virtualmodel_t *)header.GetVirtualModel();
-			virtualgroup_t			pGroup		= &pVModel.m_group[ pVModel.m_anim[i].group ];
-			MdlHeader		pStudioHdr	= pGroup.GetStudioHdr();
-			return pLocalAnimdesc(pStudioHdr, pVModel.m_anim[i].index );*/
-		}
-		/*
-		static void ExtractAnimValue( int frame, StudioAnimValue panimvalue, float scale, out float v1)
-		{
-			if ( panimvalue == null )
-			{
-				v1 = 0;
-				return;
-			}
-
-			int k = frame;
-
-			while (panimvalue.Total <= k)
-			{
-				k -= panimvalue.Total;
-				panimvalue += panimvalue.Valid + 1;
-				if ( panimvalue.Total == 0 )
-				{
-					Debug.Assert(false); // running off the end of the animation stream is bad
-					v1 = 0;
-					return;
-				}
-			}
-			if (panimvalue.Valid > k)
-			{
-				v1 = panimvalue[k+1].value * scale;
-			}
-			else
-			{
-				// get last valid data block
-				v1 = panimvalue[panimvalue.Valid].value * scale;
-			}
-		}
-
-		//-----------------------------------------------------------------------------
-		// Purpose: return a sub frame rotation for a single bone
-		//-----------------------------------------------------------------------------
-		static void CalcBoneQuaternion(int frame, float s, 
-									   Quaternion baseQuat, Vector3 baseRot, Vector3 baseRotScale, 
-									   StudioBoneFlags iBaseFlags, Quaternion baseAlignment, 
-									   StudioAnimation panim, out Quaternion q)
-		{
-			if ( (panim.Flags & StudioAnimationFlags.RawRotation) != 0 ||
-				 (panim.Flags & StudioAnimationFlags.RawRotation2) != 0 )
-			{
-				q = panim.Rotation;
-				return;
-			}
-
-			if ( (panim.Flags & StudioAnimationFlags.AnimRotation) == 0 )
-			{
-				if ((panim.Flags & StudioAnimationFlags.Delta) != 0)
-				{
-					q = Quaternion.identity;
-				}
-				else
-				{
-					q = baseQuat;
-				}
-				return;
-			}
-
-			var values = panim.AnimValues;
-
-			if (s > 0.001f)
-			{
-				Quaternion	q1, q2;
-				Vector3		eulerAngle1, eulerAngle2;
-
-				ExtractAnimValue( frame, values[0], baseRotScale.x, eulerAngle1.x, eulerAngle2.x );
-				ExtractAnimValue( frame, values[1], baseRotScale.y, eulerAngle1.y, eulerAngle2.y );
-				ExtractAnimValue( frame, values[2], baseRotScale.z, eulerAngle1.z, eulerAngle2.z );
-
-				if ((panim.Flags & StudioAnimationFlags.Delta) == 0)
-				{
-					eulerAngle1.x = eulerAngle1.x + baseRot.x;
-					eulerAngle1.y = eulerAngle1.y + baseRot.y;
-					eulerAngle1.z = eulerAngle1.z + baseRot.z;
-					eulerAngle2.x = eulerAngle2.x + baseRot.x;
-					eulerAngle2.y = eulerAngle2.y + baseRot.y;
-					eulerAngle2.z = eulerAngle2.z + baseRot.z;
-				}
-				
-				if (eulerAngle1.x != eulerAngle2.x || eulerAngle1.y != eulerAngle2.y || eulerAngle1.z != eulerAngle2.z)
-				{
-					AngleQuaternion( eulerAngle1, q1 );
-					AngleQuaternion( eulerAngle2, q2 );
-					
-					QuaternionBlend( q1, q2, s, q );
-				}
-				else
-				{
-					AngleQuaternion( eulerAngle1, q );
-				}
-			}
-			else
-			{
-				Vector3 angle;
-
-				ExtractAnimValue( frame, values[0], baseRotScale.x, out angle.x );
-				ExtractAnimValue( frame, values[1], baseRotScale.y, out angle.y );
-				ExtractAnimValue( frame, values[2], baseRotScale.z, out angle.z );
-				
-				if ((panim.Flags & StudioAnimationFlags.Delta) == 0)
-				{
-					angle.x = angle.x + baseRot.x;
-					angle.y = angle.y + baseRot.y;
-					angle.z = angle.z + baseRot.z;
-				}
-				
-				AngleQuaternion( angle, q );
-			}
-			
-			// align to unified bone
-			if ((panim.Flags & StudioAnimationFlags.Delta) == 0 && 
-				(iBaseFlags & StudioBoneFlags.FixedAlignment) != 0)
-			{
-				QuaternionAlign( baseAlignment, q, q );
-			}
-		}
-
-		static void CalcBoneQuaternion( int frame, float s, 
-								StudioBone pBone,
-								StudioAnimation panim, 
-								out Quaternion q)
-		{
-			CalcBoneQuaternion( frame, s, pBone.Quaternion, pBone.RadianEulerRotation, pBone.RotationScale, pBone.Flags, pBone.QuaternionAlignment, panim, out q );
-		}
-		*/
-
-		private static void SetupSingleBoneMatrix(MDL					 header, 
-										  StudioSequenceDescription	 seqdesc, 
-										  StudioAnimationDescription animdesc, 
-										  StudioAnimation			 panim, 
-										  StudioBone				 pbone,
-										  int iBone, 
-										  out Vector3 bonePos, out Quaternion boneQuat)
-		{
-			//int iLocalFrame = iFrame;
-			//float s = 0;
-			
-			// search for bone
-			while ((panim != null) && panim.Bone != iBone)
-			{
-				panim = panim.Next;
-			}
-
-			// look up animation if found, if not, initialize
-			if (panim != null && seqdesc.boneWeights[iBone] > 0)
-			{
-				throw new NotImplementedException(); // code beyond this has not been implemented/tested
-				//CalcBoneQuaternion( iLocalFrame, s, pbone, null, panim, boneQuat );
-				//CalcBonePosition  ( iLocalFrame, s, pbone, null, panim, bonePos );
-			}
-			else if ((animdesc.flags & AnimationType.Delta) != 0)
-			{
-				boneQuat = Quaternion.identity;
-				bonePos = Vector3.zero;
-			}
-			else
-			{
-				boneQuat = pbone.Quaternion;
-				bonePos = pbone.Position;
-			}
-		}
-
-		static readonly Dictionary<string, AnimationClip[]> modelAnimationClips = new Dictionary<string, AnimationClip[]>();
-
-		static List<AnimationClip> localClips = new List<AnimationClip>();
-
-		private static AnimationClip[] ModelToClips(MDL header, string modelName, string modelLabel)
-		{
-			AnimationClip[] modelClips;
-			if (modelAnimationClips.TryGetValue(modelName + ":" + modelLabel, out modelClips))
-				return modelClips;
-
-			//return new AnimationClip[0];
-			var bones			= header.Bones;
-			var localSequences	= header.LocalSequences;
-
-			localClips.Clear();
-
-			var xPositionKeys = new List<Keyframe>();
-			var yPositionKeys = new List<Keyframe>();
-			var zPositionKeys = new List<Keyframe>();
-
-			var xRotationKeys = new List<Keyframe>();
-			var yRotationKeys = new List<Keyframe>();
-			var zRotationKeys = new List<Keyframe>();
-			var wRotationKeys = new List<Keyframe>();
-
-			for (int s = 0; s < localSequences.Length; s++)
-			{
-				var localSequence	= localSequences[s];
-				var name			= localSequence.label;
-
-				if (!string.IsNullOrEmpty(modelLabel) && name != modelLabel)
-					continue;
-
-				StudioAnimationDescription animdesc = pAnimdesc(header, localSequence.anim[0, 0]);
-
-				//Debug.Log(animdesc.numframes);
-				
-				WrapMode wrapMode = WrapMode.Default;
-				if ((localSequence.flags & AnimationType.Looping) != 0)
-					wrapMode = WrapMode.Loop;
-
-				var animationClip = new AnimationClip() { name = name };
-				for (int b = 0; b < bones.Length; b++)
-				{
-					if (localSequence.boneWeights[b] <= 0)
-						continue;
-
-					xPositionKeys.Clear();
-					yPositionKeys.Clear();
-					zPositionKeys.Clear();
-
-					xRotationKeys.Clear();
-					yRotationKeys.Clear();
-					zRotationKeys.Clear();
-					wRotationKeys.Clear();
-
-					Vector3    prevBonePos = Vector3.zero;
-					Quaternion prevBoneQuat = Quaternion.identity;
-					StudioBone pbone = header.Bones[b];
-
-					float fps = (animdesc.fps > 0) ? animdesc.fps : 30;
-
-					for (int f = 0; f < animdesc.numframes; f++)
-					{
-						var time = f / fps;
-						Vector3    bonePos;
-						Quaternion boneQuat;
-
-						StudioAnimation panim = animdesc.pAnim(header, ref f);
-						SetupSingleBoneMatrix(header, localSequence, animdesc, panim, pbone, b, out bonePos, out boneQuat);
-
-						if (f == 0 || bonePos.x  != prevBonePos.x ) xPositionKeys.Add(new Keyframe(time, bonePos.x));
-						if (f == 0 || bonePos.y  != prevBonePos.y ) yPositionKeys.Add(new Keyframe(time, bonePos.y));
-						if (f == 0 || bonePos.z  != prevBonePos.z ) zPositionKeys.Add(new Keyframe(time, bonePos.z));
-
-						if (f == 0 || boneQuat.x != prevBoneQuat.x) xRotationKeys.Add(new Keyframe(time, boneQuat.x));
-						if (f == 0 || boneQuat.y != prevBoneQuat.y) yRotationKeys.Add(new Keyframe(time, boneQuat.y));
-						if (f == 0 || boneQuat.z != prevBoneQuat.z) zRotationKeys.Add(new Keyframe(time, boneQuat.z));
-						if (f == 0 || boneQuat.w != prevBoneQuat.w) wRotationKeys.Add(new Keyframe(time, boneQuat.w));
-
-						prevBonePos = bonePos;
-						prevBoneQuat = boneQuat;
-					}
-
-					if (xPositionKeys.Count > 0)
-					{
-						var xPositionCurve = new AnimationCurve(xPositionKeys.ToArray()) { postWrapMode = wrapMode, preWrapMode = wrapMode };
-						animationClip.SetCurve("", typeof(Transform), "localPosition.x", xPositionCurve);
-					}
-
-					if (yPositionKeys.Count > 0)
-					{
-						var yPositionCurve = new AnimationCurve(yPositionKeys.ToArray()) { postWrapMode = wrapMode, preWrapMode = wrapMode };
-						animationClip.SetCurve("", typeof(Transform), "localPosition.y", yPositionCurve);
-					}
-
-					if (zPositionKeys.Count > 0)
-					{
-						var zPositionCurve = new AnimationCurve(zPositionKeys.ToArray()) { postWrapMode = wrapMode, preWrapMode = wrapMode };
-						animationClip.SetCurve("", typeof(Transform), "localPosition.z", zPositionCurve);
-					}
-
-					if (xRotationKeys.Count > 0)
-					{
-						var xRotationCurve = new AnimationCurve(xRotationKeys.ToArray()) { postWrapMode = wrapMode, preWrapMode = wrapMode };
-						animationClip.SetCurve("", typeof(Transform), "localRotation.x", xRotationCurve);
-					}
-
-					if (yRotationKeys.Count > 0)
-					{
-						var yRotationCurve = new AnimationCurve(yRotationKeys.ToArray()) { postWrapMode = wrapMode, preWrapMode = wrapMode };
-						animationClip.SetCurve("", typeof(Transform), "localRotation.y", yRotationCurve);
-					}
-
-					if (zRotationKeys.Count > 0)
-					{
-						var zRotationCurve = new AnimationCurve(zRotationKeys.ToArray()) { postWrapMode = wrapMode, preWrapMode = wrapMode };
-						animationClip.SetCurve("", typeof(Transform), "localRotation.z", zRotationCurve);
-					}
-
-					if (wRotationKeys.Count > 0)
-					{
-						var wRotationCurve = new AnimationCurve(wRotationKeys.ToArray()) { postWrapMode = wrapMode, preWrapMode = wrapMode };
-						animationClip.SetCurve("", typeof(Transform), "localRotation.z", wRotationCurve);
-					}
-				}
-				localClips.Add(animationClip);
-				//break;
-			}
-
-			modelClips = localClips.ToArray();
-			modelAnimationClips[modelName + ":" + modelLabel] = modelClips;
-			return modelClips;
-		}
 	}
 }
