@@ -23,6 +23,9 @@ namespace Chisel.Import.Source.VPKTools
 	/// A stamp is a token such as <c>chisel-texture-v3</c>. Tokens are separated by ';' and share the
 	/// userData with tokens other code keeps there, which are left untouched.
 	/// </para>
+	/// <para>
+	/// Every stamp also records <see cref="ImporterVersion"/>, the version of the importer as a whole.
+	/// </para>
 	/// </summary>
 	public static class GeneratedAssetVersion
 	{
@@ -30,14 +33,21 @@ namespace Chisel.Import.Source.VPKTools
 		const string kVersionSeparator = "-v";
 		const char   kTokenSeparator   = ';';
 
+		/// <summary>
+		/// The version of the importer as a whole, recorded on every generated asset next to the version of
+		/// the generator that wrote it. Bump it to rebuild every generated asset at once: for a change that
+		/// affects several generators, or when it is unclear which generator's version covers a change.
+		/// </summary>
+		public static readonly (string generator, int version) ImporterVersion = ("importer", 1);
+
 		public static string Token(string generator, int version)
 		{
 			return kTokenPrefix + generator + kVersionSeparator + version.ToString(CultureInfo.InvariantCulture);
 		}
 
 		/// <summary>
-		/// True when the asset has been imported and its importer records exactly these versions of these
-		/// generators.
+		/// True when the asset has been imported and its importer records the current
+		/// <see cref="ImporterVersion"/> and exactly these versions of these generators.
 		/// </summary>
 		public static bool IsCurrent(string assetPath, params (string generator, int version)[] versions)
 		{
@@ -45,22 +55,33 @@ namespace Chisel.Import.Source.VPKTools
 				return false;
 
 			var importer = AssetImporter.GetAtPath(assetPath);
-			return importer != null && HasVersions(importer.userData, versions);
+			return importer != null && IsCurrentUserData(importer.userData, versions);
+		}
+
+		/// <inheritdoc cref="IsCurrent(string, (string generator, int version)[])"/>
+		internal static bool IsCurrentUserData(string userData, params (string generator, int version)[] versions)
+		{
+			return HasVersions(userData, ImporterVersion) && HasVersions(userData, versions);
 		}
 
 		/// <summary>
-		/// The userData with these generators set to these versions. Any other version of the same
-		/// generators is replaced; every other token is kept as it is.
+		/// The userData of an asset the current importer has just written: <see cref="ImporterVersion"/>
+		/// and these generators, each set to its version. Any other version of the same generators is
+		/// replaced; every other token is kept as it is.
 		/// </summary>
 		public static string Stamp(string userData, params (string generator, int version)[] versions)
 		{
 			var tokens = Split(userData);
-			foreach (var (generator, version) in versions)
-			{
-				tokens.RemoveAll(token => IsTokenOf(token, generator));
-				tokens.Add(Token(generator, version));
-			}
+			SetToken(tokens, ImporterVersion);
+			foreach (var version in versions)
+				SetToken(tokens, version);
 			return string.Join(kTokenSeparator.ToString(), tokens);
+		}
+
+		static void SetToken(List<string> tokens, (string generator, int version) version)
+		{
+			tokens.RemoveAll(token => IsTokenOf(token, version.generator));
+			tokens.Add(Token(version.generator, version.version));
 		}
 
 		/// <summary>
