@@ -70,7 +70,15 @@ fixed4 _SpecColorTint;
 // and added by the lighting function, leaving o.Specular for $phongtint-less PBR use.
 #ifdef _PHONG
 	half   _PhongBoost;
+	// Negative means the exponent comes from _PhongExponentMap's red channel instead. Source's own
+	// constant defaults to -1, and it binds a WHITE texture when a material names no exponent texture,
+	// so "$phong with no $phongexponent" is 1 + 149 = 150 - a tight hotspot, not a soft sheen.
 	half   _PhongExponent;
+	// $phongexponentfactor replaces that 149 when it is non-zero.
+	half   _PhongExponentFactor;
+	// 1 when $phongalbedotint applies: the highlight takes the surface's own colour, mixed in by the
+	// exponent map's green channel.
+	half   _PhongAlbedoTint;
 	// [facing, middle, grazing] - Source interpolates between these over the fresnel term.
 	float3 _PhongFresnelRanges;
 	// 1 = the mask is the BASE texture's alpha, which is what Source reads when the material says so
@@ -81,6 +89,16 @@ fixed4 _SpecColorTint;
 		// fSpecMask = lerp(normalTexel.a, baseColor.a, $basemapalphaphongmask)). Unity re-encodes normal
 		// maps and that alpha does not survive, so the importer writes it as a texture of its own.
 		sampler2D _PhongMask;
+	#endif
+	#ifdef _PHONGEXPONENTMAP
+		// $phongexponenttexture: red is the exponent, green how much of the albedo tints the highlight.
+		// (Alpha is a rim-light mask, and rim lighting is not imported.)
+		sampler2D _PhongExponentMap;
+	#endif
+	#ifdef _PHONGWARP
+		// $phongwarptexture: a colour table indexed by { lobe, fresnel }, which is how Source makes a
+		// surface iridescent - the highlight shifts hue with the viewing angle instead of scaling.
+		sampler2D _PhongWarp;
 	#endif
 #endif
 
@@ -119,11 +137,19 @@ struct Input
 	// view reflected about the normal, dotted with the light and raised to the exponent, masked by N.L
 	// so a surface turned away from the light keeps none of it, and modulated by the light's colour -
 	// which in a surface shader already carries that light's attenuation and shadow.
-	// `scale` is everything that does not depend on the light: mask * fresnel * $phongboost.
-	half3 SourcePhongLight(half3 normal, half3 viewDir, half3 lightDir, half3 lightColor, half scale)
+	// PhongScale is everything that does not depend on the light: mask * $phongboost, and the fresnel
+	// too unless a warp texture is reading it.
+	half3 SourcePhongLight(SourceSurfaceOutput s, half3 viewDir, half3 lightDir, half3 lightColor)
 	{
-		half lobe = pow(saturate(dot(reflect(-lightDir, normal), viewDir)), max(_PhongExponent, 1.0h));
-		return _SpecColorTint.rgb * (scale * lobe * saturate(dot(normal, lightDir))) * lightColor;
+		half  lobe = pow(saturate(dot(reflect(-lightDir, s.Normal), viewDir)), s.PhongExponent);
+		half3 highlight = lobe;
+	#ifdef _PHONGWARP
+		// The warp replaces the plain lobe with a lookup at { (L.R)^k, fresnel }, in colour. Note the
+		// fresnel is NOT clamped - ranges like [.4 .6 1.6] run past 1 - and Source's warp textures set
+		// no CLAMP flag, so it wraps around the table there exactly as it does here.
+		highlight *= tex2D(_PhongWarp, float2(lobe, s.PhongFresnel)).rgb;
+	#endif
+		return s.PhongTint * (highlight * s.PhongScale * saturate(dot(s.Normal, lightDir))) * lightColor;
 	}
 #endif
 
@@ -188,11 +214,34 @@ void surf(Input IN, inout SourceSurfaceOutput o)
 		half phongMask = lerp(1.0h, base.a, _PhongMaskFromBaseAlpha);
 	#endif
 
+	// White is what Source samples when a material names no exponent texture, so it is what the two
+	// expressions below have to fall back to: exponent 1 + 149, and a fully albedo-coloured tint.
+	half4 exponentMap = half4(1, 1, 1, 1);
+	#ifdef _PHONGEXPONENTMAP
+		exponentMap = tex2D(_PhongExponentMap, IN.uv_MainTex);
+	#endif
+	o.PhongExponent = (_PhongExponentFactor > 0) ? (1.0h + _PhongExponentFactor * exponentMap.r)
+					: (_PhongExponent >= 0)      ? _PhongExponent
+												 : (1.0h + 149.0h * exponentMap.r);
+	// Source tints with the BASE texture, before $color/$color2 modulates it (skin_ps20b.fxc computes
+	// vSpecularTint from baseColor.rgb, and modulates albedo only afterwards).
+	o.PhongTint = lerp(_SpecColorTint.rgb, lerp(half3(1, 1, 1), base.rgb, exponentMap.g), _PhongAlbedoTint);
+
 	float3 worldNormal = WorldNormalVector(IN, o.Normal);
 	float3 viewWorld   = normalize(_WorldSpaceCameraPos - IN.worldPos);
-	o.PhongScale = phongMask * SourcePhongFresnel(worldNormal, viewWorld, _PhongFresnelRanges) * _PhongBoost;
+	o.PhongFresnel = SourcePhongFresnel(worldNormal, viewWorld, _PhongFresnelRanges);
+	#ifdef _PHONGWARP
+		// With a warp texture the fresnel is the lookup's second coordinate rather than a multiplier:
+		// skin_ps20b.fxc only folds it into the mask "if we didn't already apply Fresnel to specular warp".
+		o.PhongScale = phongMask * _PhongBoost;
+	#else
+		o.PhongScale = phongMask * o.PhongFresnel * _PhongBoost;
+	#endif
 #else
-	o.PhongScale = 0;
+	o.PhongScale    = 0;
+	o.PhongFresnel  = 0;
+	o.PhongExponent = 1;
+	o.PhongTint     = half3(1, 1, 1);
 #endif
 
 #ifdef _SELFILLUM

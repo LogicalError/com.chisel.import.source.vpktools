@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 2);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 3);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -361,8 +361,12 @@ namespace Chisel.Import.Source.VPKTools
 				selfIlluminationMap = SetMaterialTexture(gameResources, unityMaterial, "_EmissionMap", sourceMaterial.SelfIlluminationMask);
 
 
-			//var setSpecGlossMap	= SetMaterialTexture(resources, unityMaterial, "_MetallicGlossMap", PhongExponentTextureName) != null;
-			var setSpecMap = SetMaterialTexture(gameResources, unityMaterial, "_SpecGlossMap", sourceMaterial.PhongExponentTextureName) != null;
+			// The Standard fallback's nearest slot for an exponent map. This path can just as well end
+			// on the unlit or additive shader, which has no specular slot at all, so a missing property
+			// here is expected rather than a mistake. A material whose Source shader was found never gets
+			// this far: CreateSourceShaderMaterial reads the map properly in ApplySourceSpecular.
+			var setSpecMap = SetMaterialTexture(gameResources, unityMaterial, "_SpecGlossMap", sourceMaterial.PhongExponentTextureName,
+												warnIfMissing: false) != null;
 			if (!setSpecMap && unityMaterial.HasProperty("_SpecColor"))
 				unityMaterial.SetColor("_SpecColor", UnityEngine.Color.black);
 
@@ -632,10 +636,10 @@ namespace Chisel.Import.Source.VPKTools
 			// this game that set $phong also set $phongfresnelranges, and without it every one of
 			// them reads as lit from all directions at once.
 			unityMaterial.EnableKeyword("_PHONG");
-			unityMaterial.SetColor("_SpecColorTint", (sourceMaterial.PhongTint != null)
-													 ? sourceMaterial.PhongTint : Color.white);
+			unityMaterial.SetColor("_SpecColorTint", PhongTintOf(sourceMaterial));
 			unityMaterial.SetFloat("_PhongBoost", sourceMaterial.PhongBoost ?? 1.0f);
-			unityMaterial.SetFloat("_PhongExponent", Mathf.Max(1.0f, sourceMaterial.PhongExponentValue ?? 5.0f));
+			unityMaterial.SetFloat("_PhongExponent", PhongExponentOf(sourceMaterial));
+			unityMaterial.SetFloat("_PhongExponentFactor", sourceMaterial.PhongExponentFactor ?? 0.0f);
 
 			// Source's default when unspecified is a flat 1 at every angle.
 			var fresnel = sourceMaterial.PhongFresnelRanges ?? Vector3.one;
@@ -666,6 +670,72 @@ namespace Chisel.Import.Source.VPKTools
 					unityMaterial.EnableKeyword("_PHONGMASK");
 				}
 			}
+
+			// $phongexponenttexture: the exponent per pixel in its red channel, and how much of the
+			// surface's own colour to tint the highlight with in its green. It is data, not colour, so it
+			// goes in through the ordinary texture path, which imports everything linear unless a color
+			// slot claims it (Texture2DImporter.MarkAsColor) - and this slot never does.
+			unityMaterial.DisableKeyword("_PHONGEXPONENTMAP");
+			unityMaterial.SetFloat("_PhongAlbedoTint", 0);
+			if (SetMaterialTexture(gameResources, unityMaterial, "_PhongExponentMap",
+								   sourceMaterial.PhongExponentTextureName) != null)
+			{
+				unityMaterial.EnableKeyword("_PHONGEXPONENTMAP");
+				if (PhongAlbedoTintApplies(sourceMaterial))
+					unityMaterial.SetFloat("_PhongAlbedoTint", 1);
+			}
+
+			// $phongwarptexture: the highlight looked up in a table rather than taken from the lobe
+			// directly, which is what makes a surface iridescent. The fresnel is the lookup's second
+			// coordinate, so with a warp the shader stops using it as a multiplier.
+			unityMaterial.DisableKeyword("_PHONGWARP");
+			if (SetMaterialTexture(gameResources, unityMaterial, "_PhongWarp",
+								   sourceMaterial.PhongWarpTextureName) != null)
+				unityMaterial.EnableKeyword("_PHONGWARP");
+		}
+
+		/// <summary>
+		/// The phong tint Source ends up using. An all-zero $phongtint is not a black highlight: the
+		/// engine reads all-zero as "the material named no tint" and uses white (skin_dx9_helper.cpp).
+		/// </summary>
+		internal static Color PhongTintOf(VMT sourceMaterial)
+		{
+			if (PhongTintIsUnset(sourceMaterial))
+				return Color.white;
+			Color tint = sourceMaterial.PhongTint;
+			return new Color(tint.r, tint.g, tint.b, 1);
+		}
+
+		static bool PhongTintIsUnset(VMT sourceMaterial)
+		{
+			if (sourceMaterial.PhongTint == null)
+				return true;
+			Color tint = sourceMaterial.PhongTint;
+			return tint.r == 0 && tint.g == 0 && tint.b == 0;
+		}
+
+		/// <summary>
+		/// The phong exponent constant, or -1 meaning "read it from the exponent texture's red channel".
+		/// Source only lets the constant win when it is positive, and when a material names no exponent
+		/// texture the engine samples a white one - so no exponent at all means 1 + 149 = 150, a tight
+		/// hotspot, rather than any mild default (skin_dx9_helper.cpp, skin_ps20b.fxc).
+		/// </summary>
+		internal static float PhongExponentOf(VMT sourceMaterial)
+		{
+			return (sourceMaterial.PhongExponentValue > 0) ? sourceMaterial.PhongExponentValue.Value : -1.0f;
+		}
+
+		/// <summary>
+		/// Whether $phongalbedotint actually colours the highlight. Source honours it only alongside a
+		/// $phongexponenttexture - the green channel is the mix - and only while no $phongtint has
+		/// already claimed the tint. 578 of this game's materials set it without such a texture, where
+		/// it does nothing at all, and tinting those would be a change the game never makes.
+		/// </summary>
+		internal static bool PhongAlbedoTintApplies(VMT sourceMaterial)
+		{
+			return sourceMaterial.PhongAlbedoTint == true &&
+				   !string.IsNullOrEmpty(sourceMaterial.PhongExponentTextureName) &&
+				   PhongTintIsUnset(sourceMaterial);
 		}
 
 		/// <summary>Sets the blend state the shader reads through [_SrcBlend]/[_DstBlend]/[_ZWrite],

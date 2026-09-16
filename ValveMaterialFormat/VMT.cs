@@ -43,6 +43,9 @@ namespace Chisel.Import.Source.VPKTools
 		public string       PhongWarpTextureName;
 		public string		PhongExponentTextureName;	
 		public float?		PhongExponentValue;
+		/// <summary>$phongexponentfactor - scales the exponent texture's red channel instead of the
+		/// fixed 149, so the exponent becomes 1 + factor * red.</summary>
+		public float?		PhongExponentFactor;
 		public float?		PhongBoost;
 		/// <summary>$phongfresnelranges [facing middle grazing] - Source shapes the phong term with
 		/// this, and 1330 of the 1334 materials that use $phong set it.</summary>
@@ -1148,11 +1151,7 @@ namespace Chisel.Import.Source.VPKTools
 
 						case "$phongexponent": { TryParseFloatProperty(property, ref vmfMaterial.PhongExponentValue); break; }
 
-						case "$phongexponentfactor": // '4'. '4.5999970436'.
-						{
-							// no documentation?
-							break;
-						}
+						case "$phongexponentfactor": { TryParseFloatProperty(property, ref vmfMaterial.PhongExponentFactor); break; }
 
 						case "$phongexponenttexture": { vmfMaterial.PhongExponentTextureName = property.Value; break; }
 

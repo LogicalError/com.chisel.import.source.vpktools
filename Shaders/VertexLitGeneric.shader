@@ -25,10 +25,15 @@ Shader "Chisel/Source/VertexLitGeneric"
 		_EnvMapMask ("$envmapmask", 2D) = "white" {}
 
 		_PhongBoost ("$phongboost", Float) = 1.0
-		_PhongExponent ("$phongexponent", Float) = 5.0
+		// Negative hands the exponent to _PhongExponentMap, which is Source's own default.
+		_PhongExponent ("$phongexponent", Float) = -1.0
+		_PhongExponentFactor ("$phongexponentfactor", Float) = 0
 		_PhongFresnelRanges ("$phongfresnelranges", Vector) = (1,1,1,0)
 		_PhongMaskFromBaseAlpha ("Phong mask is base alpha", Float) = 0
 		_PhongMask ("Phong mask (the $bumpmap's alpha)", 2D) = "white" {}
+		_PhongExponentMap ("$phongexponenttexture", 2D) = "white" {}
+		_PhongAlbedoTint ("$phongalbedotint", Float) = 0
+		_PhongWarp ("$phongwarptexture", 2D) = "white" {}
 
 		_SelfIllumMask ("$selfillummask", 2D) = "white" {}
 		_SelfIllumTint ("$selfillumtint", Color) = (0,0,0,1)
@@ -57,6 +62,8 @@ Shader "Chisel/Source/VertexLitGeneric"
 		#pragma shader_feature_local _ENVMAPMASK
 		#pragma shader_feature_local _PHONG
 		#pragma shader_feature_local _PHONGMASK
+		#pragma shader_feature_local _PHONGEXPONENTMAP
+		#pragma shader_feature_local _PHONGWARP
 		#pragma shader_feature_local _SELFILLUM
 		#pragma shader_feature_local _ALPHATEST_ON
 
@@ -73,8 +80,14 @@ Shader "Chisel/Source/VertexLitGeneric"
 			half   Smoothness;
 			half   Occlusion;
 			fixed  Alpha;
-			// Everything in Source's phong that does not depend on a light: mask * fresnel * $phongboost.
+			// Everything in Source's phong that does not depend on a light. PhongScale is the mask times
+			// $phongboost, and times the fresnel as well unless a warp texture is reading the fresnel
+			// as its own lookup coordinate; the exponent and tint are per pixel because a
+			// $phongexponenttexture makes them so.
 			half   PhongScale;
+			half   PhongFresnel;
+			half   PhongExponent;
+			half3  PhongTint;
 		};
 
 		#include "SourceGeneric.cginc"
@@ -99,7 +112,7 @@ Shader "Chisel/Source/VertexLitGeneric"
 			// Source adds its highlight once per light, which is why it belongs here: this is where the
 			// light's direction is known, and where its colour already carries the attenuation Source
 			// multiplies in. The forward base pass brings the brightest light, the additive pass the rest.
-			color.rgb += SourcePhongLight(s.Normal, viewDir, gi.light.dir, gi.light.color, s.PhongScale);
+			color.rgb += SourcePhongLight(s, viewDir, gi.light.dir, gi.light.color);
 		#endif
 			return color;
 		}
