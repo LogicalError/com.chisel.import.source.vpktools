@@ -82,14 +82,15 @@ Shader "Chisel/Source/LightmappedGeneric"
 		#pragma shader_feature_local _ALPHATEST_ON
 
 		#include "ChiselSourceGeneric.cginc"
-		// Unity's own StandardSpecular lighting model, and deliberately not a custom one: a custom
-		// lighting model has no deferred pass unless it also provides Lighting<Name>_Deferred, and Unity
+		// SourceSpecular (ChiselSourceGeneric.cginc) is Unity's StandardSpecular BRDF without the reflection
+		// probes and the energy conservation, neither of which Source has. It provides
+		// Lighting<Name>_Deferred on purpose: a lighting model without one has no deferred pass, and Unity
 		// then draws the surface in FORWARD even under a deferred camera. There a map-spanning Chisel
 		// renderer is lit per pixel by QualitySettings.pixelLightCount lights, picked among the ones the
 		// camera can see, and every other light is folded into ambient without any falloff - the level's
 		// lighting went flat and changed as the camera turned. Source's phong reaches Unity's lighting
 		// through the specular inputs instead (SourcePhongToStandard).
-#pragma surface surf StandardSpecular fullforwardshadows addshadow keepalpha
+#pragma surface surf SourceSpecular fullforwardshadows addshadow keepalpha
 		ENDCG
 	}
 

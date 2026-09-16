@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 4);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 5);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -543,7 +543,10 @@ namespace Chisel.Import.Source.VPKTools
 			if (sourceMaterial.Texture2Scroll.HasValue && unityMaterial.HasProperty("_Texture2Scroll"))
 				unityMaterial.SetVector("_Texture2Scroll", new Vector4(sourceMaterial.Texture2Scroll.Value.x, -sourceMaterial.Texture2Scroll.Value.y));
 
-			if (SetMaterialTexture(gameResources, unityMaterial, "_BumpMap", sourceMaterial.BumpMapName, isNormalMap: true, warnIfMissing: false,
+			// A material that takes its phong mask from the base texture's alpha is drawn by a skin shader that
+			// ignores the normal map altogether, so it gets none (IgnoresNormalMap).
+			if (!IgnoresNormalMap(sourceMaterial) &&
+				SetMaterialTexture(gameResources, unityMaterial, "_BumpMap", sourceMaterial.BumpMapName, isNormalMap: true, warnIfMissing: false,
 								   selfShadowed: sourceMaterial.BumpSelfShadowing == true) != null)
 				unityMaterial.EnableKeyword("_NORMALMAP");
 
@@ -597,9 +600,10 @@ namespace Chisel.Import.Source.VPKTools
 			}
 
 			// $envmap is almost always "env_cubemap", ie "reflect what is around this spot", which in
-			// Unity is a reflection probe rather than a texture we sample - so reflection is left to
-			// the lighting model. $envmapmask still has a job: it modulates the specular response
-			// per-pixel, which matters for a material that also has $phong.
+			// Unity would be a reflection probe. It is not imported yet, and the shaders' lighting model
+			// (SourceSpecular) leaves the probes out. $envmapmask scales the shader's specular input, which
+			// is zero unless the material draws phong - and phong replaces it (the game does not mask its
+			// highlight with $envmapmask either) - so for now the mask has no visible effect.
 			if (SetMaterialTexture(gameResources, unityMaterial, "_EnvMapMask", sourceMaterial.EnvMapMaskTextureName, warnIfMissing: false) != null)
 				unityMaterial.EnableKeyword("_ENVMAPMASK");
 
@@ -620,13 +624,12 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			// PBR specular stays OFF. $envmap is a cubemap reflection modulated by $envmapmask, not a
 			// specular lobe - treating its presence as full-strength white specular turned ordinary
-			// surfaces into polished chrome. Reflection still happens through Unity's reflection
-			// probes, which is the closer equivalent of env_cubemap anyway.
+			// surfaces into polished chrome.
 			unityMaterial.SetColor("_SpecColorTint", Color.black);
 			unityMaterial.SetFloat("_SpecularScale", 0);
 			unityMaterial.SetFloat("_Smoothness", 0);
 
-			if (sourceMaterial.Phong != true)
+			if (!DrawsPhong(sourceMaterial))
 				return;
 
 			// $phong is a separate, additive highlight and the shader reproduces it directly: masked
@@ -640,9 +643,7 @@ namespace Chisel.Import.Source.VPKTools
 			unityMaterial.SetFloat("_PhongExponent", PhongExponentOf(sourceMaterial));
 			unityMaterial.SetFloat("_PhongExponentFactor", sourceMaterial.PhongExponentFactor ?? 0.0f);
 
-			// Source's default when unspecified is a flat 1 at every angle.
-			var fresnel = sourceMaterial.PhongFresnelRanges ?? Vector3.one;
-			unityMaterial.SetVector("_PhongFresnelRanges", fresnel);
+			unityMaterial.SetVector("_PhongFresnelRanges", PhongFresnelRangesOf(sourceMaterial));
 
 			// Source masks the highlight with the NORMAL MAP's alpha, unless the material puts the mask in
 			// the base texture's alpha ($basemapalphaphongmask, which also flattens the normal) or has no
@@ -880,6 +881,51 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceMaterial.PhongAlbedoTint == true &&
 				   !string.IsNullOrEmpty(sourceMaterial.PhongExponentTextureName) &&
 				   PhongTintIsUnset(sourceMaterial);
+		}
+
+		/// <summary>
+		/// Whether the game draws this material's $phong at all. VertexLitGeneric draws phong with its skin
+		/// shader, and picks that shader only when the material also has a $bumpmap - unless
+		/// $basemapalphaphongmask or a $lightwarptexture asks for it anyway (WantsSkinShader,
+		/// vertexlitgeneric_dx9_helper.cpp). Otherwise it draws plain VertexLitGeneric, which has no
+		/// highlight: 77 of this game's materials set $phong that way. LightmappedGeneric keeps its phong
+		/// as before - the SDK's has none, and the game's own shaders are not public - and UnlitGeneric has
+		/// no lighting to add a highlight to.
+		/// </summary>
+		internal static bool DrawsPhong(VMT sourceMaterial)
+		{
+			if (sourceMaterial.Phong != true)
+				return false;
+			var shader = SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName);
+			if (string.Equals(shader, "LightmappedGeneric", System.StringComparison.OrdinalIgnoreCase))
+				return true;
+			if (!string.Equals(shader, "VertexLitGeneric", System.StringComparison.OrdinalIgnoreCase))
+				return false;
+			return !string.IsNullOrEmpty(sourceMaterial.LightWarpTextureName) ||
+				   sourceMaterial.BaseMapAlphaPhongMask == true ||
+				   !string.IsNullOrEmpty(sourceMaterial.BumpMapName);
+		}
+
+		/// <summary>
+		/// Whether the game ignores this material's normal map: the skin shader that draws a
+		/// VertexLitGeneric $phong material flattens the normal by $basemapalphaphongmask
+		/// (skin_ps20b.fxc), since that material's normal map is not where its phong mask lives.
+		/// </summary>
+		internal static bool IgnoresNormalMap(VMT sourceMaterial)
+		{
+			return sourceMaterial.BaseMapAlphaPhongMask == true && DrawsPhong(sourceMaterial) &&
+				   string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "VertexLitGeneric",
+								 System.StringComparison.OrdinalIgnoreCase);
+		}
+
+		/// <summary>
+		/// $phongfresnelranges [facing middle grazing], or what the game uses when a material leaves it out:
+		/// [0 0.5 1]. skin_dx9_helper.cpp starts from the constant { 1, 0.5, 1 }, which is those three
+		/// already in the shader's own encoding ((middle - facing) * 2, middle, (grazing - middle) * 2).
+		/// </summary>
+		internal static Vector3 PhongFresnelRangesOf(VMT sourceMaterial)
+		{
+			return sourceMaterial.PhongFresnelRanges ?? new Vector3(0.0f, 0.5f, 1.0f);
 		}
 
 		/// <summary>Sets the blend state the shader reads through [_SrcBlend]/[_DstBlend]/[_ZWrite],

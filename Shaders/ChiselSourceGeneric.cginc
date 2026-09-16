@@ -15,7 +15,8 @@
 //                              this is the one that cannot be expressed with Unity's Standard
 //                              shader at all, and is why lit signage/screens imported flat
 //   $detail/$detailscale/...   second texture blended over the base at its own tiling
-//   $envmap/$envmapmask/$tint  cubemap reflection, masked and tinted
+//   $envmap/$envmapmask/$tint  cubemap reflection - not imported yet, and the lighting model below
+//                              leaves Unity's reflection probes out, so these surfaces reflect nothing
 //   $phong/$phongtint/...      Source's specular highlight, masked, tinted and shaped per pixel, and
 //                              handed to Unity's lighting as the specular colour and smoothness that
 //                              give its highlight the same width and peak (SourcePhongToStandard)
@@ -27,6 +28,54 @@
 // Features are shader_feature_local toggles so a material that uses none of them costs nothing.
 
 #include "UnityPBSLighting.cginc"
+
+// The SourceSpecular lighting model: Unity's StandardSpecular BRDF, less two things Source does not do.
+//  - Reflection probes. A Source surface reflects its surroundings only through $envmap, which is not
+//    imported, and its highlight is a term per light and nothing more. StandardSpecular reflects the probes
+//    and the sky with the surface's specular colour and smoothness, and lerps that toward
+//    smoothness + reflectivity at grazing angles - which, fed phong's specular inputs
+//    (SourcePhongToStandard), put a bright rim on every glossy prop.
+//  - Energy conservation. Source adds its highlight to the lit surface; Unity takes the specular's share
+//    out of the diffuse first (EnergyConservationBetweenDiffuseAndSpecular).
+// The model has to provide Lighting<Name>_Deferred: without it the surface shader has no deferred pass, and
+// Unity draws the surface in forward even under a deferred camera, where a map-spanning Chisel renderer is
+// lit per pixel by a handful of lights and the level's lighting goes flat (d8fd916).
+inline half4 LightingSourceSpecular(SurfaceOutputStandardSpecular s, float3 viewDir, UnityGI gi)
+{
+	s.Normal = normalize(s.Normal);
+	half oneMinusReflectivity = 1 - SpecularStrength(s.Specular);
+	gi.indirect.specular = 0;
+	half4 c = UNITY_BRDF_PBS(s.Albedo, s.Specular, oneMinusReflectivity, s.Smoothness, s.Normal, viewDir, gi.light, gi.indirect);
+	// As LightingStandardSpecular does without _ALPHAPREMULTIPLY_ON, which these shaders never set.
+	c.a = s.Alpha;
+	return c;
+}
+
+inline half4 LightingSourceSpecular_Deferred(SurfaceOutputStandardSpecular s, float3 viewDir, UnityGI gi,
+											 out half4 outGBuffer0, out half4 outGBuffer1, out half4 outGBuffer2)
+{
+	half oneMinusReflectivity = 1 - SpecularStrength(s.Specular);
+	half4 c = UNITY_BRDF_PBS(s.Albedo, s.Specular, oneMinusReflectivity, s.Smoothness, s.Normal, viewDir, gi.light, gi.indirect);
+
+	UnityStandardData data;
+	data.diffuseColor  = s.Albedo;
+	// Deferred rendering adds the probes in a pass of its own (Internal-DeferredReflections), which scales
+	// them by the occlusion stored here and reads it for nothing else - the ambient occlusion is already in
+	// gi.indirect.diffuse (LightingSourceSpecular_GI). Zero is "reflects nothing".
+	data.occlusion     = 0;
+	data.specularColor = s.Specular;
+	data.smoothness    = s.Smoothness;
+	data.normalWorld   = s.Normal;
+	UnityStandardDataToGbuffer(data, outGBuffer0, outGBuffer1, outGBuffer2);
+
+	return half4(s.Emission + c.rgb, 1);
+}
+
+inline void LightingSourceSpecular_GI(SurfaceOutputStandardSpecular s, UnityGIInput data, inout UnityGI gi)
+{
+	// The ambient light, light probes and lightmaps, without the probe reflection (UnityGI_Base).
+	gi = UnityGlobalIllumination(data, s.Occlusion, s.Normal);
+}
 
 // NOTE: do NOT declare _MainTex_ST / _DetailTex_ST here. Naming a field uv_MainTex in the Input
 //       struct makes the surface shader compiler declare the matching _ST itself and apply the
@@ -68,9 +117,9 @@ half _VertexAlpha;
 	half      _BlendModulate;
 #endif
 
-// $envmap is nearly always the literal "env_cubemap", meaning "use the cubemap baked for this
-// spot", which is Unity's reflection probes - so reflection is left to the Standard lighting model
-// rather than sampled here, and $envmapmask/$envmaptint modulate how reflective the surface is.
+// $envmap is nearly always the literal "env_cubemap", meaning "use the cubemap baked for this spot" -
+// Unity's reflection probes. It is not imported yet (see SourceSpecular). $envmapmask scales o.Specular,
+// which is zero unless the material draws phong, and phong replaces it.
 #ifdef _ENVMAPMASK
 	sampler2D _EnvMapMask;
 #endif
@@ -92,8 +141,10 @@ fixed4 _SpecColorTint;
 // path has no place to add a term per light - one shared pass lights every surface with the Standard
 // BRDF - so the highlight goes in as o.Specular and o.Smoothness instead, scaled so that Unity's lobe
 // has the same width and the same peak (SourcePhongToStandard). What that cannot carry over: Unity's
-// own Fresnel still brightens the lobe at grazing light angles, and the smoothness lets reflection
-// probes show at grazing view angles.
+// own Fresnel and visibility terms still brighten the lobe toward grazing angles, far past Source's
+// highlight - 36 times it at 60 degrees, hundreds of times beyond 70 - which shows as sparkles where a
+// normal map is noisy. (The reflection probes that the specular inputs would also light are left out
+// by SourceSpecular.)
 #ifdef _PHONG
 	half   _PhongBoost;
 	// Negative means the exponent comes from _PhongExponentMap's red channel instead. Source's own
@@ -174,12 +225,8 @@ struct Input
 	{
 		half alphaSquared = 1.0h / (2.0h * max(exponent, 0.0h) + 1.0h);
 		o.Smoothness = 1.0h - sqrt(sqrt(alphaSquared));
-		o.Specular   = min(scale * (4.0h * alphaSquared), 0.99h);
-
-		// Source ADDS its highlight to the lit surface, while Unity takes the specular's share out of the
-		// diffuse (EnergyConservationBetweenDiffuseAndSpecular). Dividing that share back in beforehand
-		// cancels it exactly, which is why the specular stays below 1.
-		o.Albedo /= 1.0h - SpecularStrength(o.Specular);
+		// The G-buffer stores the specular colour in 0..1, so the forward path is held to the same.
+		o.Specular   = saturate(scale * (4.0h * alphaSquared));
 	}
 #endif
 

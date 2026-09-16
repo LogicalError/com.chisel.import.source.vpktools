@@ -60,6 +60,10 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>$basemapalphaphongmask - take the phong mask from the BASE texture's alpha
 		/// instead of the normal map's.</summary>
 		public bool?		BaseMapAlphaPhongMask;
+		/// <summary>$lightwarptexture - a ramp the diffuse lighting is looked up in. Not imported, but a
+		/// $phong material that has one is drawn by the skin shader even without a normal map
+		/// (<see cref="Chisel.Import.Source.VPKTools.MaterialImporter.DrawsPhong"/>).</summary>
+		public string		LightWarpTextureName;
 		public RGBColor		PhongTint;
 		public bool?		PhongAlbedoTint;
 		
@@ -605,7 +609,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$leakforce": // '10'.
 						case "$leaknoise": // '0;'.
 						case "$lightpass": // '1'.
-						case "$lightwarptexture":
 						case "$linearread_basetexture": // '1'.
 						case "$linearread_texture1": // '0'.
 						case "$linearread_texture2": // '0'.
@@ -1169,6 +1172,7 @@ namespace Chisel.Import.Source.VPKTools
 						case "$phongwarptexture": { vmfMaterial.PhongWarpTextureName = property.Value; break; }
 						case "$phongalbedotint": { TryParseBoolProperty(property, ref vmfMaterial.PhongAlbedoTint); break; }
 						case "$basemapalphaphongmask": { TryParseBoolProperty(property, ref vmfMaterial.BaseMapAlphaPhongMask); break; }
+						case "$lightwarptexture": { vmfMaterial.LightWarpTextureName = property.Value; break; }
 						case "$phongtint": { vmfMaterial.PhongTint = TextParser.ParseColor(property.Value); break; }
 						case "$phongboost": { TryParseFloatProperty(property, ref vmfMaterial.PhongBoost); break; }
 						case "$phongfresnelranges": { vmfMaterial.PhongFresnelRanges = TextParser.ParseVector3(property.Value); break; }
