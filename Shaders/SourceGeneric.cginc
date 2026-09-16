@@ -16,7 +16,8 @@
 //                              shader at all, and is why lit signage/screens imported flat
 //   $detail/$detailscale/...   second texture blended over the base at its own tiling
 //   $envmap/$envmapmask/$tint  cubemap reflection, masked and tinted
-//   $phongexponent/$phongtint  specular
+//   $phong/$phongtint/...      Source's additive specular highlight: masked per pixel, shaped by
+//                              $phongfresnelranges, and added once per light by the lighting function
 //   $alphatest/$translucent    handled by the material's blend state + _ALPHATEST_ON, as the
 //                              Standard shader does, so one shader covers every blend mode
 //   $nocull                    _Cull, which the Standard shader does not expose - Source uses it
@@ -66,16 +67,21 @@ fixed4 _SpecColorTint;
 // Source's $phong is NOT a PBR reflectance - it is an additive highlight, masked per-pixel and
 // shaped by $phongfresnelranges so that it is weak head-on and blooms at grazing angles. Feeding it
 // into o.Specular instead makes every phong material read as polished metal, so it is computed here
-// and added by the lighting function below, leaving o.Specular for $phongtint-less PBR use.
+// and added by the lighting function, leaving o.Specular for $phongtint-less PBR use.
 #ifdef _PHONG
 	half   _PhongBoost;
 	half   _PhongExponent;
 	// [facing, middle, grazing] - Source interpolates between these over the fresnel term.
 	float3 _PhongFresnelRanges;
-	// 1 = the phong mask is the BASE texture's alpha ($basemapalphaphongmask), 0 = no mask.
-	// The normal map's alpha (Source's other default) is not reachable: Unity re-encodes normal
-	// maps and the original alpha does not survive the import.
+	// 1 = the mask is the BASE texture's alpha, which is what Source reads when the material says so
+	// ($basemapalphaphongmask) or when it has no normal map at all.
 	half   _PhongMaskFromBaseAlpha;
+	#ifdef _PHONGMASK
+		// Source's usual mask is the NORMAL MAP's alpha (skin_ps20b.fxc:
+		// fSpecMask = lerp(normalTexel.a, baseColor.a, $basemapalphaphongmask)). Unity re-encodes normal
+		// maps and that alpha does not survive, so the importer writes it as a texture of its own.
+		sampler2D _PhongMask;
+	#endif
 #endif
 
 // NOTE: every field here is UNCONDITIONAL, and must stay that way. The surface shader generator
@@ -108,9 +114,20 @@ struct Input
 		return (f > 0.5h) ? lerp(ranges.y, ranges.z, (2.0h * f) - 1.0h)
 						  : lerp(ranges.x, ranges.y, 2.0h * f);
 	}
+
+	// What one light adds to the highlight (SpecularAndRimTerms in common_vertexlitgeneric_dx9.h): the
+	// view reflected about the normal, dotted with the light and raised to the exponent, masked by N.L
+	// so a surface turned away from the light keeps none of it, and modulated by the light's colour -
+	// which in a surface shader already carries that light's attenuation and shadow.
+	// `scale` is everything that does not depend on the light: mask * fresnel * $phongboost.
+	half3 SourcePhongLight(half3 normal, half3 viewDir, half3 lightDir, half3 lightColor, half scale)
+	{
+		half lobe = pow(saturate(dot(reflect(-lightDir, normal), viewDir)), max(_PhongExponent, 1.0h));
+		return _SpecColorTint.rgb * (scale * lobe * saturate(dot(normal, lightDir))) * lightColor;
+	}
 #endif
 
-void surf(Input IN, inout SurfaceOutputStandardSpecular o)
+void surf(Input IN, inout SourceSurfaceOutput o)
 {
 	fixed4 base = tex2D(_MainTex, IN.uv_MainTex);
 	fixed3 albedo = base.rgb * _Color.rgb;
@@ -161,24 +178,21 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	o.Normal = fixed3(0, 0, 1);
 #endif
 
+	// Everything in the highlight that does not depend on a light: its mask, and the fresnel that shapes
+	// it. The lighting function adds the lobe once per light. Note that Source does NOT mask the
+	// highlight with $envmapmask - that texture gates the cubemap reflection only.
 #ifdef _PHONG
-	// Source's phong = tint * mask * boost * fresnel(N,V) * pow(dot(R,V), exponent) * lightColor.
-	// Added as emission rather than fed into o.Specular: it is an ADDITIVE highlight, and putting it
-	// in o.Specular makes the surface behave like polished metal from every angle. Uses the pass's
-	// light, so the forward-add pass contributes the other lights too.
-	half phongMask = lerp(1.0h, base.a, _PhongMaskFromBaseAlpha);
-	#ifdef _ENVMAPMASK
-		// $normalmapalphaenvmapmask-style masks also gate the highlight in Source.
-		phongMask *= tex2D(_EnvMapMask, IN.uv_MainTex).r;
+	#ifdef _PHONGMASK
+		half phongMask = tex2D(_PhongMask, IN.uv_MainTex).r;
+	#else
+		half phongMask = lerp(1.0h, base.a, _PhongMaskFromBaseAlpha);
 	#endif
 
 	float3 worldNormal = WorldNormalVector(IN, o.Normal);
 	float3 viewWorld   = normalize(_WorldSpaceCameraPos - IN.worldPos);
-	float3 lightWorld  = normalize(_WorldSpaceLightPos0.xyz);
-	half   fresnel     = SourcePhongFresnel(worldNormal, viewWorld, _PhongFresnelRanges);
-	half   lobe        = pow(saturate(dot(reflect(-lightWorld, worldNormal), viewWorld)),
-							 max(_PhongExponent, 1.0h));
-	o.Emission += _SpecColorTint.rgb * (_PhongBoost * phongMask * fresnel * lobe) * _LightColor0.rgb;
+	o.PhongScale = phongMask * SourcePhongFresnel(worldNormal, viewWorld, _PhongFresnelRanges) * _PhongBoost;
+#else
+	o.PhongScale = 0;
 #endif
 
 #ifdef _SELFILLUM

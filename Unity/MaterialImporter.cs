@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 1);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 2);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -601,7 +601,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (SetMaterialTexture(gameResources, unityMaterial, "_EnvMapMask", sourceMaterial.EnvMapMaskTextureName, warnIfMissing: false) != null)
 				unityMaterial.EnableKeyword("_ENVMAPMASK");
 
-			ApplySourceSpecular(unityMaterial, sourceMaterial, mainTexture);
+			ApplySourceSpecular(gameResources, unityMaterial, sourceMaterial, mainTexture);
 			ApplySourceBlendState(unityMaterial, sourceMaterial);
 
 			// $nocull, which the Standard shader cannot express at all. Source uses it for glass,
@@ -613,7 +613,7 @@ namespace Chisel.Import.Source.VPKTools
 		}
 
 		/// <summary>Maps the $phong* parameters onto the shader's specular/smoothness.</summary>
-		private static void ApplySourceSpecular(Material unityMaterial, VMT sourceMaterial, Texture2D mainTexture)
+		private static void ApplySourceSpecular(GameResources gameResources, Material unityMaterial, VMT sourceMaterial, Texture2D mainTexture)
 		{
 			// PBR specular stays OFF. $envmap is a cubemap reflection modulated by $envmapmask, not a
 			// specular lobe - treating its presence as full-strength white specular turned ordinary
@@ -628,7 +628,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			// $phong is a separate, additive highlight and the shader reproduces it directly: masked
 			// per-pixel and shaped by $phongfresnelranges, so it is weak head-on and blooms at
-			// grazing angles. That shaping is not optional detail - 1330 of the 1334 materials in
+			// grazing angles. That shaping is not optional detail - 1913 of the 1923 materials in
 			// this game that set $phong also set $phongfresnelranges, and without it every one of
 			// them reads as lit from all directions at once.
 			unityMaterial.EnableKeyword("_PHONG");
@@ -641,13 +641,31 @@ namespace Chisel.Import.Source.VPKTools
 			var fresnel = sourceMaterial.PhongFresnelRanges ?? Vector3.one;
 			unityMaterial.SetVector("_PhongFresnelRanges", fresnel);
 
-			// The mask is the base texture's alpha for $basemapalphaphongmask. Source's other default
-			// is the normal map's alpha, which is unreachable here: Unity re-encodes normal maps and
-			// the original alpha does not survive, so those fall back to no mask (fresnel alone).
-			var maskFromBaseAlpha = sourceMaterial.BaseMapAlphaPhongMask == true &&
-									mainTexture != null &&
-									UnityEngine.Experimental.Rendering.GraphicsFormatUtility.HasAlphaChannel(mainTexture.graphicsFormat);
-			unityMaterial.SetFloat("_PhongMaskFromBaseAlpha", maskFromBaseAlpha ? 1 : 0);
+			// Source masks the highlight with the NORMAL MAP's alpha, unless the material puts the mask in
+			// the base texture's alpha ($basemapalphaphongmask, which also flattens the normal) or has no
+			// normal map at all: skin_ps20b.fxc reads
+			// fSpecMask = lerp(normalTexel.a, baseColor.a, $basemapalphaphongmask).
+			unityMaterial.SetFloat("_PhongMaskFromBaseAlpha", 0);
+			unityMaterial.DisableKeyword("_PHONGMASK");
+
+			var bumpMapName = sourceMaterial.BumpMapName ?? sourceMaterial.NormalMapName;
+			if (sourceMaterial.BaseMapAlphaPhongMask == true || string.IsNullOrEmpty(bumpMapName))
+			{
+				var baseHasAlpha = mainTexture != null &&
+								   UnityEngine.Experimental.Rendering.GraphicsFormatUtility.HasAlphaChannel(mainTexture.graphicsFormat);
+				unityMaterial.SetFloat("_PhongMaskFromBaseAlpha", baseHasAlpha ? 1 : 0);
+			}
+			else
+			{
+				// Unity re-encodes normal maps, so their alpha is imported as a mask texture of its own. A
+				// normal map with no alpha leaves the mask unset, which is what Source samples there: 1.
+				var phongMask = gameResources.ImportAlphaMask(bumpMapName);
+				if (phongMask != null)
+				{
+					unityMaterial.SetTexture("_PhongMask", phongMask);
+					unityMaterial.EnableKeyword("_PHONGMASK");
+				}
+			}
 		}
 
 		/// <summary>Sets the blend state the shader reads through [_SrcBlend]/[_DstBlend]/[_ZWrite],

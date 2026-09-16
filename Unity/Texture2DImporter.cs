@@ -70,6 +70,75 @@ namespace Chisel.Import.Source.VPKTools
 			return frameTextures;
 		}
 
+		/// <summary>
+		/// The version of the mask textures written from another texture's alpha channel (see
+		/// <see cref="ImportAlphaMask"/>). Bump it when what one of them holds changes.
+		/// </summary>
+		public static readonly (string generator, int version) AlphaMaskVersion = ("alphamask", 1);
+
+		// What a mask written from a texture's alpha is called, beside the texture it came from.
+		internal const string kAlphaMaskSuffix = "_alphamask";
+
+		/// <summary>
+		/// Writes a texture's alpha channel as a mask texture of its own and returns it; null when there is
+		/// no alpha to take.
+		/// <para>
+		/// Source keeps masks in alpha channels - the phong mask is the normal map's alpha - and Unity
+		/// re-encodes normal maps (DXT5nm keeps X in the alpha), so that channel cannot be sampled from the
+		/// imported normal map. Rather than import the normal map as something it is not, the channel is
+		/// written beside it as data, and the material points at that.
+		/// </para>
+		/// </summary>
+		public static Texture2D ImportAlphaMask(VTF sourceTexture, string outputPath)
+		{
+			if (sourceTexture == null || !sourceTexture.HasAlpha ||
+				sourceTexture.Frames == null || sourceTexture.Frames.Length == 0 ||
+				sourceTexture.Frames[0].Pixels == null)
+				return null;
+
+			return WriteAlphaMask(AlphaAsMask(sourceTexture.Frames[0].Pixels),
+								  sourceTexture.Width, sourceTexture.Height, outputPath);
+		}
+
+		/// <summary>A texture's alpha channel as an opaque grey image.</summary>
+		internal static Color[] AlphaAsMask(Color[] pixels)
+		{
+			var mask = new Color[pixels.Length];
+			for (int i = 0; i < pixels.Length; i++)
+				mask[i] = new Color(pixels[i].a, pixels[i].a, pixels[i].a, 1);
+			return mask;
+		}
+
+		/// <summary>Writes mask pixels beside the texture they came from, and imports them as data.</summary>
+		internal static Texture2D WriteAlphaMask(Color[] pixels, int width, int height, string outputPath)
+		{
+			var destinationPath = Path.ChangeExtension(outputPath, null) + kAlphaMaskSuffix + ".png";
+			var foundAsset = UnityAssets.Load<Texture2D>(destinationPath);
+			if (foundAsset != null &&
+				GeneratedAssetVersion.IsCurrent(AssetDatabase.GetAssetPath(foundAsset), GeneratedVersion, AlphaMaskVersion))
+				return foundAsset;
+
+			PackagePath.EnsureDirectoriesExist(destinationPath);
+			File.WriteAllBytes(destinationPath, ImageConversion.EncodeArrayToPNG(
+				pixels, UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat, (uint)width, (uint)height));
+
+			var assetPath = UnityAssets.GetAssetPath(destinationPath);
+			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUncompressedImport);
+			if (AssetImporter.GetAtPath(assetPath) is TextureImporter textureImporter)
+			{
+				// A mask is data, not colour: read as sRGB, every value but 0 and 1 comes out wrong. It
+				// carries no alpha of its own - the mask is in the colour channels - and it is never a normal
+				// map, whichever slot ends up naming it.
+				textureImporter.textureType         = TextureImporterType.Default;
+				textureImporter.sRGBTexture         = false;
+				textureImporter.alphaSource         = TextureImporterAlphaSource.None;
+				textureImporter.alphaIsTransparency = false;
+				textureImporter.userData = GeneratedAssetVersion.Stamp(textureImporter.userData, GeneratedVersion, AlphaMaskVersion);
+				textureImporter.SaveAndReimport();
+			}
+			return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+		}
+
 		public static Cubemap ImportSkybox(VTF frontVTF, VTF backVTF, VTF upVTF, VTF downVTF, VTF leftVTF, VTF rightVTF, string outputPath)
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, ".png");

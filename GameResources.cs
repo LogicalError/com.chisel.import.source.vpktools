@@ -182,6 +182,22 @@ namespace Chisel.Import.Source.VPKTools
 		}
 
 
+		/// <summary>
+		/// The alpha channel of a texture, as a mask texture of its own (see
+		/// <see cref="Texture2DImporter.ImportAlphaMask"/>), or null when it has none.
+		/// </summary>
+		public Texture2D ImportAlphaMask(string entryName, string[] searchPaths = null)
+		{
+			if (string.IsNullOrEmpty(entryName)) return null;
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVTF);
+			searchPaths ??= PackagePath.DefaultMaterialPaths;
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null || entry.extension != PackagePath.ExtensionVTF)
+				return null;
+			return Texture2DImporter.ImportAlphaMask(LoadVTF(entry), PackagePath.GetOutputPath(entry.keyname));
+		}
+
+
 		public VMT LoadVMT(string entryName, string[] searchPaths = null)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;

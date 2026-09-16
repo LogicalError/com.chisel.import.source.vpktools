@@ -26,6 +26,7 @@ Shader "Chisel/Source/LightmappedGeneric"
 		_PhongExponent ("$phongexponent", Float) = 5.0
 		_PhongFresnelRanges ("$phongfresnelranges", Vector) = (1,1,1,0)
 		_PhongMaskFromBaseAlpha ("Phong mask is base alpha", Float) = 0
+		_PhongMask ("Phong mask (the $bumpmap's alpha)", 2D) = "white" {}
 
 		_SelfIllumMask ("$selfillummask", 2D) = "white" {}
 		_SelfIllumTint ("$selfillumtint", Color) = (0,0,0,1)
@@ -57,11 +58,61 @@ Shader "Chisel/Source/LightmappedGeneric"
 		#pragma shader_feature_local _DETAIL
 		#pragma shader_feature_local _ENVMAPMASK
 		#pragma shader_feature_local _PHONG
+		#pragma shader_feature_local _PHONGMASK
 		#pragma shader_feature_local _SELFILLUM
 		#pragma shader_feature_local _ALPHATEST_ON
 
+		// The surface output struct and the lighting functions are read out of the .shader file by
+		// Unity's surface shader generator, which does not follow #include for either - so they cannot
+		// move into the shared body, and VertexLitGeneric carries the same block. The phong maths they
+		// call does live in the shared body.
+		struct SourceSurfaceOutput
+		{
+			fixed3 Albedo;
+			fixed3 Specular;
+			fixed3 Normal;
+			half3  Emission;
+			half   Smoothness;
+			half   Occlusion;
+			fixed  Alpha;
+			// Everything in Source's phong that does not depend on a light: mask * fresnel * $phongboost.
+			half   PhongScale;
+		};
+
 		#include "SourceGeneric.cginc"
-#pragma surface surf StandardSpecular fullforwardshadows addshadow keepalpha
+
+		void SourceToStandardSpecular(SourceSurfaceOutput s, out SurfaceOutputStandardSpecular standard)
+		{
+			standard.Albedo     = s.Albedo;
+			standard.Specular   = s.Specular;
+			standard.Normal     = s.Normal;
+			standard.Emission   = s.Emission;
+			standard.Smoothness = s.Smoothness;
+			standard.Occlusion  = s.Occlusion;
+			standard.Alpha      = s.Alpha;
+		}
+
+		half4 LightingSourceSpecular(SourceSurfaceOutput s, half3 viewDir, UnityGI gi)
+		{
+			SurfaceOutputStandardSpecular standard;
+			SourceToStandardSpecular(s, standard);
+			half4 color = LightingStandardSpecular(standard, viewDir, gi);
+		#ifdef _PHONG
+			// Source adds its highlight once per light, which is why it belongs here: this is where the
+			// light's direction is known, and where its colour already carries the attenuation Source
+			// multiplies in. The forward base pass brings the brightest light, the additive pass the rest.
+			color.rgb += SourcePhongLight(s.Normal, viewDir, gi.light.dir, gi.light.color, s.PhongScale);
+		#endif
+			return color;
+		}
+
+		void LightingSourceSpecular_GI(SourceSurfaceOutput s, UnityGIInput data, inout UnityGI gi)
+		{
+			SurfaceOutputStandardSpecular standard;
+			SourceToStandardSpecular(s, standard);
+			LightingStandardSpecular_GI(standard, data, gi);
+		}
+#pragma surface surf SourceSpecular fullforwardshadows addshadow keepalpha
 		ENDCG
 	}
 
