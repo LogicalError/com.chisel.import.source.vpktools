@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 3);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 4);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -530,8 +530,7 @@ namespace Chisel.Import.Source.VPKTools
 			};
 
 			var mainTexture = SetMaterialTexture(gameResources, unityMaterial, "_MainTex", sourceMaterial.BaseTextureName);
-			if (sourceMaterial.Color != null)
-				unityMaterial.SetColor("_Color", sourceMaterial.Color);
+			unityMaterial.SetColor("_Color", ShaderColor(ModulationColorOf(sourceMaterial)));
 
 			// UnlitTwoTexture: $texture2 is multiplied over the base texture, with a transform of its own.
 			if (unityMaterial.HasProperty("_Texture2"))
@@ -592,8 +591,7 @@ namespace Chisel.Import.Source.VPKTools
 					// Set explicitly: the shader defaults this to black so a material NOT using
 					// self-illum carries no tint, which means Source's "no $selfillumtint means full
 					// strength" has to be spelled out here.
-					unityMaterial.SetColor("_SelfIllumTint", (sourceMaterial.SelfIlluminationColor != null)
-															  ? sourceMaterial.SelfIlluminationColor : Color.white);
+					unityMaterial.SetColor("_SelfIllumTint", ShaderColor(SelfIllumTintOf(sourceMaterial)));
 					unityMaterial.globalIlluminationFlags = MaterialGlobalIlluminationFlags.AnyEmissive;
 				}
 			}
@@ -606,6 +604,7 @@ namespace Chisel.Import.Source.VPKTools
 				unityMaterial.EnableKeyword("_ENVMAPMASK");
 
 			ApplySourceSpecular(gameResources, unityMaterial, sourceMaterial, mainTexture);
+			ApplySourceVertexColor(gameResources, unityMaterial, sourceMaterial);
 			ApplySourceBlendState(unityMaterial, sourceMaterial);
 
 			// $nocull, which the Standard shader cannot express at all. Source uses it for glass,
@@ -636,7 +635,7 @@ namespace Chisel.Import.Source.VPKTools
 			// this game that set $phong also set $phongfresnelranges, and without it every one of
 			// them reads as lit from all directions at once.
 			unityMaterial.EnableKeyword("_PHONG");
-			unityMaterial.SetColor("_SpecColorTint", PhongTintOf(sourceMaterial));
+			unityMaterial.SetColor("_SpecColorTint", ShaderColor(PhongTintOf(sourceMaterial)));
 			unityMaterial.SetFloat("_PhongBoost", sourceMaterial.PhongBoost ?? 1.0f);
 			unityMaterial.SetFloat("_PhongExponent", PhongExponentOf(sourceMaterial));
 			unityMaterial.SetFloat("_PhongExponentFactor", sourceMaterial.PhongExponentFactor ?? 0.0f);
@@ -692,6 +691,151 @@ namespace Chisel.Import.Source.VPKTools
 			if (SetMaterialTexture(gameResources, unityMaterial, "_PhongWarp",
 								   sourceMaterial.PhongWarpTextureName) != null)
 				unityMaterial.EnableKeyword("_PHONGWARP");
+		}
+
+		/// <summary>What a Source shader does with a mesh's vertex colour.</summary>
+		[System.Flags]
+		internal enum SourceVertexColor
+		{
+			None  = 0,
+			/// <summary>The colour multiplies the base colour.</summary>
+			Color = 1,
+			/// <summary>The alpha multiplies opacity.</summary>
+			Alpha = 2,
+			/// <summary>The alpha is the weight $basetexture2 / $bumpmap2 are blended in by.</summary>
+			Blend = 4,
+		}
+
+		/// <summary>
+		/// What the Source shader a material asks for does with the mesh's vertex colour - which differs per
+		/// shader (SDK 2013):
+		/// <list type="bullet">
+		/// <item>UnlitGeneric multiplies the base colour by it when the material sets $vertexcolor, and its
+		/// opacity by the alpha when it sets $vertexalpha (vertexlit_and_unlit_generic_ps2x.fxc).</item>
+		/// <item>LightmappedGeneric multiplies by it when the material sets $vertexcolor; and when the
+		/// material has a second layer ($basetexture2 or $bumpmap2) the vertex ALPHA is that layer's blend
+		/// weight rather than opacity (lightmappedgeneric_vs20.fxc) - which is how a displacement paints one
+		/// texture into another. WorldVertexTransition is the same shader.</item>
+		/// <item>VertexLitGeneric ignores both flags: its helper forces them off
+		/// ("bHasVertexColor = bVertexLitGeneric ? false : ..."), and the skin shader it draws $phong with
+		/// declares the stream but never reads it.</item>
+		/// </list>
+		/// </summary>
+		internal static SourceVertexColor VertexColorOf(VMT sourceMaterial)
+		{
+			var shader = SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName);
+			var vertexColor = sourceMaterial.VertexColor == true;
+
+			if (string.Equals(shader, "UnlitGeneric", System.StringComparison.OrdinalIgnoreCase))
+			{
+				return (vertexColor ? SourceVertexColor.Color : SourceVertexColor.None) |
+					   (sourceMaterial.VertexAlpha == true ? SourceVertexColor.Alpha : SourceVertexColor.None);
+			}
+
+			if (string.Equals(shader, "LightmappedGeneric", System.StringComparison.OrdinalIgnoreCase))
+			{
+				var blend = !string.IsNullOrEmpty(sourceMaterial.BaseTexture2Name) ||
+							!string.IsNullOrEmpty(sourceMaterial.BumpMap2Name);
+				var result = blend ? SourceVertexColor.Blend : SourceVertexColor.None;
+				if (vertexColor)
+					result |= SourceVertexColor.Color | (blend ? SourceVertexColor.None : SourceVertexColor.Alpha);
+				return result;
+			}
+
+			return SourceVertexColor.None;
+		}
+
+		// The shaders take these as 0/1 floats rather than keywords (see ChiselSourceGeneric.cginc), with a
+		// single keyword for "there is a second layer".
+		private static void ApplySourceVertexColor(GameResources gameResources, Material unityMaterial, VMT sourceMaterial)
+		{
+			var use = VertexColorOf(sourceMaterial);
+			unityMaterial.SetFloat("_VertexColor", (use & SourceVertexColor.Color) != 0 ? 1 : 0);
+			unityMaterial.SetFloat("_VertexAlpha", (use & SourceVertexColor.Alpha) != 0 ? 1 : 0);
+
+			unityMaterial.DisableKeyword("_VERTEXBLEND");
+			unityMaterial.SetFloat("_BlendBase2", 0);
+			unityMaterial.SetFloat("_BlendBump2", 0);
+			unityMaterial.SetFloat("_BlendModulate", 0);
+			if ((use & SourceVertexColor.Blend) == 0)
+				return;
+
+			var layers = 0;
+			if (SetMaterialTexture(gameResources, unityMaterial, "_BaseTexture2", sourceMaterial.BaseTexture2Name) != null)
+			{
+				unityMaterial.SetFloat("_BlendBase2", 1);
+				layers++;
+			}
+			if (SetMaterialTexture(gameResources, unityMaterial, "_BumpMap2", sourceMaterial.BumpMap2Name, isNormalMap: true,
+								   selfShadowed: sourceMaterial.BumpSelfShadowing == true) != null)
+			{
+				unityMaterial.SetFloat("_BlendBump2", 1);
+				layers++;
+			}
+			// A second layer the game does not ship blends in nothing here (Source shows its error texture), and
+			// the keyword is a shader variant of its own, so it is only worth enabling when a layer did load.
+			if (layers == 0)
+				return;
+
+			unityMaterial.EnableKeyword("_VERTEXBLEND");
+			// $blendmodulatetexture sharpens the blend: green moves the transition, red widens it.
+			if (SetMaterialTexture(gameResources, unityMaterial, "_BlendModulateTexture", sourceMaterial.BlendModulateTextureName) != null)
+				unityMaterial.SetFloat("_BlendModulate", 1);
+		}
+
+		/// <summary>
+		/// Source's rule for a colour constant it takes out of gamma space
+		/// (SetModulationPixelShaderDynamicState_LinearColorSpace, SetPixelShaderConstantGammaToLinear in
+		/// BaseVSShader.cpp): a component above 1 is an overbright and stays as it is, and the rest go
+		/// through mathlib's GammaToLinear - a 256-entry pow(x, 2.2) table that returns exactly 1 from 0.95
+		/// up and 0 below 0 (color_conversion.cpp).
+		/// </summary>
+		internal static float GammaToLinearConstant(float value)
+		{
+			if (value > 1.0f)
+				return value;
+			if (value < 0.0f)
+				return 0.0f;
+			if (value >= 0.95f)
+				return 1.0f;
+			// RoundFloatToInt rounds to nearest, ties to even, as the SSE conversion it is built on does.
+			var index = (float)System.Math.Round(value * 255.0f, System.MidpointRounding.ToEven);
+			return Mathf.Pow(index / 255.0f, 2.2f);
+		}
+
+		/// <summary>
+		/// The tint a Source shader multiplies the base colour by: $color times $color2 (BaseShader.h:
+		/// GetColorParameter), taken out of gamma space as a product.
+		/// </summary>
+		internal static Color ModulationColorOf(VMT sourceMaterial)
+		{
+			// RGBColor and Color convert into each other both ways, so each branch names its type.
+			Color color  = (sourceMaterial.Color  != null) ? (Color)sourceMaterial.Color  : Color.white;
+			Color color2 = (sourceMaterial.Color2 != null) ? (Color)sourceMaterial.Color2 : Color.white;
+			return new Color(GammaToLinearConstant(color.r * color2.r),
+							 GammaToLinearConstant(color.g * color2.g),
+							 GammaToLinearConstant(color.b * color2.b), 1);
+		}
+
+		/// <summary>$selfillumtint, which Source hands to the shader as written (SetPixelShaderConstant),
+		/// and which defaults to white.</summary>
+		internal static Color SelfIllumTintOf(VMT sourceMaterial)
+		{
+			if (sourceMaterial.SelfIlluminationColor == null)
+				return Color.white;
+			Color tint = sourceMaterial.SelfIlluminationColor;
+			return new Color(tint.r, tint.g, tint.b, 1);
+		}
+
+		/// <summary>
+		/// What to give Material.SetColor so the shader receives <paramref name="value"/>. SetColor takes a
+		/// colour in gamma space and, in a linear project, converts it before the shader sees it; the Source
+		/// values here are already what the shader should see, so they go in pre-encoded - Color.gamma is the
+		/// exact inverse of that conversion, overbright components included.
+		/// </summary>
+		internal static Color ShaderColor(Color value)
+		{
+			return (QualitySettings.activeColorSpace == ColorSpace.Linear) ? value.gamma : value;
 		}
 
 		/// <summary>
@@ -794,6 +938,8 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				case "_MainTex":
 				case "_DetailAlbedoMap":
+				// LightmappedGeneric's second layer is a base texture like the first.
+				case "_BaseTexture2":
 				// UnlitTwoTexture's second texture is color just like its first - it is multiplied over it.
 				case "_Texture2":
 					return true;

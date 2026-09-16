@@ -16,6 +16,17 @@ Shader "Chisel/Source/LightmappedGeneric"
 		[Normal] _BumpMap ("$bumpmap", 2D) = "bump" {}
 		_BumpScale ("Bump scale", Float) = 1.0
 
+		// The second layer, blended in by vertex alpha (displacements), and which parts of it there are.
+		_BaseTexture2 ("$basetexture2", 2D) = "white" {}
+		[Normal] _BumpMap2 ("$bumpmap2", 2D) = "bump" {}
+		_BlendModulateTexture ("$blendmodulatetexture", 2D) = "white" {}
+		[Toggle] _BlendBase2 ("Blend $basetexture2", Float) = 0
+		[Toggle] _BlendBump2 ("Blend $bumpmap2", Float) = 0
+		[Toggle] _BlendModulate ("Modulate the blend", Float) = 0
+		// $vertexcolor: the vertex colour tints, and - without a second layer - its alpha is opacity.
+		[Toggle] _VertexColor ("$vertexcolor", Float) = 0
+		[Toggle] _VertexAlpha ("Vertex alpha is opacity", Float) = 0
+
 		_DetailTex ("$detail", 2D) = "grey" {}
 		_DetailBlendFactor ("$detailblendfactor", Range(0,1)) = 1.0
 		_DetailBlendMode ("$detailblendmode", Float) = 0
@@ -60,6 +71,7 @@ Shader "Chisel/Source/LightmappedGeneric"
 		#pragma target 3.0
 
 		#pragma shader_feature_local _NORMALMAP
+		#pragma shader_feature_local _VERTEXBLEND
 		#pragma shader_feature_local _DETAIL
 		#pragma shader_feature_local _ENVMAPMASK
 		#pragma shader_feature_local _PHONG

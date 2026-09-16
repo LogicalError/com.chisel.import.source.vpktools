@@ -46,6 +46,28 @@ half      _Cutoff;
 	half      _DetailBlendMode;
 #endif
 
+// What the mesh's vertex colour does, as 0/1 switches rather than keywords: a surface shader's keywords are
+// preprocessed combination by combination, and five more of them took LightmappedGeneric past the shader
+// compiler's timeout. A lerp by a constant costs nothing next to that.
+//  _VertexColor  1: the colour multiplies the base colour ($vertexcolor)
+//  _VertexAlpha  1: the alpha multiplies opacity
+// Both stay 0 on a VertexLitGeneric material, which ignores vertex colour.
+half _VertexColor;
+half _VertexAlpha;
+
+// LightmappedGeneric's second layer: $basetexture2 and $bumpmap2, blended in by the mesh's vertex ALPHA -
+// which on a displacement is what Hammer's alpha painting wrote - and sharpened by $blendmodulatetexture.
+// One keyword for "there is a second layer"; which parts of it there are is again a set of 0/1 switches,
+// the textures defaulting to ones that leave the result alone.
+#ifdef _VERTEXBLEND
+	sampler2D _BaseTexture2;
+	sampler2D _BumpMap2;
+	sampler2D _BlendModulateTexture;
+	half      _BlendBase2;
+	half      _BlendBump2;
+	half      _BlendModulate;
+#endif
+
 // $envmap is nearly always the literal "env_cubemap", meaning "use the cubemap baked for this
 // spot", which is Unity's reflection probes - so reflection is left to the Standard lighting model
 // rather than sampled here, and $envmapmask/$envmaptint modulate how reflective the surface is.
@@ -122,6 +144,9 @@ struct Input
 	// World space, for the phong fresnel, which Source takes from the view angle alone.
 	float3 worldPos;
 	float3 worldNormal;
+	// The mesh's vertex colour: a tint with $vertexcolor, opacity with $vertexalpha, and the weight of the
+	// second layer on a blending material.
+	float4 color : COLOR;
 	INTERNAL_DATA
 };
 
@@ -161,6 +186,23 @@ struct Input
 void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 {
 	fixed4 base = tex2D(_MainTex, IN.uv_MainTex);
+
+#ifdef _VERTEXBLEND
+	// The weight the second layer comes in by is the vertex alpha (lightmappedgeneric_vs20.fxc). With a
+	// $blendmodulatetexture its green channel moves the transition and its red channel widens it - except
+	// on a self-illuminated material, where Source compiles that step out (lightmappedgeneric_ps2_3_x.h).
+	// The default modulation texture is white, which keeps smoothstep's two edges apart.
+	half layerBlend = IN.color.a;
+	#ifndef _SELFILLUM
+		half4 modulation = tex2D(_BlendModulateTexture, IN.uv_MainTex);
+		half  sharpened  = smoothstep(saturate(modulation.g - modulation.r), saturate(modulation.g + modulation.r), layerBlend);
+		layerBlend = lerp(layerBlend, sharpened, _BlendModulate);
+	#endif
+	// Only the colour blends. The alpha Source goes on reading as opacity and as the self-illum mask is
+	// still the first layer's.
+	base.rgb = lerp(base.rgb, tex2D(_BaseTexture2, IN.uv_MainTex).rgb, layerBlend * _BlendBase2);
+#endif
+
 	fixed3 albedo = base.rgb * _Color.rgb;
 	half alpha = base.a * _Color.a;
 
@@ -171,6 +213,9 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	half illumMask = lerp(tex2D(_SelfIllumMask, IN.uv_MainTex).r, base.a, _SelfIllumFromBaseAlpha);
 	alpha = lerp(alpha, _Color.a, _SelfIllumFromBaseAlpha);
 #endif
+
+	// Before the alpha test: Source tests the alpha it outputs, vertex alpha included.
+	alpha *= lerp(1.0h, IN.color.a, _VertexAlpha);
 
 #ifdef _ALPHATEST_ON
 	clip(alpha - _Cutoff);
@@ -186,6 +231,10 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	fixed3 blended   = lerp(modulated, additive, step(0.5, _DetailBlendMode));
 	albedo = lerp(albedo, blended, _DetailBlendFactor);
 #endif
+
+	// After the detail texture, as Source does it. LightmappedGeneric - the only shader here that honours
+	// $vertexcolor - takes the colour as it is, without the gamma decode UnlitGeneric applies.
+	albedo *= lerp(half3(1, 1, 1), IN.color.rgb, _VertexColor);
 
 	o.Albedo = albedo;
 	o.Alpha  = alpha;
@@ -204,6 +253,12 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 #ifdef _NORMALMAP
 	fixed3 normal = UnpackNormal(tex2D(_BumpMap, IN.uv_MainTex));
 	normal.xy *= _BumpScale;
+	#ifdef _VERTEXBLEND
+		// Source only blends a second normal map into a first one.
+		fixed3 normal2 = UnpackNormal(tex2D(_BumpMap2, IN.uv_MainTex));
+		normal2.xy *= _BumpScale;
+		normal = lerp(normal, normal2, layerBlend * _BlendBump2);
+	#endif
 	o.Normal = normalize(normal);
 #else
 	o.Normal = fixed3(0, 0, 1);

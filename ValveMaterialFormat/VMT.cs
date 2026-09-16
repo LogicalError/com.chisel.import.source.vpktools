@@ -14,6 +14,13 @@ namespace Chisel.Import.Source.VPKTools
 		public string		MaterialTypeName;
 
 		public RGBColor		Color;
+		/// <summary>$color2 - every Source shader's second tint, which the material system multiplies into
+		/// $color (BaseShader.h: GetColorParameter "return tint color (color*color2)").</summary>
+		public RGBColor		Color2;
+		/// <summary>$vertexcolor / $vertexalpha - modulate by the mesh's vertex colour and alpha, in the
+		/// shaders that honour them (MaterialImporter.VertexColorOf).</summary>
+		public bool?		VertexColor;
+		public bool?		VertexAlpha;
 
 		public int?			BaseTextureFrame;
 		public string       BaseTextureName;
@@ -48,7 +55,7 @@ namespace Chisel.Import.Source.VPKTools
 		public float?		PhongExponentFactor;
 		public float?		PhongBoost;
 		/// <summary>$phongfresnelranges [facing middle grazing] - Source shapes the phong term with
-		/// this, and 1330 of the 1334 materials that use $phong set it.</summary>
+		/// this, and 1913 of the 1923 materials in this game that use $phong set it.</summary>
 		public Vector3?		PhongFresnelRanges;
 		/// <summary>$basemapalphaphongmask - take the phong mask from the BASE texture's alpha
 		/// instead of the normal map's.</summary>
@@ -101,6 +108,22 @@ namespace Chisel.Import.Source.VPKTools
 		public bool HaveTransparency { get { return HaveTranslucency || HaveAdditiveBlending || HaveCutout; } }
 
 
+
+		/// <summary>
+		/// This material as vbsp gives it to a brush face that is not a displacement: LightmappedGeneric with
+		/// the second layer's keys removed ($basetexture2, $bumpmap2, $blendmodulatetexture - vbsp's
+		/// worldvertextransitionfixup.cpp writes it out as "&lt;material&gt;_wvt_patch"), so the face shows the
+		/// first layer only. A shallow copy: nothing on a VMT is changed after it is read.
+		/// </summary>
+		public VMT WithoutSecondLayer()
+		{
+			var copy = (VMT)MemberwiseClone();
+			copy.MaterialTypeName         = "LightmappedGeneric";
+			copy.BaseTexture2Name         = null;
+			copy.BumpMap2Name             = null;
+			copy.BlendModulateTextureName = null;
+			return copy;
+		}
 
 		public void GetAllTextureNames(HashSet<string> outputTextureNames)
 		{
@@ -374,7 +397,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$color_ring_inner_intensity": // '0.9'.
 						case "$color_ring_outer": // '[1 0.5 0.5]'.
 						case "$color_ring_outer_intensity": // '0.91'.
-						case "$color2": // '.485 .485 .485'. '[1.1 0.7 0]'. '[3.2 3.2 3.2]'. '{255 80 32}'. '{30.0 30.0 30.0}'. '{68.0 53.0 59.0 $model 1'. '{96 96 6}'. '3 3 3'.
 						case "$color2base": // '{ 255 255 180 }'. '{50 150 255}'.
 						case "$colormasktexture": // 'models\player\mp_scientist_hev\v_hand_sheet_colormask'.
 						case "$colormodenabled": // '1'.
@@ -1009,11 +1031,9 @@ namespace Chisel.Import.Source.VPKTools
 						case "$outlinestart1": // '0.44'. '0.55'.
 						case "$texture3_blendmode": // ''. '0'.
 						case "vertexlitgeneric_dx9": // ''.
-						case "$vertexalpha": // '0'. '1'.
 						case "$vertexfog": // '1'.
 						case "$vertextcolor": // '1'.
 						case "$vertextransform": // '0'.
-						case "$vertexcolor": // '0'/'1'.
 						case "$vertexcolors": // '1'.
 						case "$vertexcolormodulate": // '1'.
 						{
@@ -1072,6 +1092,10 @@ namespace Chisel.Import.Source.VPKTools
 						case "$blendmodulatetexture": { vmfMaterial.BlendModulateTextureName = property.Value; break; }
 
 						case "$color": { vmfMaterial.Color = TextParser.ParseColor(property.Value); break; }
+						// '.485 .485 .485'. '[1.1 0.7 0]'. '[3.2 3.2 3.2]'. '{255 80 32}'. '{68.0 53.0 59.0 $model 1'. '3 3 3'.
+						case "$color2": { vmfMaterial.Color2 = TextParser.ParseColor(property.Value); break; }
+						case "$vertexcolor": { TryParseBoolProperty(property, ref vmfMaterial.VertexColor); break; }
+						case "$vertexalpha": { TryParseBoolProperty(property, ref vmfMaterial.VertexAlpha); break; }
 
 						case "$allowalphatocoverage": // '1'.
 						case "$alpha": // '.85'. '1.000000'. '0.700000'. '0.800000'. '0.50'.

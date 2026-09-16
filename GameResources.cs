@@ -230,9 +230,14 @@ namespace Chisel.Import.Source.VPKTools
 		// of those sides re-reads the VMT out of the VPK, re-parses it, and does an AssetDatabase
 		// lookup, only to arrive at the Material we already had. Keyed on the GameEntry instance
 		// because entries are interned in `lookup`, so the same name always yields the same object.
-		readonly Dictionary<(GameEntry entry, bool isSprite), Material> importedMaterials = new();
+		readonly Dictionary<(GameEntry entry, bool isSprite, bool brushFace), Material> importedMaterials = new();
 
-		public Material ImportVMT(string entryName, string[] searchPaths = null, bool isSprite = false)
+		/// <param name="brushFace">
+		/// The material goes on a brush face that is not a displacement. A material that blends a second layer
+		/// by vertex alpha then comes back as vbsp would give it to such a face, without that layer
+		/// (<see cref="VMT.WithoutSecondLayer"/>), saved beside the original as "&lt;name&gt;_wvt_patch".
+		/// </param>
+		public Material ImportVMT(string entryName, string[] searchPaths = null, bool isSprite = false, bool brushFace = false)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVMT);
@@ -242,7 +247,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (entry == null)
 				return null;
 
-			if (importedMaterials.TryGetValue((entry, isSprite), out var cachedMaterial))
+			if (importedMaterials.TryGetValue((entry, isSprite, brushFace), out var cachedMaterial))
 				return cachedMaterial;
 
 			Material material = null;
@@ -250,12 +255,17 @@ namespace Chisel.Import.Source.VPKTools
 			if (sourceMaterial != null)
 			{
 				var outputPath = PackagePath.GetOutputPath(entry.keyname);
+				if (brushFace && (MaterialImporter.VertexColorOf(sourceMaterial) & MaterialImporter.SourceVertexColor.Blend) != 0)
+				{
+					sourceMaterial = sourceMaterial.WithoutSecondLayer();
+					outputPath = Path.ChangeExtension(outputPath, null) + "_wvt_patch";
+				}
 				material = MaterialImporter.Import(this, sourceMaterial, outputPath, isSprite);
 			}
 
 			// Cached even when null: a VMT that failed to load will fail identically next time,
 			// and a miss is exactly as expensive as a hit.
-			importedMaterials[(entry, isSprite)] = material;
+			importedMaterials[(entry, isSprite, brushFace)] = material;
 			return material;
 		}
 

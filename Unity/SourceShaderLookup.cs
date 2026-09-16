@@ -27,6 +27,25 @@ namespace Chisel.Import.Source.VPKTools
 		// cached too, since a Source shader we have no equivalent for will keep on not having one.
 		readonly static Dictionary<string, Shader> s_Lookup = new();
 
+		// Source shaders that are another one under a different name. On DX9, WorldVertexTransition IS
+		// LightmappedGeneric with a $basetexture2: worldvertextransition.cpp draws with LightmappedGeneric's
+		// own helper. An alias wins over a shader asset of the aliased name, since it states what the
+		// Source shader is rather than approximating it.
+		readonly static Dictionary<string, string> s_Aliases = new(System.StringComparer.OrdinalIgnoreCase)
+		{
+			{ "WorldVertexTransition", "LightmappedGeneric" },
+		};
+
+		/// <summary>The Source shader a VMT's shader name stands for, aliases resolved - which is what
+		/// decides what the material's parameters mean.</summary>
+		public static string Canonical(string sourceShaderName)
+		{
+			if (string.IsNullOrWhiteSpace(sourceShaderName))
+				return sourceShaderName;
+			var name = sourceShaderName.Trim();
+			return s_Aliases.TryGetValue(name, out var alias) ? alias : name;
+		}
+
 		/// <summary>Returns the Unity shader standing in for <paramref name="sourceShaderName"/>, or
 		/// null when there is none and the caller should fall back to its own approximation.</summary>
 		public static Shader Find(string sourceShaderName)
@@ -42,7 +61,7 @@ namespace Chisel.Import.Source.VPKTools
 			// Matching on the VMT's spelling therefore silently missed whole families of materials
 			// and dropped them on the Standard-shader fallback, so the name is resolved against an
 			// index of what the project actually has instead.
-			if (!EnsureIndex().TryGetValue(sourceShaderName.Trim(), out shader))
+			if (!EnsureIndex().TryGetValue(Canonical(sourceShaderName), out shader))
 				shader = null;
 			s_Lookup[sourceShaderName] = shader;
 			return shader;

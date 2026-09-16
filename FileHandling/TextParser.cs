@@ -35,73 +35,33 @@ namespace Chisel.Import.Source.VPKTools
 			return Encoding.ASCII.GetString(bytes);
 		}
 
+		/// <summary>
+		/// A colour parameter of a VMT, read the way the material system reads a vector parameter: "[r g b]"
+		/// as written, "{r g b}" divided down from 0..255 (<see cref="ParseDoubles"/>), and a single number
+		/// as a grey. Nothing else is done to it - whether Source then takes the value out of gamma space
+		/// differs from one parameter to the next, so that is left to whoever applies it.
+		/// </summary>
+		/// <remarks>
+		/// This used to be a VMF light parser - every component divided by 255 and raised to 2.2, a fourth
+		/// read as a brightness - which turned "[1 1 1]" into 0.000005, and with it the $phongtint, $color
+		/// and $selfillumtint of hundreds of materials into black.
+		/// </remarks>
 		public static RGBColor ParseColor(string stringValue)
 		{
 			var values = ParseDoubles(stringValue);
 			if (values == null || values.Length == 0)
 				return null;
 
-			if (values.Length == 8)
-			{
-				values[0] = values[4];
-				values[1] = values[5];
-				values[2] = values[6];
-				values[3] = values[7];
-				Array.Resize(ref values, 4);
-			}
-
-			for (int i = 0; i < values.Length; i++)
-			{
-				if (values[i] < 0.0f)
-				{
-					Debug.LogWarning($"Invalid light color '{stringValue}'");
-					return null;
-				}
-			}
-
-			
-			switch (values.Length)
-			{
-				case 1:
-				{
-					values[0] = Math.Pow( values[0] / 255.0, 2.2);
-					values = new[] { values[0], values[0], values[0] };
-					break;
-				}
-				case 3:
-				{
-					values[0] = Math.Pow(values[0] / 255.0, 2.2);
-					values[1] = Math.Pow(values[1] / 255.0, 2.2);
-					values[2] = Math.Pow(values[2] / 255.0, 2.2);
-					break;
-				}
-				case 4:
-				{
-					values[0] = Math.Pow(values[0] / 255.0, 2.2);
-					values[1] = Math.Pow(values[1] / 255.0, 2.2);
-					values[2] = Math.Pow(values[2] / 255.0, 2.2);
-
-					var scale = values[3] / 255.0;
-					values[0] *= scale;
-					values[1] *= scale;
-					values[2] *= scale;
-					break;
-				}
-
-				default:
-				{
-					Debug.LogWarning($"Invalid light color '{stringValue}'");
-					return null;
-				}
-			}
-
-			var color = new RGBColor
+			// A single number is a scalar parameter, and the material system hands a scalar to a colour as
+			// a grey; a vector shorter than three leaves the rest at zero.
+			if (values.Length == 1)
+				return new RGBColor { r = (float)values[0], g = (float)values[0], b = (float)values[0] };
+			return new RGBColor
 			{
 				r = (float)values[0],
 				g = (float)values[1],
-				b = (float)values[2]
+				b = (values.Length > 2) ? (float)values[2] : 0
 			};
-			return color;
 		}
 
 		public static bool SafeParse(string input, out float output)
@@ -111,7 +71,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (string.IsNullOrWhiteSpace(input))
 				return false;
 			input = input.Replace("..", ".").Replace(',', '.');
-			if (input[0] == '-' && input[1] == '.')
+			if (input.Length > 1 && input[0] == '-' && input[1] == '.')
 			{
 				input = "-0" + input.Substring(1);
 			} else
@@ -131,7 +91,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (string.IsNullOrWhiteSpace(input))
 				return false;
 			input = input.Replace("..", ".").Replace(',', '.');
-			if (input[0] == '-' && input[1] == '.')
+			if (input.Length > 1 && input[0] == '-' && input[1] == '.')
 			{
 				input = "-0" + input.Substring(1);
 			} else
@@ -301,49 +261,42 @@ namespace Chisel.Import.Source.VPKTools
 			return result;
 		}
 
+		/// <summary>
+		/// The numbers of a VMT vector: "[x y z]" taken as written, "{r g b}" in 0..255 and divided down, and
+		/// a bare list as written. The closing bracket is not required, and reading stops at the first token
+		/// that is not a number - the files hold values like "{68.0 53.0 59.0 $model 1", where a missing quote
+		/// swallowed the next key, and the numbers in front of it still count.
+		/// </summary>
 		public static double[] ParseDoubles(string input)
 		{
-			if (string.IsNullOrEmpty(input))
+			if (string.IsNullOrWhiteSpace(input))
 			{
 				Debug.LogWarning($"Unexpected value found {input}");
 				return null;
 			}
 			input = input.Trim();
-			if (string.IsNullOrEmpty(input))
-			{
-				Debug.LogWarning($"Unexpected value found {input}");
-				return null;
-			}
-			bool isBytes = false;
-			if (input.StartsWith("[") &&
-				(input.EndsWith("]") || input.EndsWith("}")))
-			{
-				input = input.Substring(1, input.Length - 2);
-			} else
-			if (input.StartsWith("{") &&
-				(input.EndsWith("]") || input.EndsWith("}")))
-			{
-				input = input.Substring(1, input.Length - 2);
-				isBytes = true;
-			}
-			var values = input.Split(new [] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 
-			var result = new double[values.Length];
-			for (var i = 0; i < values.Length; i++)
-			{
-				if (SafeParse(values[i], out result[i]))
-				{
-					if (isBytes)
-					{
-						result[i] /= 255.0;
-					}
-					continue;
-				}
+			var isBytes = input[0] == '{';
+			if (input[0] == '[' || input[0] == '{')
+				input = input.Substring(1);
 
+			var result = new List<double>();
+			foreach (var token in input.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
+			{
+				var number = token.TrimEnd(']', '}');
+				if (number.Length == 0 || !SafeParse(number, out double value))
+					break;
+				result.Add(isBytes ? value / 255.0 : value);
+				if (number.Length != token.Length)
+					break;
+			}
+
+			if (result.Count == 0)
+			{
 				Debug.LogWarning($"Unexpected value found '{input}' for doubles");
 				return null;
 			}
-			return result;
+			return result.ToArray();
 		}
 
 		public static Vector3[] ParsePoints(string value)
