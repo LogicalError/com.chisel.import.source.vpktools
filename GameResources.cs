@@ -269,6 +269,39 @@ namespace Chisel.Import.Source.VPKTools
 			return material;
 		}
 
+		// What vbsp makes of a brush side with each material (see VMTContents), read once per material
+		readonly Dictionary<GameEntry, VMTContents> materialContents = new();
+
+		/// <summary>
+		/// What vbsp makes of a brush side with this material: its contents and surface flags, as FindMiptex gives
+		/// them. A material that can't be found comes back as <see cref="VMTContents.Missing"/>, which vbsp builds as
+		/// solid.
+		/// </summary>
+		public VMTContents GetMaterialContents(string materialName)
+		{
+			if (string.IsNullOrEmpty(materialName)) return VMTContents.Missing;
+			var entryName = materialName.ToLowerInvariant();
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVMT);
+			GameEntry entry = GetEntry(entryName, PackagePath.DefaultMaterialPaths);
+			if (entry == null)
+				return VMTContents.Missing;
+			if (materialContents.TryGetValue(entry, out var cached))
+				return cached;
+			var contents = VMTContents.FromText(LoadText(entry), LoadIncludedMaterialText);
+			materialContents[entry] = contents;
+			return contents;
+		}
+
+		// A "patch" material names the material it includes by its path in the game, usually with the materials/
+		// folder and the extension
+		string LoadIncludedMaterialText(string include)
+		{
+			if (string.IsNullOrEmpty(include)) return null;
+			var entryName = include.ToLowerInvariant();
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVMT);
+			return LoadText(GetEntry(entryName) ?? GetEntry(entryName, PackagePath.DefaultMaterialPaths));
+		}
+
 		// any reference to a .spr file, is really a .vmt file
 		public VMT LoadSPR(string entryName, string[] searchPaths = null)
 		{
