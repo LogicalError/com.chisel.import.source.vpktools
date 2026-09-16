@@ -16,8 +16,9 @@
 //                              shader at all, and is why lit signage/screens imported flat
 //   $detail/$detailscale/...   second texture blended over the base at its own tiling
 //   $envmap/$envmapmask/$tint  cubemap reflection, masked and tinted
-//   $phong/$phongtint/...      Source's additive specular highlight: masked per pixel, shaped by
-//                              $phongfresnelranges, and added once per light by the lighting function
+//   $phong/$phongtint/...      Source's specular highlight, masked, tinted and shaped per pixel, and
+//                              handed to Unity's lighting as the specular colour and smoothness that
+//                              give its highlight the same width and peak (SourcePhongToStandard)
 //   $alphatest/$translucent    handled by the material's blend state + _ALPHATEST_ON, as the
 //                              Standard shader does, so one shader covers every blend mode
 //   $nocull                    _Cull, which the Standard shader does not expose - Source uses it
@@ -64,10 +65,13 @@ half _Smoothness;
 half _SpecularScale;
 fixed4 _SpecColorTint;
 
-// Source's $phong is NOT a PBR reflectance - it is an additive highlight, masked per-pixel and
-// shaped by $phongfresnelranges so that it is weak head-on and blooms at grazing angles. Feeding it
-// into o.Specular instead makes every phong material read as polished metal, so it is computed here
-// and added by the lighting function, leaving o.Specular for $phongtint-less PBR use.
+// Source's $phong is an additive highlight, masked per pixel and shaped by $phongfresnelranges so that
+// it is weak head-on and blooms at grazing angles, and Source adds it once per light. Unity's deferred
+// path has no place to add a term per light - one shared pass lights every surface with the Standard
+// BRDF - so the highlight goes in as o.Specular and o.Smoothness instead, scaled so that Unity's lobe
+// has the same width and the same peak (SourcePhongToStandard). What that cannot carry over: Unity's
+// own Fresnel still brightens the lobe at grazing light angles, and the smoothness lets reflection
+// probes show at grazing view angles.
 #ifdef _PHONG
 	half   _PhongBoost;
 	// Negative means the exponent comes from _PhongExponentMap's red channel instead. Source's own
@@ -99,6 +103,7 @@ fixed4 _SpecColorTint;
 		// $phongwarptexture: a colour table indexed by { lobe, fresnel }, which is how Source makes a
 		// surface iridescent - the highlight shifts hue with the viewing angle instead of scaling.
 		sampler2D _PhongWarp;
+		float4    _PhongWarp_TexelSize;
 	#endif
 #endif
 
@@ -114,9 +119,7 @@ struct Input
 {
 	float2 uv_MainTex;
 	float2 uv_DetailTex;
-	// World space, so the phong highlight below can be computed without a custom lighting
-	// model - Unity's surface shader generator does not follow #include when resolving one,
-	// so neither the lighting function nor a custom output struct can live in this file.
+	// World space, for the phong fresnel, which Source takes from the view angle alone.
 	float3 worldPos;
 	float3 worldNormal;
 	INTERNAL_DATA
@@ -133,27 +136,29 @@ struct Input
 						  : lerp(ranges.x, ranges.y, 2.0h * f);
 	}
 
-	// What one light adds to the highlight (SpecularAndRimTerms in common_vertexlitgeneric_dx9.h): the
-	// view reflected about the normal, dotted with the light and raised to the exponent, masked by N.L
-	// so a surface turned away from the light keeps none of it, and modulated by the light's colour -
-	// which in a surface shader already carries that light's attenuation and shadow.
-	// PhongScale is everything that does not depend on the light: mask * $phongboost, and the fresnel
-	// too unless a warp texture is reading it.
-	half3 SourcePhongLight(SourceSurfaceOutput s, half3 viewDir, half3 lightDir, half3 lightColor)
+	// Source adds, per light, scale * (R.L)^n * N.L * light (SpecularAndRimTerms in
+	// common_vertexlitgeneric_dx9.h), where scale is the tint, mask, $phongboost and fresnel. Unity's
+	// StandardSpecular lobe is instead set by a specular colour and a smoothness, so this picks the two
+	// that make it the same highlight:
+	//  - width: a Phong lobe (R.L)^n is a Blinn-Phong lobe (N.H)^4n, and Blinn-Phong m corresponds to
+	//    roughness alpha = sqrt(2 / (m + 2)) (Walter et al. 2007), so alpha^2 = 1 / (2n + 1), and Unity's
+	//    smoothness is 1 - sqrt(alpha);
+	//  - peak: at N.H = N.L = N.V = 1 Unity's specular term is specColor * V * D * pi = specColor / (4
+	//    alpha^2), and Source's is scale, so specColor = scale * 4 alpha^2.
+	void SourcePhongToStandard(half3 scale, half exponent, inout SurfaceOutputStandardSpecular o)
 	{
-		half  lobe = pow(saturate(dot(reflect(-lightDir, s.Normal), viewDir)), s.PhongExponent);
-		half3 highlight = lobe;
-	#ifdef _PHONGWARP
-		// The warp replaces the plain lobe with a lookup at { (L.R)^k, fresnel }, in colour. Note the
-		// fresnel is NOT clamped - ranges like [.4 .6 1.6] run past 1 - and Source's warp textures set
-		// no CLAMP flag, so it wraps around the table there exactly as it does here.
-		highlight *= tex2D(_PhongWarp, float2(lobe, s.PhongFresnel)).rgb;
-	#endif
-		return s.PhongTint * (highlight * s.PhongScale * saturate(dot(s.Normal, lightDir))) * lightColor;
+		half alphaSquared = 1.0h / (2.0h * max(exponent, 0.0h) + 1.0h);
+		o.Smoothness = 1.0h - sqrt(sqrt(alphaSquared));
+		o.Specular   = min(scale * (4.0h * alphaSquared), 0.99h);
+
+		// Source ADDS its highlight to the lit surface, while Unity takes the specular's share out of the
+		// diffuse (EnergyConservationBetweenDiffuseAndSpecular). Dividing that share back in beforehand
+		// cancels it exactly, which is why the specular stays below 1.
+		o.Albedo /= 1.0h - SpecularStrength(o.Specular);
 	}
 #endif
 
-void surf(Input IN, inout SourceSurfaceOutput o)
+void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 {
 	fixed4 base = tex2D(_MainTex, IN.uv_MainTex);
 	fixed3 albedo = base.rgb * _Color.rgb;
@@ -204,9 +209,9 @@ void surf(Input IN, inout SourceSurfaceOutput o)
 	o.Normal = fixed3(0, 0, 1);
 #endif
 
-	// Everything in the highlight that does not depend on a light: its mask, and the fresnel that shapes
-	// it. The lighting function adds the lobe once per light. Note that Source does NOT mask the
-	// highlight with $envmapmask - that texture gates the cubemap reflection only.
+	// Everything in the highlight that can be decided per pixel: its mask, exponent, tint and fresnel.
+	// Note that Source does NOT mask the highlight with $envmapmask - that texture gates the cubemap
+	// reflection only.
 #ifdef _PHONG
 	#ifdef _PHONGMASK
 		half phongMask = tex2D(_PhongMask, IN.uv_MainTex).r;
@@ -220,28 +225,28 @@ void surf(Input IN, inout SourceSurfaceOutput o)
 	#ifdef _PHONGEXPONENTMAP
 		exponentMap = tex2D(_PhongExponentMap, IN.uv_MainTex);
 	#endif
-	o.PhongExponent = (_PhongExponentFactor > 0) ? (1.0h + _PhongExponentFactor * exponentMap.r)
-					: (_PhongExponent >= 0)      ? _PhongExponent
-												 : (1.0h + 149.0h * exponentMap.r);
+	half exponent = (_PhongExponentFactor > 0) ? (1.0h + _PhongExponentFactor * exponentMap.r)
+				  : (_PhongExponent >= 0)      ? _PhongExponent
+											   : (1.0h + 149.0h * exponentMap.r);
 	// Source tints with the BASE texture, before $color/$color2 modulates it (skin_ps20b.fxc computes
 	// vSpecularTint from baseColor.rgb, and modulates albedo only afterwards).
-	o.PhongTint = lerp(_SpecColorTint.rgb, lerp(half3(1, 1, 1), base.rgb, exponentMap.g), _PhongAlbedoTint);
+	half3 tint = lerp(_SpecColorTint.rgb, lerp(half3(1, 1, 1), base.rgb, exponentMap.g), _PhongAlbedoTint);
 
 	float3 worldNormal = WorldNormalVector(IN, o.Normal);
 	float3 viewWorld   = normalize(_WorldSpaceCameraPos - IN.worldPos);
-	o.PhongFresnel = SourcePhongFresnel(worldNormal, viewWorld, _PhongFresnelRanges);
+	half   fresnel     = SourcePhongFresnel(worldNormal, viewWorld, _PhongFresnelRanges);
 	#ifdef _PHONGWARP
 		// With a warp texture the fresnel is the lookup's second coordinate rather than a multiplier:
-		// skin_ps20b.fxc only folds it into the mask "if we didn't already apply Fresnel to specular warp".
-		o.PhongScale = phongMask * _PhongBoost;
+		// skin_ps20b.fxc only folds it into the mask "if we didn't already apply Fresnel to specular
+		// warp". The lookup's first coordinate is the lobe, which only a light knows, so the table is
+		// read where the highlight is brightest - its last column - and the colour found there tints
+		// the whole lobe. The fresnel is NOT clamped (ranges like [.4 .6 1.6] run past 1) and the warp
+		// textures set no CLAMP flag, so it wraps around the table, as it does in the game.
+		half3 highlight = tex2D(_PhongWarp, float2(1.0 - 0.5 * _PhongWarp_TexelSize.x, fresnel)).rgb;
 	#else
-		o.PhongScale = phongMask * o.PhongFresnel * _PhongBoost;
+		half3 highlight = fresnel;
 	#endif
-#else
-	o.PhongScale    = 0;
-	o.PhongFresnel  = 0;
-	o.PhongExponent = 1;
-	o.PhongTint     = half3(1, 1, 1);
+	SourcePhongToStandard(tint * highlight * (phongMask * _PhongBoost), exponent, o);
 #endif
 
 #ifdef _SELFILLUM
