@@ -558,51 +558,94 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			geometry.Add("PolygonVertexIndex", FbxProperty.Array(polygonIndices.ToArray()));
 			geometry.Add("GeometryVersion", FbxProperty.Int(124));
 
-			var normals = mesh.normals;
-			if (normals != null && normals.Length == vertices.Length)
+			// Every mesh is written with normals and a tangent frame. The models this writes are imported with both
+			// imported rather than recalculated, to keep what studiomdl authored, and Unity warns about every mesh that
+			// is missing either. A mesh with no normals of its own - a collision mesh, which has no texture coordinates
+			// for a tangent frame to follow either - gets its faces': the face's normal, and a tangent along its first
+			// edge, written for each polygon corner so no vertex is split for them.
+			var normals         = mesh.normals;
+			var tangents        = mesh.tangents;
+			var meshHasNormals  = normals != null && normals.Length == vertices.Length;
+			// A tangent frame of the mesh's own is only written together with the normals it is built on.
+			var meshHasTangents = meshHasNormals && tangents != null && tangents.Length == vertices.Length;
+			var hasTangents     = meshHasTangents || !meshHasNormals;
+
+			var normalValues   = new double[cornerVertex.Count * 3];
+			var tangentValues  = new double[hasTangents ? cornerVertex.Count * 3 : 0];
+			var binormalValues = new double[hasTangents ? cornerVertex.Count * 3 : 0];
+			var faceNormal     = Vector3.up;
+			var faceTangent    = Vector3.right;
+			for (int i = 0; i < cornerVertex.Count; i++)
 			{
-				var values = new double[cornerVertex.Count * 3];
-				for (int i = 0; i < cornerVertex.Count; i++)
+				Vector3 normal, tangent, binormal;
+				if (meshHasNormals)
 				{
-					var normal = normals[cornerVertex[i]];
-					values[(i * 3) + 0] = -normal.x;
-					values[(i * 3) + 1] =  normal.y;
-					values[(i * 3) + 2] =  normal.z;
+					var index = cornerVertex[i];
+					normal   = normals[index];
+					tangent  = Vector3.zero;
+					binormal = Vector3.zero;
+					if (meshHasTangents)
+					{
+						var own = tangents[index];
+						tangent  = new Vector3(own.x, own.y, own.z);
+						// Unity keeps handedness in tangent.w and builds the bitangent from it. FBX has no equivalent
+						// field that importers agree on, so the bitangent is written out explicitly - that is what
+						// carries the handedness across.
+						binormal = Vector3.Cross(normal, tangent) * own.w;
+					}
+				}
+				else
+				{
+					if (i % 3 == 0)
+					{
+						// The corners were stored reversed above; in the mesh's own winding the triangle is c, b, a.
+						var a      = vertices[cornerVertex[i]];
+						var b      = vertices[cornerVertex[i + 1]];
+						var c      = vertices[cornerVertex[i + 2]];
+						var cross  = Vector3.Cross(b - c, a - c);
+						var edge   = b - c;
+						var area   = cross.magnitude;
+						var length = edge.magnitude;
+						if (area > 0 && length > 0)
+						{
+							faceNormal  = cross / area;
+							faceTangent = edge / length;
+						}
+						else
+						{
+							faceNormal  = Vector3.up;
+							faceTangent = Vector3.right;
+						}
+					}
+					normal   = faceNormal;
+					tangent  = faceTangent;
+					binormal = Vector3.Cross(normal, tangent);
 				}
 
-				var layer = geometry.Add(new FbxNode("LayerElementNormal"));
-				layer.Prop(FbxProperty.Int(0));
-				layer.Add("Version", FbxProperty.Int(101));
-				layer.Add("Name", FbxProperty.String(""));
-				layer.Add("MappingInformationType", FbxProperty.String("ByPolygonVertex"));
-				layer.Add("ReferenceInformationType", FbxProperty.String("Direct"));
-				layer.Add("Normals", FbxProperty.Array(values));
-			}
-
-			var tangents = mesh.tangents;
-			if (tangents != null && tangents.Length == vertices.Length && normals != null && normals.Length == vertices.Length)
-			{
-				var tangentValues  = new double[cornerVertex.Count * 3];
-				var binormalValues = new double[cornerVertex.Count * 3];
-				for (int i = 0; i < cornerVertex.Count; i++)
+				normalValues[(i * 3) + 0] = -normal.x;
+				normalValues[(i * 3) + 1] =  normal.y;
+				normalValues[(i * 3) + 2] =  normal.z;
+				if (hasTangents)
 				{
-					var index    = cornerVertex[i];
-					var tangent  = tangents[index];
-					var normal   = normals[index];
-					// Unity keeps handedness in tangent.w and builds the bitangent from it. FBX has
-					// no equivalent field that importers agree on, so the bitangent is written out
-					// explicitly - that is what carries the handedness across.
-					var binormal = Vector3.Cross(normal, new Vector3(tangent.x, tangent.y, tangent.z)) * tangent.w;
-
-					tangentValues[(i * 3) + 0] = -tangent.x;
-					tangentValues[(i * 3) + 1] =  tangent.y;
-					tangentValues[(i * 3) + 2] =  tangent.z;
-
+					tangentValues[(i * 3) + 0]  = -tangent.x;
+					tangentValues[(i * 3) + 1]  =  tangent.y;
+					tangentValues[(i * 3) + 2]  =  tangent.z;
 					binormalValues[(i * 3) + 0] = -binormal.x;
 					binormalValues[(i * 3) + 1] =  binormal.y;
 					binormalValues[(i * 3) + 2] =  binormal.z;
 				}
+			}
 
+			var normalLayer = geometry.Add(new FbxNode("LayerElementNormal"));
+			normalLayer.Prop(FbxProperty.Int(0));
+			normalLayer.Add("Version", FbxProperty.Int(101));
+			normalLayer.Add("Name", FbxProperty.String(""));
+			normalLayer.Add("MappingInformationType", FbxProperty.String("ByPolygonVertex"));
+			normalLayer.Add("ReferenceInformationType", FbxProperty.String("Direct"));
+			normalLayer.Add("Normals", FbxProperty.Array(normalValues));
+
+			if (hasTangents)
+			{
 				var tangentLayer = geometry.Add(new FbxNode("LayerElementTangent"));
 				tangentLayer.Prop(FbxProperty.Int(0));
 				tangentLayer.Add("Version", FbxProperty.Int(101));
@@ -621,7 +664,8 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			}
 
 			var uvs = mesh.uv;
-			if (uvs != null && uvs.Length == vertices.Length)
+			var hasUvs = uvs != null && uvs.Length == vertices.Length;
+			if (hasUvs)
 			{
 				var values = new double[cornerVertex.Count * 2];
 				for (int i = 0; i < cornerVertex.Count; i++)
@@ -650,17 +694,21 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 				layer.Add("Materials", FbxProperty.Array(polygonMaterials.ToArray()));
 			}
 
+			// The layer lists exactly the elements written above. A mesh can lack uvs - a collision mesh has none - or a
+			// tangent frame of its own, and a layer naming an element the geometry does not have leaves the importer to
+			// make sense of a reference to nothing.
 			var layers = geometry.Add(new FbxNode("Layer"));
 			layers.Prop(FbxProperty.Int(0));
 			layers.Add("Version", FbxProperty.Int(100));
 			AddLayerElement(layers, "LayerElementNormal");
-			if (tangents != null && tangents.Length == vertices.Length)
+			if (hasTangents)
 			{
 				AddLayerElement(layers, "LayerElementTangent");
 				AddLayerElement(layers, "LayerElementBinormal");
 			}
 			AddLayerElement(layers, "LayerElementMaterial");
-			AddLayerElement(layers, "LayerElementUV");
+			if (hasUvs)
+				AddLayerElement(layers, "LayerElementUV");
 		}
 
 		static void AddLayerElement(FbxNode layer, string type)

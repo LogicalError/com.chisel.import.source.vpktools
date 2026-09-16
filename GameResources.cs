@@ -366,6 +366,27 @@ namespace Chisel.Import.Source.VPKTools
 			return header;
 		}
 
+		/// <summary>
+		/// Reads a model's collision. Returns null when it cannot be read, which leaves the model without collision
+		/// rather than failing its import.
+		/// </summary>
+		public PhyFile LoadPHY(GameEntry entry)
+		{
+			if (entry == null) return null;
+			if (entry.extension != PackagePath.ExtensionPHY) return null;
+			var bytes = LoadFileAsBytes(entry);
+			if (bytes == null) return null;
+			try
+			{
+				return PhyFile.Read(bytes);
+			}
+			catch (Exception exception)
+			{
+				Debug.LogError($"[Chisel] could not read the collision model {entry.keyname}: {exception.Message}");
+				return null;
+			}
+		}
+
 		public SourceModel LoadSourceModel(string entryName, string[] searchPaths = null)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
@@ -395,6 +416,10 @@ namespace Chisel.Import.Source.VPKTools
 				Debug.LogError($"Failed to load vtxHeader {vtxHeaderName}");
 				return null;
 			}
+
+			// Collision is optional: a model without any has no .phy at all.
+			var phyEntry = GetEntry(Path.ChangeExtension(entryName, PackagePath.ExtensionPHY));
+			var phy = (phyEntry != null) ? LoadPHY(phyEntry) : null;
 			
 			for (var i = 0; i < mdl.TextureDirs.Length; i++)
 			{
@@ -407,9 +432,11 @@ namespace Chisel.Import.Source.VPKTools
 				MDL = mdl,
 				VVD = vvd,
 				VTX = vtx,
+				PHY = phy,
 				MDLEntry = mdlEntry,
 				VVDEntry = vvdEntry,
-				VTXEntry = vtxEntry
+				VTXEntry = vtxEntry,
+				PHYEntry = phyEntry
 			};
 		}
 
@@ -463,27 +490,13 @@ namespace Chisel.Import.Source.VPKTools
 			return resource;
 		}
 
-		// Model declared for an entity class by the game's own entity definitions.
-		readonly Dictionary<string, string> entityClassModels = new(StringComparer.OrdinalIgnoreCase);
-
 		/// <summary>
-		/// The model an entity class uses, as declared by the game's FGD, or null if it declares
-		/// none. Entities such as NPCs and items store no model path in the .vmf - the model comes
-		/// from the entity class - so this is the only place that mapping exists outside game code.
-		/// Hammer reads the same files for the same reason.
+		/// The entity classes the configured game's FGDs declare. Entities such as NPCs and items store no model path in
+		/// the .vmf - the model comes from the entity class - and the kind of class an entity is decides how the game
+		/// gives it collision, so this is the only place either exists outside game code. Hammer reads the same files
+		/// for the same reasons.
 		/// </summary>
-		public string GetEntityClassModel(string className)
-		{
-			if (string.IsNullOrEmpty(className))
-				return null;
-			return entityClassModels.TryGetValue(className, out var model) ? model : null;
-		}
-
-		// "@NPCClass base(...) studio("models/humans/guard.mdl") = npc_human_security : "..."".
-		// [^=\[]* keeps the match from running past the '=' into the class body.
-		static readonly System.Text.RegularExpressions.Regex kFgdStudioClass =
-			new(@"studio\s*\(\s*""([^""]+)""\s*\)[^=\[]*=\s*([A-Za-z0-9_]+)",
-				System.Text.RegularExpressions.RegexOptions.Compiled);
+		public FgdEntityClasses EntityClasses { get; } = new();
 
 		/// <summary>
 		/// Loads entity definitions from whatever FGDs the configured game ships. The game's mod
@@ -503,27 +516,11 @@ namespace Chisel.Import.Source.VPKTools
 				if (!searched.Add(binPath) || !Directory.Exists(binPath))
 					continue;
 
-				foreach (var fgdFile in Directory.GetFiles(binPath, "*.fgd", SearchOption.TopDirectoryOnly))
-				{
-					string text;
-					try { text = File.ReadAllText(fgdFile); }
-					catch { continue; }
-
-					foreach (System.Text.RegularExpressions.Match match in kFgdStudioClass.Matches(text))
-					{
-						var modelPath = match.Groups[1].Value;
-						var className = match.Groups[2].Value;
-						if (string.IsNullOrEmpty(modelPath) || string.IsNullOrEmpty(className))
-							continue;
-						// First definition wins; later FGDs in the chain are usually the bases.
-						if (!entityClassModels.ContainsKey(className))
-							entityClassModels[className] = modelPath;
-					}
-				}
+				EntityClasses.LoadDirectory(binPath);
 			}
 
-			if (entityClassModels.Count > 0)
-				Debug.Log($"Loaded {entityClassModels.Count} entity class -> model definitions from the game's FGD files.");
+			if (EntityClasses.Count > 0)
+				Debug.Log($"Loaded {EntityClasses.Count} entity class definitions from the game's FGD files.");
 		}
 
 		public void InitializePaths(string[] inputPaths)

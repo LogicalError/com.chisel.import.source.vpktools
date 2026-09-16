@@ -18,6 +18,7 @@ namespace Chisel.Import.Source.VPKTools
 		public const string ExtensionVTX = "vtx";
 		public const string ExtensionVTX_DX90 = "dx90.vtx";
 		public const string ExtensionSPR = "spr";
+		public const string ExtensionPHY = "phy";
 
 		public static readonly string[] DefaultSkyBoxMaterialPaths = new string[] { "materials/", "materials/skybox/" };
 		public static readonly string[] DefaultMaterialPaths = new string[] { "materials/" };

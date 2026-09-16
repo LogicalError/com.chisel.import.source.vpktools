@@ -105,6 +105,20 @@ namespace Chisel.Import.Source.VPKTools
 			return true;
 		}
 
+		/// <summary>
+		/// True when the userData holds a token of this generator, whatever its version: the asset was written by this
+		/// importer at some point.
+		/// </summary>
+		internal static bool HasGenerator(string userData, string generator)
+		{
+			foreach (var token in Split(userData))
+			{
+				if (IsTokenOf(token, generator))
+					return true;
+			}
+			return false;
+		}
+
 		// Any version of the generator's token: chisel-texture-v1 and chisel-texture-v12 both belong to
 		// "texture"; chisel-texturex-v1 does not, and nor does a token whose version is not a plain number.
 		static bool IsTokenOf(string token, string generator)

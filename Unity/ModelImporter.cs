@@ -238,8 +238,6 @@ namespace Chisel.Import.Source.VPKTools
 						(Model.MDL.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass)
 						meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.TwoSided;
 
-					if (MeshObject.GetComponent<MeshCollider>() == null)
-						MeshObject.AddComponent<MeshCollider>();
 					Renderer = meshRenderer;
 				}
 			}
@@ -295,7 +293,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// <see cref="GeneratedAssetVersion"/>):
 		/// <list type="bullet">
 		/// <item><c>ModelVersion</c> - model files: meshes, LODs, the hierarchy, skins and skin variants,
-		/// and the default pose baked into single-bone meshes.</item>
+		/// collision, and the default pose baked into single-bone meshes.</item>
 		/// <item><c>AnimationVersion</c> - animation and what it rests on: MdlAnimationDecoder,
 		/// BuildAnimationTakes, the skeleton, how FbxExporter writes nodes, skins and takes, and
 		/// ConfigureImportedModel. Model files carry skeletons and takes as well, so they record this
@@ -304,8 +302,31 @@ namespace Chisel.Import.Source.VPKTools
 		/// </list>
 		/// When unsure which one a change falls under, bump AnimationVersion: it rebuilds both.
 		/// </summary>
-		static readonly (string generator, int version) ModelVersion     = ("model", 1);
+		internal static readonly (string generator, int version) ModelVersion     = ("model", 3);
 		static readonly (string generator, int version) AnimationVersion = ("animation", 1);
+
+		/// <summary>
+		/// What every collision node's name starts with. A model file cannot mark a mesh as a collider, so
+		/// <see cref="SourceCollisionPostprocessor"/> recognises the nodes by this.
+		/// </summary>
+		internal const string kCollisionNodePrefix = "#collision ";
+
+		/// <summary>What the names of the prop set's nodes start with (<see cref="ModelCollisionSet.Prop"/>).</summary>
+		internal const string kPropCollisionPrefix = kCollisionNodePrefix + "prop ";
+
+		/// <summary>What the names of the ragdoll set's nodes start with (<see cref="ModelCollisionSet.Ragdoll"/>).</summary>
+		internal const string kRagdollCollisionPrefix = kCollisionNodePrefix + "ragdoll ";
+
+		internal static bool IsCollisionNode(string name)
+		{
+			return name != null && name.StartsWith(kCollisionNodePrefix, StringComparison.Ordinal);
+		}
+
+		/// <summary>Whether the model file this importer imports was written by <see cref="ModelImporter"/>.</summary>
+		internal static bool IsGeneratedModel(AssetImporter importer)
+		{
+			return importer != null && GeneratedAssetVersion.HasGenerator(importer.userData, ModelVersion.generator);
+		}
 
 		public static GameObject[] Import(GameResources gameResources, SourceModel model, string outputPath)
 		{
@@ -340,6 +361,7 @@ namespace Chisel.Import.Source.VPKTools
 			// The hierarchy exists only long enough to be written out. It is built outside any scene
 			// and destroyed below, so nothing is dirtied and nothing survives the import but the file.
 			var root = new GameObject(model.MDL.Name);
+			var collisionMeshes = new List<Mesh>();
 			FbxExporter.Result exported;
 			try
 			{
@@ -348,6 +370,7 @@ namespace Chisel.Import.Source.VPKTools
 				var restPose = (skeleton == null) ? DefaultPoseOfSingleBone(gameResources, model) : Matrix4x4.identity;
 				BuildHierarchy(root, model, modelEntries, skeleton, restPose);
 				SetSkin(root, modelEntries, defaultSkin);
+				BuildCollision(root, model, skeleton, restPose, collisionMeshes);
 				var takes = BuildAnimationTakes(gameResources, model.MDL, model.MDLEntry, skeleton);
 				exported = FbxExporter.Export(destinationPath, root, takes);
 			}
@@ -361,6 +384,8 @@ namespace Chisel.Import.Source.VPKTools
 					if (modelEntry?.Mesh != null)
 						Object.DestroyImmediate(modelEntry.Mesh);
 				}
+				foreach (var mesh in collisionMeshes)
+					Object.DestroyImmediate(mesh);
 				GameObject.DestroyImmediate(root);
 			}
 
@@ -819,7 +844,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// Points Unity's model importer at the materials this importer already created, and tells it
 		/// what the file does and does not contain.
 		/// </summary>
-		static void ConfigureImportedModel(string assetPath, FbxExporter.Result exported, params (string generator, int version)[] versions)
+		internal static void ConfigureImportedModel(string assetPath, FbxExporter.Result exported, params (string generator, int version)[] versions)
 		{
 			if (AssetImporter.GetAtPath(assetPath) is not UnityEditor.ModelImporter importer)
 				return;
@@ -872,6 +897,96 @@ namespace Chisel.Import.Source.VPKTools
 			importer.userData = GeneratedAssetVersion.Stamp(importer.userData, versions);
 
 			importer.SaveAndReimport();
+		}
+
+		/// <summary>
+		/// Adds the model's collision to the hierarchy: one mesh node per convex piece, which
+		/// <see cref="SourceCollisionPostprocessor"/> turns into a collider once Unity has imported the file.
+		/// <para>
+		/// The game uses a model's collision in one of two ways, and which one depends on the entity rather than the
+		/// model (see <see cref="ModelCollision"/>), so the model gets both:
+		/// </para>
+		/// <list type="bullet">
+		/// <item>The prop set: the first solid, placed at the entity's origin and angles just as it is stored. The game
+		/// applies no bone to it, whatever space studiomdl compiled it in (PhysModelCreate parses solid 0), so it goes
+		/// under the root, without the default pose single-bone render meshes are given.</item>
+		/// <item>The ragdoll set: every solid named after a bone, in that bone's space, moving with it as it animates.
+		/// RagdollAddSolid, and CreatePhysicsFollower for a dynamic prop's bone followers, both find the bone by the
+		/// solid's name, and place a solid named after no bone nowhere.</item>
+		/// </list>
+		/// </summary>
+		static void BuildCollision(GameObject root, SourceModel model, MdlSkeleton skeleton, Matrix4x4 restPose, List<Mesh> meshes)
+		{
+			var solids = model?.PHY?.Solids;
+			if (solids == null || solids.Count == 0)
+				return;
+
+			AddSolid(kPropCollisionPrefix, 0, root.transform, Matrix4x4.identity);
+
+			var bones = model.MDL.Bones;
+			for (int s = 0; s < solids.Count; s++)
+			{
+				var bone = FindBone(solids[s].Name);
+				if (bone < 0)
+				{
+					// studiomdl names a solid it compiles into a bone's space after that bone.
+					if (solids[s].Pieces.Count > 0 && solids[s].Pieces[0].BoneReference != 0)
+						Debug.LogWarning($"[Chisel] {model.MDL.Name}: collision solid '{solids[s].Name}' is in a bone's space but not " +
+										 "named after a bone, so the game could not place it on one either");
+					continue;
+				}
+
+				if (skeleton != null)
+					AddSolid(kRagdollCollisionPrefix, s, skeleton.Bones[bone], Matrix4x4.identity);
+				else
+					// A model with a single bone is imported without it, so the bone's pose goes into the vertices the
+					// way it goes into the render mesh: the default pose, applied to the bone's reference.
+					AddSolid(kRagdollCollisionPrefix, s, root.transform,
+							 restPose * Matrix4x4.TRS(bones[bone].Position, bones[bone].Quaternion, Vector3.one));
+			}
+
+			void AddSolid(string prefix, int s, Transform parent, Matrix4x4 sourceToNode)
+			{
+				var pieces = solids[s].Pieces;
+				for (int p = 0; p < pieces.Count; p++)
+				{
+					var piece    = pieces[p];
+					var vertices = new Vector3[piece.Vertices.Length];
+					for (int i = 0; i < vertices.Length; i++)
+						vertices[i] = SourceEngineUnits.VmfSourceToUnity.MultiplyPoint(sourceToNode.MultiplyPoint3x4(piece.Vertices[i]));
+
+					// IVP winds its triangles outward by the right-hand rule. The conversion into Unity mirrors - its
+					// swizzle has determinant -1 - which turns them inward, so each triangle is wound back.
+					var triangles = new int[piece.Triangles.Length];
+					for (int i = 0; i + 2 < triangles.Length; i += 3)
+					{
+						triangles[i]     = piece.Triangles[i];
+						triangles[i + 1] = piece.Triangles[i + 2];
+						triangles[i + 2] = piece.Triangles[i + 1];
+					}
+
+					var name = $"{prefix}{s}.{p}";
+					var mesh = new Mesh { name = name, vertices = vertices, triangles = triangles };
+					meshes.Add(mesh);
+
+					var node = new GameObject(name);
+					node.transform.SetParent(parent, false);
+					node.AddComponent<MeshFilter>().sharedMesh = mesh;
+				}
+			}
+
+			// Studio_BoneIndexByName, which the game finds a solid's bone with, compares names with Q_stricmp.
+			int FindBone(string name)
+			{
+				if (bones == null || string.IsNullOrEmpty(name))
+					return -1;
+				for (int i = 0; i < bones.Length; i++)
+				{
+					if (string.Equals(bones[i].Name, name, StringComparison.OrdinalIgnoreCase))
+						return i;
+				}
+				return -1;
+			}
 		}
 
 		public static void SetSkin(GameObject parentGO, MdlModelEntry[] modelEntries, MdlMaterialTable skinMaterials)
