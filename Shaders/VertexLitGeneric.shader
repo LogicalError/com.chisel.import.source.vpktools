@@ -30,6 +30,9 @@ Shader "Chisel/Source/VertexLitGeneric"
 		_PhongExponentFactor ("$phongexponentfactor", Float) = 0
 		_PhongFresnelRanges ("$phongfresnelranges", Vector) = (1,1,1,0)
 		_PhongMaskFromBaseAlpha ("Phong mask is base alpha", Float) = 0
+		[Toggle] _RimLight ("$rimlight", Float) = 0
+		_RimLightBoost ("$rimlightboost", Float) = 1
+		[Toggle] _RimMask ("$rimmask", Float) = 0
 		_PhongMask ("Phong mask (the $bumpmap's alpha)", 2D) = "white" {}
 		_PhongExponentMap ("$phongexponenttexture", 2D) = "white" {}
 		_PhongAlbedoTint ("$phongalbedotint", Float) = 0

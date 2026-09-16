@@ -5,8 +5,10 @@ using System.IO;
 using System.Text;
 
 using Debug = UnityEngine.Debug;
+using Vector2 = UnityEngine.Vector2;
 using Vector3 = UnityEngine.Vector3;
 using Vector4 = UnityEngine.Vector4;
+using Matrix4x4 = UnityEngine.Matrix4x4;
 
 namespace Chisel.Import.Source.VPKTools
 {
@@ -156,6 +158,95 @@ namespace Chisel.Import.Source.VPKTools
 			}
 
 			return result;
+		}
+
+		/// <summary>
+		/// A texture transform parameter ($basetexturetransform and its kin), in the two forms the material system
+		/// accepts: the sixteen numbers of the matrix in brackets, row by row, or "center x y scale x y rotate
+		/// degrees translate x y". The second form is composed as the TextureTransform proxy composes it: move the
+		/// center to the origin, scale, rotate counter-clockwise, move the center back, translate. A key left out
+		/// keeps its default (center .5 .5, scale 1 1, rotate 0, translate 0 0), and a token that is not a number
+		/// (a proxy variable such as $angle) leaves that value at its default too.
+		/// </summary>
+		/// <remarks>
+		/// The Valve Developer Wiki documents the keys, their defaults and that the rotation is counter-clockwise
+		/// in degrees; the order the four are combined in is the proxy's and is not spelled out in public engine
+		/// source for the string form.
+		/// </remarks>
+		public static Matrix4x4? ParseTextureTransform(string input)
+		{
+			if (string.IsNullOrWhiteSpace(input))
+				return null;
+			input = input.Trim();
+			if (input[0] == '[')
+			{
+				var values = ParseDoubles(input);
+				if (values == null || values.Length < 16)
+					return null;
+				var matrix = new Matrix4x4();
+				for (int row = 0; row < 4; row++)
+					for (int column = 0; column < 4; column++)
+						matrix[row, column] = (float)values[row * 4 + column];
+				return matrix;
+			}
+
+			var tokens = input.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+			var center = new Vector2(0.5f, 0.5f);
+			var scale = Vector2.one;
+			var translate = Vector2.zero;
+			var rotate = 0.0f;
+			var any = false;
+			for (int i = 0; i < tokens.Length; i++)
+			{
+				switch (tokens[i].ToLowerInvariant())
+				{
+					case "center":    any = true; ReadPair(tokens, ref i, ref center); break;
+					case "scale":     any = true; ReadPair(tokens, ref i, ref scale); break;
+					case "translate": any = true; ReadPair(tokens, ref i, ref translate); break;
+					case "rotate":
+					{
+						any = true;
+						if (i + 1 < tokens.Length && SafeParse(tokens[i + 1], out float angle))
+						{
+							rotate = angle;
+							i++;
+						}
+						break;
+					}
+				}
+			}
+			if (!any)
+				return null;
+
+			var toOrigin = Matrix4x4.Translate(new Vector3(-center.x, -center.y, 0));
+			var scaled   = Matrix4x4.Scale(new Vector3(scale.x, scale.y, 1));
+			// MatrixBuildRotateZ: x' = cos x - sin y, y' = sin x + cos y.
+			var radians  = rotate * (float)(Math.PI / 180.0);
+			var rotated  = Matrix4x4.identity;
+			rotated.m00 = (float)Math.Cos(radians); rotated.m01 = -(float)Math.Sin(radians);
+			rotated.m10 = (float)Math.Sin(radians); rotated.m11 = (float)Math.Cos(radians);
+			var back     = Matrix4x4.Translate(new Vector3(center.x, center.y, 0));
+			var moved    = Matrix4x4.Translate(new Vector3(translate.x, translate.y, 0));
+			return moved * back * rotated * scaled * toOrigin;
+		}
+
+		/// <summary>Exactly the identity, as the material system's matrix test asks (VMatrix::IsIdentity).</summary>
+		public static bool IsIdentity(Matrix4x4 matrix)
+		{
+			for (int row = 0; row < 4; row++)
+				for (int column = 0; column < 4; column++)
+					if (matrix[row, column] != (row == column ? 1.0f : 0.0f))
+						return false;
+			return true;
+		}
+
+		static void ReadPair(string[] tokens, ref int index, ref Vector2 value)
+		{
+			if (index + 2 < tokens.Length && SafeParse(tokens[index + 1], out float x) && SafeParse(tokens[index + 2], out float y))
+			{
+				value = new Vector2(x, y);
+				index += 2;
+			}
 		}
 
 		public static Vector4 ParseVector4(string input)

@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 5);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 6);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -685,6 +685,14 @@ namespace Chisel.Import.Source.VPKTools
 					unityMaterial.SetFloat("_PhongAlbedoTint", 1);
 			}
 
+			// $rimlight: the part of Source's rim light a surface draws by itself - the ambient light along the view
+			// ray - with its boost, and the exponent texture's alpha as a mask when $rimmask asks for it.
+			var rimLight = DrawsRimLight(sourceMaterial);
+			unityMaterial.SetFloat("_RimLight", rimLight ? 1 : 0);
+			unityMaterial.SetFloat("_RimLightBoost", sourceMaterial.RimLightBoost ?? 1.0f);
+			unityMaterial.SetFloat("_RimMask", (rimLight && sourceMaterial.RimMask == true &&
+												unityMaterial.IsKeywordEnabled("_PHONGEXPONENTMAP")) ? 1 : 0);
+
 			// $phongwarptexture: the highlight looked up in a table rather than taken from the lobe
 			// directly, which is what makes a surface iridescent. The fresnel is the lookup's second
 			// coordinate, so with a warp the shader stops using it as a multiplier.
@@ -758,6 +766,10 @@ namespace Chisel.Import.Source.VPKTools
 			unityMaterial.SetFloat("_BlendBase2", 0);
 			unityMaterial.SetFloat("_BlendBump2", 0);
 			unityMaterial.SetFloat("_BlendModulate", 0);
+			unityMaterial.SetFloat("_MaskedBlending", sourceMaterial.MaskedBlending == true ? 1 : 0);
+			var blendMask = BlendMaskTransformOf(sourceMaterial);
+			unityMaterial.SetVector("_BlendMaskTransformU", blendMask.u);
+			unityMaterial.SetVector("_BlendMaskTransformV", blendMask.v);
 			if ((use & SourceVertexColor.Blend) == 0)
 				return;
 
@@ -904,6 +916,33 @@ namespace Chisel.Import.Source.VPKTools
 			return !string.IsNullOrEmpty(sourceMaterial.LightWarpTextureName) ||
 				   sourceMaterial.BaseMapAlphaPhongMask == true ||
 				   !string.IsNullOrEmpty(sourceMaterial.BumpMapName);
+		}
+
+		/// <summary>
+		/// Whether the game draws this material's rim light: $rimlight is a combo of the skin shader, which exists only
+		/// for a VertexLitGeneric material that draws phong (skin_dx9_helper.cpp: bHasRimLight requires bHasPhong).
+		/// </summary>
+		internal static bool DrawsRimLight(VMT sourceMaterial)
+		{
+			return sourceMaterial.RimLight == true && DrawsPhong(sourceMaterial) &&
+				   string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "VertexLitGeneric",
+								 System.StringComparison.OrdinalIgnoreCase);
+		}
+
+		/// <summary>
+		/// The transform $blendmodulatetexture is sampled with, as the rows the shader takes (u, v; the fourth
+		/// component is the translation). LightmappedGeneric applies $blendmasktransform only with $maskedblending
+		/// and a $bumptransform that is not identity - lightmappedgeneric_dx9_helper.cpp tests the bump transform
+		/// there - and otherwise uses the base texture's coordinates as they are. (A material that leaves that fast
+		/// path for another reason reads a constant nothing set; identity is the only defined choice.)
+		/// </summary>
+		internal static (Vector4 u, Vector4 v) BlendMaskTransformOf(VMT sourceMaterial)
+		{
+			var matrix = Matrix4x4.identity;
+			if (sourceMaterial.MaskedBlending == true && sourceMaterial.BlendMaskTransform.HasValue &&
+				sourceMaterial.BumpTransform.HasValue && !TextParser.IsIdentity(sourceMaterial.BumpTransform.Value))
+				matrix = sourceMaterial.BlendMaskTransform.Value;
+			return (new Vector4(matrix.m00, matrix.m01, 0, matrix.m03), new Vector4(matrix.m10, matrix.m11, 0, matrix.m13));
 		}
 
 		/// <summary>

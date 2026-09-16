@@ -115,6 +115,12 @@ half _VertexAlpha;
 	half      _BlendBase2;
 	half      _BlendBump2;
 	half      _BlendModulate;
+	// $maskedblending: 1 = blend by the modulate texture's green channel alone (0.5 without that texture),
+	// not by the vertex alpha.
+	half      _MaskedBlending;
+	// $blendmasktransform as the two rows Source's vertex shader takes: u' = dot(uv, row.xy) + row.w.
+	float4    _BlendMaskTransformU;
+	float4    _BlendMaskTransformV;
 #endif
 
 // $envmap is nearly always the literal "env_cubemap", meaning "use the cubemap baked for this spot" -
@@ -161,6 +167,10 @@ fixed4 _SpecColorTint;
 	// 1 = the mask is the BASE texture's alpha, which is what Source reads when the material says so
 	// ($basemapalphaphongmask) or when it has no normal map at all.
 	half   _PhongMaskFromBaseAlpha;
+	// $rimlight (VertexLitGeneric's skin shader only): 0/1, its boost, and 1 = mask it by the exponent map's alpha.
+	half   _RimLight;
+	half   _RimLightBoost;
+	half   _RimMask;
 	#ifdef _PHONGMASK
 		// Source's usual mask is the NORMAL MAP's alpha (skin_ps20b.fxc:
 		// fSpecMask = lerp(normalTexel.a, baseColor.a, $basemapalphaphongmask)). Unity re-encodes normal
@@ -239,11 +249,15 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	// $blendmodulatetexture its green channel moves the transition and its red channel widens it - except
 	// on a self-illuminated material, where Source compiles that step out (lightmappedgeneric_ps2_3_x.h).
 	// The default modulation texture is white, which keeps smoothstep's two edges apart.
-	half layerBlend = IN.color.a;
+	// $maskedblending replaces the vertex alpha with 0.5, and the modulate texture's green channel then decides
+	// the blend outright (lightmappedgeneric_ps2_3_x.h, MASKEDBLENDING).
+	half layerBlend = lerp(IN.color.a, 0.5h, _MaskedBlending);
 	#ifndef _SELFILLUM
-		half4 modulation = tex2D(_BlendModulateTexture, IN.uv_MainTex);
+		float2 maskCoord = float2(dot(IN.uv_MainTex, _BlendMaskTransformU.xy) + _BlendMaskTransformU.w,
+								  dot(IN.uv_MainTex, _BlendMaskTransformV.xy) + _BlendMaskTransformV.w);
+		half4 modulation = tex2D(_BlendModulateTexture, maskCoord);
 		half  sharpened  = smoothstep(saturate(modulation.g - modulation.r), saturate(modulation.g + modulation.r), layerBlend);
-		layerBlend = lerp(layerBlend, sharpened, _BlendModulate);
+		layerBlend = lerp(layerBlend, lerp(sharpened, modulation.g, _MaskedBlending), _BlendModulate);
 	#endif
 	// Only the colour blends. The alpha Source goes on reading as opacity and as the self-illum mask is
 	// still the first layer's.
@@ -349,6 +363,16 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 		half3 highlight = fresnel;
 	#endif
 	SourcePhongToStandard(tint * highlight * (phongMask * _PhongBoost), exponent, o);
+
+	// Source's rim light, the part a surface draws by itself (skin_ps20b.fxc): the ambient light seen along the view
+	// ray, where the surface faces up (world Z in Source, Y here) and is seen edge-on, tinted like the highlight.
+	// The other part is a lobe per light that the game folds into the highlight with a max() over all lights,
+	// which a G-buffer has no room for.
+	half rimEdge = 1.0h - saturate(dot(worldNormal, viewWorld));
+	rimEdge *= rimEdge;
+	rimEdge *= rimEdge;
+	half rimWeight = saturate(lerp(1.0h, exponentMap.a, _RimMask) * rimEdge * worldNormal.y);
+	o.Emission += ShadeSH9(float4(viewWorld, 1.0)) * (_RimLight * _RimLightBoost * rimWeight) * tint;
 #endif
 
 #ifdef _SELFILLUM

@@ -4,6 +4,7 @@ using System.IO;
 
 using Vector2 = UnityEngine.Vector2;
 using Vector3 = UnityEngine.Vector3;
+using Matrix4x4 = UnityEngine.Matrix4x4;
 using Debug = UnityEngine.Debug;
 using System.Globalization;
 
@@ -64,6 +65,15 @@ namespace Chisel.Import.Source.VPKTools
 		/// $phong material that has one is drawn by the skin shader even without a normal map
 		/// (<see cref="Chisel.Import.Source.VPKTools.MaterialImporter.DrawsPhong"/>).</summary>
 		public string		LightWarpTextureName;
+		/// <summary>$rimlight - the skin shader's rim light, so it only exists where the material draws phong
+		/// (<see cref="Chisel.Import.Source.VPKTools.MaterialImporter.DrawsRimLight"/>).</summary>
+		public bool?		RimLight;
+		/// <summary>$rimlightexponent (4 when absent) - the exponent of the rim's lobe per light.</summary>
+		public float?		RimLightExponent;
+		/// <summary>$rimlightboost (1 when absent) - the strength of the ambient light seen along the view ray.</summary>
+		public float?		RimLightBoost;
+		/// <summary>$rimmask - mask the rim light by the $phongexponenttexture's alpha.</summary>
+		public bool?		RimMask;
 		public RGBColor		PhongTint;
 		public bool?		PhongAlbedoTint;
 		
@@ -97,6 +107,13 @@ namespace Chisel.Import.Source.VPKTools
 		public int?			EnvMapMode;
 
 		public string       BlendModulateTextureName;
+		/// <summary>$maskedblending - blend the second layer by the modulate texture's green channel, not by the
+		/// vertex alpha.</summary>
+		public bool?        MaskedBlending;
+		/// <summary>$blendmasktransform - the texture coordinate transform of $blendmodulatetexture.</summary>
+		public Matrix4x4?   BlendMaskTransform;
+		/// <summary>$bumptransform - the texture coordinate transform of $bumpmap.</summary>
+		public Matrix4x4?   BumpTransform;
 
 		public bool?        Translucent;
 		public float?		Additive;		
@@ -358,7 +375,6 @@ namespace Chisel.Import.Source.VPKTools
 						//case "$bumptransform": // 'center 0 0 scale 2 2 rotate 0 translate 0 0'.
 						//case "$bumptransform": // 'center 1 1 scale 2 2 rotate 0 translate .50 0'.
 						//case "$bumptransform": // 'center 1 1 scale 2 2 rotate 0 translate 0 0'.
-						case "$bumptransform": // '[ 1.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.000000 0.000000 0.000000 0.000000 1.000000 ]'.
 						case "$bumpmaptransform": // 'center 1.0 1.0 scale 2.0 2.0 rotate 0.0 translate 0.5 0.5'.
 						case "$bumpwrinkle": // 'models/shadertest/shader3_normal'.
 						case "$burn_grad": // 'dev/vortex_burn_grad_1d'.
@@ -768,10 +784,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$rgb_thresholdr": // '0.35'.
 						case "$rimboost": // '1'.
 						case "$rimexponent": // '3'. '40'.
-						case "$rimlight":
-						case "$rimlightboost":
-						case "$rimlightexponent":
-						case "$rimmask": // '1'.
 						case "$saturation": // '0'.
 						case "$scale":
 						case "$scale2": // '[1 0.25]'.
@@ -1093,6 +1105,9 @@ namespace Chisel.Import.Source.VPKTools
 						case "$nocull": { TryParseBoolProperty(property, ref vmfMaterial.NoCull); break; }
 
 						case "$blendmodulatetexture": { vmfMaterial.BlendModulateTextureName = property.Value; break; }
+						case "$maskedblending": { TryParseBoolProperty(property, ref vmfMaterial.MaskedBlending); break; }
+						case "$blendmasktransform": { vmfMaterial.BlendMaskTransform = TextParser.ParseTextureTransform(property.Value); break; }
+						case "$bumptransform": { vmfMaterial.BumpTransform = TextParser.ParseTextureTransform(property.Value); break; }
 
 						case "$color": { vmfMaterial.Color = TextParser.ParseColor(property.Value); break; }
 						// '.485 .485 .485'. '[1.1 0.7 0]'. '[3.2 3.2 3.2]'. '{255 80 32}'. '{68.0 53.0 59.0 $model 1'. '3 3 3'.
@@ -1173,6 +1188,10 @@ namespace Chisel.Import.Source.VPKTools
 						case "$phongalbedotint": { TryParseBoolProperty(property, ref vmfMaterial.PhongAlbedoTint); break; }
 						case "$basemapalphaphongmask": { TryParseBoolProperty(property, ref vmfMaterial.BaseMapAlphaPhongMask); break; }
 						case "$lightwarptexture": { vmfMaterial.LightWarpTextureName = property.Value; break; }
+						case "$rimlight": { TryParseBoolProperty(property, ref vmfMaterial.RimLight); break; }
+						case "$rimlightexponent": { TryParseFloatProperty(property, ref vmfMaterial.RimLightExponent); break; }
+						case "$rimlightboost": { TryParseFloatProperty(property, ref vmfMaterial.RimLightBoost); break; }
+						case "$rimmask": { TryParseBoolProperty(property, ref vmfMaterial.RimMask); break; }
 						case "$phongtint": { vmfMaterial.PhongTint = TextParser.ParseColor(property.Value); break; }
 						case "$phongboost": { TryParseFloatProperty(property, ref vmfMaterial.PhongBoost); break; }
 						case "$phongfresnelranges": { vmfMaterial.PhongFresnelRanges = TextParser.ParseVector3(property.Value); break; }

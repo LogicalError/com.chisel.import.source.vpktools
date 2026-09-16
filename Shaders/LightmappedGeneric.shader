@@ -23,6 +23,9 @@ Shader "Chisel/Source/LightmappedGeneric"
 		[Toggle] _BlendBase2 ("Blend $basetexture2", Float) = 0
 		[Toggle] _BlendBump2 ("Blend $bumpmap2", Float) = 0
 		[Toggle] _BlendModulate ("Modulate the blend", Float) = 0
+		[Toggle] _MaskedBlending ("$maskedblending", Float) = 0
+		_BlendMaskTransformU ("$blendmasktransform u row", Vector) = (1,0,0,0)
+		_BlendMaskTransformV ("$blendmasktransform v row", Vector) = (0,1,0,0)
 		// $vertexcolor: the vertex colour tints, and - without a second layer - its alpha is opacity.
 		[Toggle] _VertexColor ("$vertexcolor", Float) = 0
 		[Toggle] _VertexAlpha ("Vertex alpha is opacity", Float) = 0
