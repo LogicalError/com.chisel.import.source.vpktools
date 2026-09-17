@@ -15,23 +15,33 @@ namespace Chisel.Import.Source.VPKTools
         public  int Height          { get; private set; }
 		public VTFImageFlag Flags   { get; private set; }
 		public bool HasAlpha        { get; private set; }
+		/// <summary>The texels are linear floats, which may run past 1 - how Source stores HDR.</summary>
+		public bool IsHDR           { get; private set; }
 
 
         public struct Frame
         {
+            /// <summary>The frame's image; for an environment map, its first face.</summary>
             public Color[] Pixels;
+            /// <summary>
+            /// The frame's images, each bottom row first like <see cref="Pixels"/>: one for a texture, and for an environment
+            /// map one per cube face in Source's order - +x, -x, +y, -y, +z, -z (vtf.h calls them right, left, back, front,
+            /// up, down) - sometimes followed by the spheremap fallback.
+            /// </summary>
+            public Color[][] Faces;
 		}
 
         public static VTF Read( Stream stream )
         {
-			var frames = LoadVTFFile(stream, out int width, out int height, out var flags, out var hasAlpha);
+			var frames = LoadVTFFile(stream, out int width, out int height, out var flags, out var hasAlpha, out var isHDR);
 			return new VTF
 			{
 				Frames   = frames,
 				Width    = width,
 				Height   = height,
 				Flags    = flags,
-				HasAlpha = hasAlpha
+				HasAlpha = hasAlpha,
+				IsHDR    = isHDR
 			};
         }
 
@@ -124,12 +134,13 @@ namespace Chisel.Import.Source.VPKTools
         }
 #endif
 
-        public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha)
+        public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha, out bool isHDR)
 		{
 			width = 0;
 			height = 0;
 			flags = (VTFImageFlag)0;
             hasAlpha = false;
+            isHDR = false;
 			Frame[] frames = null;
 			if ( stream != null )
             {
@@ -137,7 +148,7 @@ namespace Chisel.Import.Source.VPKTools
                 if( signature == VTFHeader.signature )
                 {
                     #region Read Header
-                    VTFHeader vtfHeader;
+                    VTFHeader vtfHeader = default;
                     uint[]    version = new uint[] { DataParser.ReadUInt( stream ), DataParser.ReadUInt( stream ) };
                     vtfHeader.version       = ( version[0] ) + ( version[1] / 10f );
                     vtfHeader.headerSize    = DataParser.ReadUInt( stream );
@@ -223,15 +234,22 @@ namespace Chisel.Import.Source.VPKTools
                     if( vtfHeader.highResImageFormat != VTFImageFormat.IMAGE_FORMAT_NONE )
 					{
                         uint mipmapSize = ComputeImageBufferSize(vtfHeader.width, vtfHeader.height, vtfHeader.depth, vtfHeader.highResImageFormat);
+                        var faces = FaceCount(vtfHeader, stream.Length, imageBufferOffset);
 
 						width = vtfHeader.width;
 						height = vtfHeader.height;
+						isHDR = vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_RGBA16161616F;
+						// The largest mip comes last, frame after frame and face after face
 						for (int i = 0; i < vtfHeader.frames; i++)
                         {
-                            uint mipmapBufferOffset = mipmapSize * (uint)(vtfHeader.frames - i);
-
-                            stream.Position = stream.Length - mipmapBufferOffset;
-                            frames[i].Pixels = DecompressImage(stream, vtfHeader.width, vtfHeader.height, mipmapSize, vtfHeader.highResImageFormat);
+                            frames[i].Faces = new Color[faces][];
+                            for (int face = 0; face < faces; face++)
+                            {
+                                long mipmapBufferOffset = (long)mipmapSize * (vtfHeader.frames * faces - (i * faces + face));
+                                stream.Position = stream.Length - mipmapBufferOffset;
+                                frames[i].Faces[face] = DecompressImage(stream, vtfHeader.width, vtfHeader.height, mipmapSize, vtfHeader.highResImageFormat);
+                            }
+                            frames[i].Pixels = frames[i].Faces[0];
 						}
 
 
@@ -276,6 +294,23 @@ namespace Chisel.Import.Source.VPKTools
             return frames;
         }
 
+        /// <summary>
+        /// How many images each frame holds. An environment map has one per cube face, and before version 7.5 a seventh,
+        /// a spheremap fallback, unless its first frame is 0xFFFF (VTFLib's rule, which the game's files follow). The
+        /// other count is taken when only that one fits the file exactly.
+        /// </summary>
+        static int FaceCount(VTFHeader header, long fileLength, int imageBufferOffset)
+        {
+            if ((header.flags & VTFImageFlag.TEXTUREFLAGS_ENVMAP) == 0)
+                return 1;
+            var faces = (header.firstFrame != 0xFFFF && header.version < 7.5f) ? 7 : 6;
+            var imageSize = (long)ComputeImageBufferSize(header.width, header.height, header.depth, header.mipmapCount, header.highResImageFormat) * header.frames;
+            var other = 13 - faces;
+            if (imageBufferOffset + imageSize * faces != fileLength && imageBufferOffset + imageSize * other == fileLength)
+                return other;
+            return faces;
+        }
+
         private static Color[] DecompressImage( Stream data, ushort width, ushort height, uint dataSize, VTFImageFormat imageFormat )
 		{
 			Texture2DHelpers.TextureFormat format;
@@ -304,6 +339,7 @@ namespace Chisel.Import.Source.VPKTools
 				case VTFImageFormat.IMAGE_FORMAT_RGBA8888: format = Texture2DHelpers.TextureFormat.BGRA8888; break;
 				case VTFImageFormat.IMAGE_FORMAT_ABGR8888: format = Texture2DHelpers.TextureFormat.BGRA8888; break;
 				case VTFImageFormat.IMAGE_FORMAT_ARGB8888: format = Texture2DHelpers.TextureFormat.BGRA8888; break;
+				case VTFImageFormat.IMAGE_FORMAT_RGBA16161616F: format = Texture2DHelpers.TextureFormat.RGBA16161616F; break;
                 default:
                 {
                     format = Texture2DHelpers.TextureFormat.BGR888;

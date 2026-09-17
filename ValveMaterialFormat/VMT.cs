@@ -102,7 +102,12 @@ namespace Chisel.Import.Source.VPKTools
 		public string       EnvMapTextureName;
 		public string       EnvMapMaskTextureName;
 		public RGBColor		EnvMapTint;
-		//public Vector3?	EnvMapContrast;
+		public Vector3?		EnvMapContrast;
+		/// <summary>$fresnelreflection: LightmappedGeneric's reflection head-on, 1 (the default) meaning no Fresnel falloff</summary>
+		public float?		FresnelReflection;
+		/// <summary>$envmapfresnel: how much the skin shader shapes its reflection by $phongfresnelranges</summary>
+		public float?		EnvMapFresnel;
+		public bool?		InvertPhongMask;
 		public Vector3?		EnvMapSaturation;
 		public int?			EnvMapMode;
 
@@ -503,7 +508,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$envmapcameraspace": // '0'. '1'.
 						case "$envmapfalloff": // '1'.
 						case "$envmapframe": // '0'.
-						case "$envmapfresnel": // '1'. '-1'. '-4.0000002384'. '8'.
 						case "$envmapfresnelminmaxexp": // '[0.1 3 3]'.
 						case "$envmapmask2": // 'rocks/coroded/rock38a_s_normal'.
 						case "$envmapmaskframe": // '0'.
@@ -558,7 +562,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$frameminusten": // '1'.
 						case "$freeze": // '0'.
 						case "$fresnelpower": // '0'. '1'.
-						case "$fresnelreflection": // '1'. '0'. '0.25'. '.25'. '.3'.
 						case "$gammacolorread": // '1'.
 						case "$gbuffer_force": // '1'.
 						case "$glassenvmap": // 'shadertest/gooinglass_envglass'.
@@ -603,7 +606,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$inner_ring_alpha_start": // '1.0'.
 						case "$inner_ring_min_lerp_delta": // '0.2'.
 						case "$intro": // '0'.
-						case "$invertphongmask": // '1'.
 						case "$iris": // 'models/alyx/pupil_l'. 'models/gman/eye-iris-greenright'. 'models/vortigaunt/new_vort_eye'. 'models/vortigaunt/pupil'.
 						case "$irisframe": // '0'.
 						case "$irisu": // '[ 0.000000 0.000000 0.000000 0.000000 ]'.
@@ -1063,19 +1065,16 @@ namespace Chisel.Import.Source.VPKTools
 						//case "\\\\$phong": // '1'.
 						//case "\\\\$phongfresnelranges": // '[.4 .8 30]'.
 						//case "\\\\$phongtint": // '[1 1 1]'.
-						case "$envmapcontrast":
-						{
-							// no documentation?
-							break;
-						}
 
 						case "$envmap": { vmfMaterial.EnvMapTextureName = property.Value; break; }
 						case "$envmapmask": { vmfMaterial.EnvMapMaskTextureName = property.Value; break; }
 						case "$envmaptint": { vmfMaterial.EnvMapTint = TextParser.ParseColor(property.Value); break; }
 
-						//case "$envmapcontrast": // '.5 .5 .5'.expected floating point value.
-						//case "$envmapcontrast": // '[0.3 0.3 0.3]'.expected floating point value.
-						//case "$envmapcontrast":			{ TryParseVector3Property(property, ref vmfMaterial.EnvMapContrast); break; }
+						// A scalar or a vector, as the material system reads both into a vector parameter
+						case "$envmapcontrast": { vmfMaterial.EnvMapContrast = ToVector(TextParser.ParseColor(property.Value)); break; }
+						case "$fresnelreflection": { TryParseFloatProperty(property, ref vmfMaterial.FresnelReflection); break; }
+						case "$envmapfresnel": { TryParseFloatProperty(property, ref vmfMaterial.EnvMapFresnel); break; }
+						case "$invertphongmask": { TryParseBoolProperty(property, ref vmfMaterial.InvertPhongMask); break; }
 						case "$envmapsaturation": { TryParseVector3Property(property, ref vmfMaterial.EnvMapSaturation); break; }
 						case "$envmapmode": { TryParseIntProperty(property, ref vmfMaterial.EnvMapMode); break; }
 
@@ -1277,6 +1276,11 @@ namespace Chisel.Import.Source.VPKTools
 			if (showErrorWhenNotFound)
 				ShowVMFMaterialPropertyError(property, "Expected floating point value.");
 			return false;
+		}
+
+		private static Vector3? ToVector(RGBColor color)
+		{
+			return (color == null) ? (Vector3?)null : new Vector3(color.r, color.g, color.b);
 		}
 
 		private static bool TryParseVector3Property(EntityHierarchyProperty property, ref Vector3? result, bool showErrorWhenNotFound = true)

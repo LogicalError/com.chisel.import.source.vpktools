@@ -183,6 +183,27 @@ namespace Chisel.Import.Source.VPKTools
 
 
 		/// <summary>
+		/// A cubemap a material names ($envmap), as a Unity cubemap asset, or null when there is none or the texture isn't an
+		/// environment map. The game renders in HDR - its maps carry only HDR cubemaps - and an environment map's HDR version
+		/// sits beside it as "&lt;name&gt;.hdr.vtf", so that one is taken first.
+		/// </summary>
+		public Cubemap ImportCubemap(string entryName, string[] searchPaths = null)
+		{
+			if (string.IsNullOrEmpty(entryName)) return null;
+			searchPaths ??= PackagePath.DefaultMaterialPaths;
+			var name = entryName.EndsWith("." + PackagePath.ExtensionVTF, StringComparison.OrdinalIgnoreCase)
+					 ? entryName.Substring(0, entryName.Length - PackagePath.ExtensionVTF.Length - 1) : entryName;
+			var entry = GetEntry(name + ".hdr." + PackagePath.ExtensionVTF, searchPaths) ??
+						GetEntry(name + "." + PackagePath.ExtensionVTF, searchPaths);
+			if (entry == null)
+				return null;
+			var sourceTexture = LoadVTF(entry);
+			if (sourceTexture == null || (sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ENVMAP) == 0)
+				return null;
+			return Texture2DImporter.ImportCubemap(sourceTexture, PackagePath.GetOutputPath(entry.keyname));
+		}
+
+		/// <summary>
 		/// The alpha channel of a texture, as a mask texture of its own (see
 		/// <see cref="Texture2DImporter.ImportAlphaMask"/>), or null when it has none.
 		/// </summary>

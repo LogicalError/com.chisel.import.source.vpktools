@@ -160,6 +160,109 @@ namespace Chisel.Import.Source.VPKTools
 			return AssetDatabase.LoadAssetAtPath<Cubemap>(assetPath);
 		}
 
+		/// <summary>
+		/// Writes a VTF environment map as a Unity cubemap asset and returns it, rebuilt in place when out of date.
+		/// <para>
+		/// Source's faces are +x, -x, +y, -y, +z, -z of Source's world, each laid out as Direct3D lays a cube face out; so
+		/// are Unity's, in Unity's world, whose y and z are Source's z and y (Cubemap.SetPixel, checked in the editor). Each
+		/// Unity texel is filled from the Source texel its direction lands on. The texels stay linear: the game reads an
+		/// environment map without an sRGB conversion when it renders in HDR (LoadCubeMap), and HDR ones are floats.
+		/// </para>
+		/// </summary>
+		public static Cubemap ImportCubemap(VTF sourceTexture, string outputPath)
+		{
+			var faces = (sourceTexture?.Frames != null && sourceTexture.Frames.Length > 0) ? sourceTexture.Frames[0].Faces : null;
+			if (faces == null || faces.Length < 6 || sourceTexture.Width != sourceTexture.Height)
+				return null;
+
+			var destinationPath = Path.ChangeExtension(outputPath, ".cubemap");
+			var foundAsset = UnityAssets.Load<Cubemap>(destinationPath);
+			if (foundAsset != null && IsCurrent(foundAsset))
+				return foundAsset;
+
+			var size = sourceTexture.Width;
+			var format = sourceTexture.IsHDR ? UnityEngine.Experimental.Rendering.GraphicsFormat.R16G16B16A16_SFloat
+											 : UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm;
+			var cubemap = new Cubemap(size, format, UnityEngine.Experimental.Rendering.TextureCreationFlags.MipChain)
+			{
+				name = Path.GetFileNameWithoutExtension(destinationPath)
+			};
+			for (int face = 0; face < 6; face++)
+			{
+				for (int y = 0; y < size; y++)
+				{
+					for (int x = 0; x < size; x++)
+					{
+						var unityDirection = CubeDirection(face, (2 * x + 1) / (float)size - 1, (2 * y + 1) / (float)size - 1);
+						var sourceDirection = new Vector3(unityDirection.x, unityDirection.z, unityDirection.y);
+						var sourceFace = CubeTexel(sourceDirection, out var u, out var v);
+						var sourceX = Mathf.Clamp(Mathf.FloorToInt((u + 1) * 0.5f * size), 0, size - 1);
+						var sourceY = Mathf.Clamp(Mathf.FloorToInt((v + 1) * 0.5f * size), 0, size - 1);
+						// The VTF reader keeps the bottom row first
+						cubemap.SetPixel((CubemapFace)face, x, y, faces[sourceFace][(size - 1 - sourceY) * size + sourceX]);
+					}
+				}
+			}
+			cubemap.Apply(updateMipmaps: true);
+
+			if (foundAsset != null)
+			{
+				// Over the outdated one, which keeps its GUID and every material using it
+				EditorUtility.CopySerialized(cubemap, foundAsset);
+				foundAsset.name = cubemap.name;
+				Object.DestroyImmediate(cubemap);
+				EditorUtility.SetDirty(foundAsset);
+				AssetDatabase.SaveAssetIfDirty(foundAsset);
+				cubemap = foundAsset;
+			}
+			else
+				UnityAssets.Save(cubemap, destinationPath);
+
+			if (AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(cubemap)) is AssetImporter importer)
+			{
+				importer.userData = GeneratedAssetVersion.Stamp(importer.userData, GeneratedVersion);
+				importer.SaveAndReimport();
+			}
+			return AssetDatabase.LoadAssetAtPath<Cubemap>(AssetDatabase.GetAssetPath(cubemap));
+		}
+
+		/// <summary>The direction a cube face's texel looks along, Direct3D's layout: u to the right, v down, both -1 to 1.</summary>
+		internal static Vector3 CubeDirection(int face, float u, float v)
+		{
+			switch (face)
+			{
+				case 0:  return new Vector3( 1, -v, -u);
+				case 1:  return new Vector3(-1, -v,  u);
+				case 2:  return new Vector3( u,  1,  v);
+				case 3:  return new Vector3( u, -1, -v);
+				case 4:  return new Vector3( u, -v,  1);
+				default: return new Vector3(-u, -v, -1);
+			}
+		}
+
+		/// <summary>The face and position (u to the right, v down, -1 to 1) a direction lands on, Direct3D's layout.</summary>
+		internal static int CubeTexel(Vector3 direction, out float u, out float v)
+		{
+			var ax = Mathf.Abs(direction.x);
+			var ay = Mathf.Abs(direction.y);
+			var az = Mathf.Abs(direction.z);
+			if (ax >= ay && ax >= az)
+			{
+				u = -Mathf.Sign(direction.x) * direction.z / ax;
+				v = -direction.y / ax;
+				return direction.x >= 0 ? 0 : 1;
+			}
+			if (ay >= az)
+			{
+				u = direction.x / ay;
+				v = Mathf.Sign(direction.y) * direction.z / ay;
+				return direction.y >= 0 ? 2 : 3;
+			}
+			u = Mathf.Sign(direction.z) * direction.x / az;
+			v = -direction.y / az;
+			return direction.z >= 0 ? 4 : 5;
+		}
+
 		static readonly Vector2Int[] placementRects = new Vector2Int[] { new (2, 1), new (0, 1), new (1, 2), new (1, 0), new (1, 1), new (3, 1) };
 
 		public static void SaveCubemapAsPNG(VTF frontVTF, VTF backVTF, VTF upVTF, VTF downVTF, VTF leftVTF, VTF rightVTF, string destinationPath)

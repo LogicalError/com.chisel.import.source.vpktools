@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 8);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 9);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -599,15 +599,8 @@ namespace Chisel.Import.Source.VPKTools
 				}
 			}
 
-			// $envmap is almost always "env_cubemap", ie "reflect what is around this spot", which in
-			// Unity would be a reflection probe. It is not imported yet, and the shaders' lighting model
-			// (SourceSpecular) leaves the probes out. $envmapmask scales the shader's specular input, which
-			// is zero unless the material draws phong - and phong replaces it (the game does not mask its
-			// highlight with $envmapmask either) - so for now the mask has no visible effect.
-			if (SetMaterialTexture(gameResources, unityMaterial, "_EnvMapMask", sourceMaterial.EnvMapMaskTextureName, warnIfMissing: false) != null)
-				unityMaterial.EnableKeyword("_ENVMAPMASK");
-
 			ApplySourceSpecular(gameResources, unityMaterial, sourceMaterial, mainTexture);
+			ApplySourceEnvMap(gameResources, unityMaterial, sourceMaterial, mainTexture);
 			ApplySourceVertexColor(gameResources, unityMaterial, sourceMaterial);
 			ApplySourceBlendState(unityMaterial, sourceMaterial);
 
@@ -700,6 +693,178 @@ namespace Chisel.Import.Source.VPKTools
 			if (SetMaterialTexture(gameResources, unityMaterial, "_PhongWarp",
 								   sourceMaterial.PhongWarpTextureName) != null)
 				unityMaterial.EnableKeyword("_PHONGWARP");
+		}
+
+		/// <summary>How the game draws a material's $envmap: which cubemap, and the parts of the reflection term its shader uses.</summary>
+		internal struct SourceEnvMap
+		{
+			/// <summary>The material reflects at all</summary>
+			public bool Enabled;
+			/// <summary>The cubemap the material names, or null for env_cubemap: the reflection probe nearest to the surface</summary>
+			public string Cubemap;
+			/// <summary>$envmaptint as the shader receives it</summary>
+			public Color Tint;
+			public Vector3 Contrast;
+			public Vector3 Saturation;
+			/// <summary>LightmappedGeneric's reflection head-on; 1 is no Fresnel falloff</summary>
+			public float FresnelReflection;
+			/// <summary>The skin shader's $envmapfresnel: how much $phongfresnelranges shapes the reflection</summary>
+			public float PhongFresnel;
+			/// <summary>What masks the reflection, one at most: x the normal map's alpha, y the base alpha, z one minus the base
+			/// alpha, w the phong mask. None: unmasked.</summary>
+			public Vector4 MaskWeights;
+			/// <summary>$envmapmask multiplies the reflection</summary>
+			public bool MaskTexture;
+			/// <summary>The skin shader's $invertphongmask turns the mask around</summary>
+			public bool InvertMask;
+		}
+
+		static readonly Vector4 kMaskNormalAlpha       = new(1, 0, 0, 0);
+		static readonly Vector4 kMaskBaseAlpha         = new(0, 1, 0, 0);
+		static readonly Vector4 kMaskInvertedBaseAlpha = new(0, 0, 1, 0);
+		static readonly Vector4 kMaskPhong             = new(0, 0, 0, 1);
+
+		/// <summary>
+		/// What the game makes of a material's $envmap, shader by shader (SDK 2013):
+		/// <list type="bullet">
+		/// <item>LightmappedGeneric (lightmappedgeneric_dx9_helper.cpp, lightmappedgeneric_ps2_3_x.h) takes the tint as written,
+		/// masks by the normal map's alpha ($normalmapalphaenvmapmask), by $envmapmask when there is no $bumpmap, and by one
+		/// minus the base alpha ($basealphaenvmapmask, when the base texture has alpha), and has a Fresnel term
+		/// ($fresnelreflection). Its fast path, taken unless contrast is neither 0 nor 1 while saturation isn't 1, or the
+		/// Fresnel isn't 1, or a self-illum tint is set, reads contrast as 0 or 1 and saturation and Fresnel as 1.</item>
+		/// <item>VertexLitGeneric without the skin shader, and UnlitGeneric (vertexlitgeneric_dx9_helper.cpp,
+		/// vertexlit_and_unlit_generic(_bump)_ps2x.fxc), take the tint out of gamma space. With a $bumpmap only the normal
+		/// map's alpha masks, and a material asking for $envmapmask or $basealphaenvmapmask instead reflects nothing; without
+		/// one, $envmapmask and one minus the base alpha do. No Fresnel.</item>
+		/// <item>VertexLitGeneric drawn by the skin shader, where it draws phong (skin_dx9_helper.cpp, skin_ps20b.fxc), takes
+		/// the tint as written and masks by the phong mask with $normalmapalphaenvmapmask, by the base alpha without, turned
+		/// around by $invertphongmask, and shapes by $phongfresnelranges as much as $envmapfresnel says. No contrast,
+		/// saturation or $envmapmask.</item>
+		/// </list>
+		/// </summary>
+		/// <param name="baseTextureHasAlpha">The base texture the material is drawn with has an alpha channel</param>
+		internal static SourceEnvMap EnvMapOf(VMT sourceMaterial, bool baseTextureHasAlpha)
+		{
+			var result = new SourceEnvMap { Tint = Color.white, Contrast = Vector3.zero, Saturation = Vector3.one, FresnelReflection = 1 };
+			var envMap = sourceMaterial.EnvMapTextureName;
+			if (string.IsNullOrWhiteSpace(envMap))
+				return result;
+
+			var shader = SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName);
+			var lightmapped = string.Equals(shader, "LightmappedGeneric", System.StringComparison.OrdinalIgnoreCase);
+			var vertexLit   = string.Equals(shader, "VertexLitGeneric", System.StringComparison.OrdinalIgnoreCase);
+			var unlit       = string.Equals(shader, "UnlitGeneric", System.StringComparison.OrdinalIgnoreCase);
+			if (!lightmapped && !vertexLit && !unlit)
+				return result;
+
+			result.Enabled = true;
+			result.Cubemap = string.Equals(envMap.Trim(), "env_cubemap", System.StringComparison.OrdinalIgnoreCase) ? null : envMap;
+
+			Color tint = (sourceMaterial.EnvMapTint != null) ? (Color)sourceMaterial.EnvMapTint : Color.white;
+			tint.a = 1;
+			var contrast   = sourceMaterial.EnvMapContrast ?? Vector3.zero;
+			var saturation = sourceMaterial.EnvMapSaturation ?? Vector3.one;
+			var hasBump    = !string.IsNullOrEmpty(sourceMaterial.BumpMapName);
+			var normalAlpha = sourceMaterial.NormalMapAlphaEnvMapMask == true;
+			var baseAlpha   = sourceMaterial.BaseAlphaEnvMapMask.HasValue && sourceMaterial.BaseAlphaEnvMapMask.Value != 0;
+			var hasMask     = !string.IsNullOrEmpty(sourceMaterial.EnvMapMaskTextureName);
+			var hasBase     = !string.IsNullOrEmpty(sourceMaterial.BaseTextureName);
+
+			if (lightmapped)
+			{
+				result.Tint = tint;
+				var fresnel = sourceMaterial.FresnelReflection ?? 1.0f;
+				var selfIllumTinted = sourceMaterial.SelfIllumination == true && sourceMaterial.SelfIlluminationColor != null &&
+									  ((Color)sourceMaterial.SelfIlluminationColor != Color.white);
+				var usingContrast = contrast.x != 0 && contrast.x != 1 && saturation.x != 1;
+				if (usingContrast || fresnel != 1 || selfIllumTinted)
+				{
+					result.Contrast = contrast;
+					result.Saturation = saturation;
+					result.FresnelReflection = fresnel;
+				}
+				else
+					result.Contrast = (contrast.x == 1) ? Vector3.one : Vector3.zero;
+
+				if (normalAlpha)
+					result.MaskWeights = hasBump ? kMaskNormalAlpha : Vector4.zero;
+				else if (baseAlpha && hasBase && baseTextureHasAlpha)
+					result.MaskWeights = kMaskInvertedBaseAlpha;
+				result.MaskTexture = hasMask && !hasBump && string.IsNullOrEmpty(sourceMaterial.BumpMap2Name) && !normalAlpha && !baseAlpha;
+				return result;
+			}
+
+			if (vertexLit && DrawsPhong(sourceMaterial))
+			{
+				result.Tint = tint;
+				result.PhongFresnel = sourceMaterial.EnvMapFresnel ?? 0.0f;
+				result.MaskWeights = normalAlpha ? kMaskPhong : kMaskBaseAlpha;
+				result.InvertMask = sourceMaterial.InvertPhongMask == true;
+				return result;
+			}
+
+			result.Tint = new Color(GammaToLinearConstant(tint.r), GammaToLinearConstant(tint.g), GammaToLinearConstant(tint.b), 1);
+			result.Contrast = contrast;
+			result.Saturation = saturation;
+			if (vertexLit && hasBump)
+			{
+				if (normalAlpha)
+					result.MaskWeights = kMaskNormalAlpha;
+				else if (baseAlpha || hasMask)
+					result.Enabled = false;
+				return result;
+			}
+			if (hasMask)
+				result.MaskTexture = true;
+			else if (baseAlpha && hasBase)
+				result.MaskWeights = kMaskInvertedBaseAlpha;
+			return result;
+		}
+
+		/// <summary>Sets up the shader's reflection term for a material's $envmap (<see cref="EnvMapOf"/>).</summary>
+		private static void ApplySourceEnvMap(GameResources gameResources, Material unityMaterial, VMT sourceMaterial, Texture2D mainTexture)
+		{
+			unityMaterial.DisableKeyword("_ENVMAP");
+			var baseHasAlpha = mainTexture != null &&
+							   UnityEngine.Experimental.Rendering.GraphicsFormatUtility.HasAlphaChannel(mainTexture.graphicsFormat);
+			var envMap = EnvMapOf(sourceMaterial, baseHasAlpha);
+			if (!envMap.Enabled)
+				return;
+
+			if (envMap.Cubemap != null)
+			{
+				// The game shows its error texture for a cubemap it can't find; nothing is reflected here
+				var cubemap = gameResources.ImportCubemap(envMap.Cubemap);
+				if (cubemap == null)
+					return;
+				unityMaterial.SetTexture("_EnvMap", cubemap);
+			}
+			unityMaterial.SetFloat("_EnvMapFromProbes", (envMap.Cubemap == null) ? 1 : 0);
+
+			unityMaterial.EnableKeyword("_ENVMAP");
+			unityMaterial.SetColor("_EnvMapTint", ShaderColor(envMap.Tint));
+			unityMaterial.SetVector("_EnvMapContrast", envMap.Contrast);
+			unityMaterial.SetVector("_EnvMapSaturation", envMap.Saturation);
+			unityMaterial.SetFloat("_FresnelReflection", envMap.FresnelReflection);
+			unityMaterial.SetFloat("_EnvMapPhongFresnel", envMap.PhongFresnel);
+			unityMaterial.SetFloat("_EnvMapInvertMask", envMap.InvertMask ? 1 : 0);
+
+			var weights = envMap.MaskWeights;
+			if (weights.x > 0)
+			{
+				// The normal map's alpha, written beside it as for the phong mask; without one, alpha is 1 and masks nothing
+				var normalAlpha = gameResources.ImportAlphaMask(sourceMaterial.BumpMapName);
+				if (normalAlpha != null)
+					unityMaterial.SetTexture("_PhongMask", normalAlpha);
+				else
+					weights = Vector4.zero;
+			}
+			unityMaterial.SetVector("_EnvMapMaskWeights", weights);
+
+			unityMaterial.SetFloat("_EnvMapMaskTexture", 0);
+			if (envMap.MaskTexture &&
+				SetMaterialTexture(gameResources, unityMaterial, "_EnvMapMask", sourceMaterial.EnvMapMaskTextureName, warnIfMissing: false) != null)
+				unityMaterial.SetFloat("_EnvMapMaskTexture", 1);
 		}
 
 		/// <summary>What a Source shader does with a mesh's vertex colour.</summary>

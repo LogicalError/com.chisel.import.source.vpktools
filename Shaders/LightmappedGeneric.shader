@@ -35,6 +35,16 @@ Shader "Chisel/Source/LightmappedGeneric"
 		_DetailBlendMode ("$detailblendmode", Float) = 0
 
 		_EnvMapMask ("$envmapmask", 2D) = "white" {}
+		[NoScaleOffset] _EnvMap ("$envmap (a named cubemap)", Cube) = "black" {}
+		[Toggle] _EnvMapFromProbes ("$envmap is env_cubemap: the nearest probe", Float) = 1
+		_EnvMapTint ("$envmaptint", Color) = (1,1,1,1)
+		_EnvMapContrast ("$envmapcontrast", Vector) = (0,0,0,0)
+		_EnvMapSaturation ("$envmapsaturation", Vector) = (1,1,1,0)
+		_FresnelReflection ("$fresnelreflection", Float) = 1
+		_EnvMapPhongFresnel ("$envmapfresnel", Float) = 0
+		_EnvMapMaskWeights ("Envmap mask: normal alpha, base alpha, 1 - base alpha, phong mask", Vector) = (0,0,0,0)
+		[Toggle] _EnvMapInvertMask ("$invertphongmask", Float) = 0
+		[Toggle] _EnvMapMaskTexture ("Envmap masked by $envmapmask", Float) = 0
 
 		_PhongBoost ("$phongboost", Float) = 1.0
 		// Negative hands the exponent to _PhongExponentMap, which is Source's own default.
@@ -72,11 +82,13 @@ Shader "Chisel/Source/LightmappedGeneric"
 
 		CGPROGRAM
 		#pragma target 3.0
+		// The reflection probes come as a cubemap array (ChiselSourceProbes.cginc)
+		#pragma require cubearray
 
 		#pragma shader_feature_local _NORMALMAP
 		#pragma shader_feature_local _VERTEXBLEND
 		#pragma shader_feature_local _DETAIL
-		#pragma shader_feature_local _ENVMAPMASK
+		#pragma shader_feature_local _ENVMAP
 		#pragma shader_feature_local _PHONG
 		#pragma shader_feature_local _PHONGMASK
 		#pragma shader_feature_local _PHONGEXPONENTMAP

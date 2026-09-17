@@ -72,9 +72,9 @@ namespace Chisel.Import.Source.VPKTools
             Color[] colors = null;
 			if (textureFormat == TextureFormat.R8)
 				colors = DecompressR8(data, width, height);
-			if ( textureFormat == TextureFormat.RG88)
+			else if ( textureFormat == TextureFormat.RG88)
                 colors = DecompressRG88( data, width, height );
-            if( textureFormat == TextureFormat.BGR888 )
+            else if( textureFormat == TextureFormat.BGR888 )
                 colors = DecompressBGR888( data, width, height );
             else if( textureFormat == TextureFormat.BGRA8888 )
                 colors = DecompressBGRA8888( data, width, height );
@@ -84,6 +84,8 @@ namespace Chisel.Import.Source.VPKTools
                 colors = DecompressDXT3( data, width, height, dataSize);
             else if( textureFormat == TextureFormat.DXT5 )
                 colors = DecompressDXT5( data, width, height, dataSize);
+            else if( textureFormat == TextureFormat.RGBA16161616F )
+                colors = DecompressRGBA16161616F( data, width, height );
             else
                 Debug.LogError( "Texture2DHelpers: Texture format not supported " + textureFormat );
 
@@ -238,6 +240,27 @@ namespace Chisel.Import.Source.VPKTools
                     break;
             }
 
+            return texture2DColors;
+        }
+
+        /// <summary>
+        /// Turn raw RGBA16161616F bytes - four little-endian half floats a pixel, linear and unbounded, which is how Source
+        /// stores HDR cubemaps - to a Color array.
+        /// </summary>
+        public static Color[] DecompressRGBA16161616F( Stream data, ushort width, ushort height )
+        {
+            var texture2DColors = new Color[width * height];
+            var bytes = new byte[8];
+            for( int i = 0; i < texture2DColors.Length; i++ )
+            {
+                if( data.Read( bytes, 0, 8 ) != 8 )
+                {
+                    Debug.LogError( "RGBA16161616F: the data ended before the image did" );
+                    break;
+                }
+                texture2DColors[i] = new Color( Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, 0 ) ), Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, 2 ) ),
+                                                Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, 4 ) ), Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, 6 ) ) );
+            }
             return texture2DColors;
         }
 
@@ -498,6 +521,7 @@ namespace Chisel.Import.Source.VPKTools
             DXT1,
             DXT3,
             DXT5,
+            RGBA16161616F,
         }
     }
 }

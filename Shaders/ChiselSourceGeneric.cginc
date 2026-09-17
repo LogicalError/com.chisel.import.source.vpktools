@@ -15,8 +15,9 @@
 //                              this is the one that cannot be expressed with Unity's Standard
 //                              shader at all, and is why lit signage/screens imported flat
 //   $detail/$detailscale/...   second texture blended over the base at its own tiling
-//   $envmap/$envmapmask/$tint  cubemap reflection - not imported yet, and the lighting model below
-//                              leaves Unity's reflection probes out, so these surfaces reflect nothing
+//   $envmap/$envmapmask/...    cubemap reflection, added to the lit surface as Source adds it: from the
+//                              reflection probe nearest to the pixel (ChiselSourceProbes.cginc), or from
+//                              the cubemap the material names
 //   $phong/$phongtint/...      Source's specular highlight, masked, tinted and shaped per pixel, and
 //                              handed to Unity's lighting as the specular colour and smoothness that
 //                              give its highlight the same width and peak (SourcePhongToStandard)
@@ -30,8 +31,8 @@
 #include "UnityPBSLighting.cginc"
 
 // The SourceSpecular lighting model: Unity's StandardSpecular BRDF, less two things Source does not do.
-//  - Reflection probes. A Source surface reflects its surroundings only through $envmap, which is not
-//    imported, and its highlight is a term per light and nothing more. StandardSpecular reflects the probes
+//  - Reflection probes. A Source surface reflects its surroundings only through $envmap, which the surface
+//    function adds itself, and its highlight is a term per light and nothing more. StandardSpecular reflects the probes
 //    and the sky with the surface's specular colour and smoothness, and lerps that toward
 //    smoothness + reflectivity at grazing angles - which, fed phong's specular inputs
 //    (SourcePhongToStandard), put a bright rim on every glossy prop.
@@ -123,11 +124,32 @@ half _VertexAlpha;
 	float4    _BlendMaskTransformV;
 #endif
 
-// $envmap is nearly always the literal "env_cubemap", meaning "use the cubemap baked for this spot" -
-// Unity's reflection probes. It is not imported yet (see SourceSpecular). $envmapmask scales o.Specular,
-// which is zero unless the material draws phong, and phong replaces it.
-#ifdef _ENVMAPMASK
+// $envmap: a cubemap reflection. Mostly the literal "env_cubemap", meaning "the cubemap baked nearest to this
+// spot", which is the nearest reflection probe here; otherwise a cubemap the material names, in _EnvMap.
+#ifdef _ENVMAP
+	#include "ChiselSourceProbes.cginc"
+	// Sampled with the probe array's sampler
+	UNITY_DECLARE_TEXCUBE_NOSAMPLER(_EnvMap);
+	half      _EnvMapFromProbes;
+	half3     _EnvMapTint;
+	half3     _EnvMapContrast;
+	half3     _EnvMapSaturation;
+	// LightmappedGeneric's reflection head-on, $fresnelreflection; 1 is no falloff, which every other shader has
+	half      _FresnelReflection;
+	// The skin shader's $envmapfresnel: how much $phongfresnelranges shapes the reflection
+	half      _EnvMapPhongFresnel;
+	// What masks the reflection, one weight at most: x the normal map's alpha, y the base alpha, z one minus the
+	// base alpha, w the phong mask. With none, nothing does.
+	half4     _EnvMapMaskWeights;
+	half      _EnvMapInvertMask;
+	// 1: $envmapmask multiplies it too
+	half      _EnvMapMaskTexture;
 	sampler2D _EnvMapMask;
+#endif
+
+// The normal map's alpha, written beside it by the importer, which the phong highlight and the envmap both mask by
+#if defined(_PHONGMASK) || defined(_ENVMAP)
+	sampler2D _PhongMask;
 #endif
 
 #ifdef _SELFILLUM
@@ -174,8 +196,8 @@ fixed4 _SpecColorTint;
 	#ifdef _PHONGMASK
 		// Source's usual mask is the NORMAL MAP's alpha (skin_ps20b.fxc:
 		// fSpecMask = lerp(normalTexel.a, baseColor.a, $basemapalphaphongmask)). Unity re-encodes normal
-		// maps and that alpha does not survive, so the importer writes it as a texture of its own.
-		sampler2D _PhongMask;
+		// maps and that alpha does not survive, so the importer writes it as a texture of its own: _PhongMask,
+		// declared further up with the envmap's use of it.
 	#endif
 	#ifdef _PHONGEXPONENTMAP
 		// $phongexponenttexture: red is the exponent, green how much of the albedo tints the highlight.
@@ -261,7 +283,12 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	#endif
 	// Only the colour blends. The alpha Source goes on reading as opacity and as the self-illum mask is
 	// still the first layer's.
-	base.rgb = lerp(base.rgb, tex2D(_BaseTexture2, IN.uv_MainTex).rgb, layerBlend * _BlendBase2);
+	half4 base2 = tex2D(_BaseTexture2, IN.uv_MainTex);
+	base.rgb = lerp(base.rgb, base2.rgb, layerBlend * _BlendBase2);
+	// The envmap mask reads the two layers' alphas blended (blendedAlpha)
+	half layerAlpha = lerp(base.a, base2.a, layerBlend * _BlendBase2);
+#else
+	half layerAlpha = base.a;
 #endif
 
 	fixed3 albedo = base.rgb * _Color.rgb;
@@ -301,11 +328,7 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	o.Alpha  = alpha;
 	o.Smoothness = _Smoothness;
 
-	fixed3 specular = _SpecColorTint.rgb * _SpecularScale;
-#ifdef _ENVMAPMASK
-	specular *= tex2D(_EnvMapMask, IN.uv_MainTex).rgb;
-#endif
-	o.Specular = specular;
+	o.Specular = _SpecColorTint.rgb * _SpecularScale;
 
 	// o.Normal is written in BOTH branches on purpose. A surface shader only supplies Input.viewDir
 	// in tangent space when the shader writes o.Normal somewhere; writing the identity normal in the
@@ -328,6 +351,11 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	// Everything in the highlight that can be decided per pixel: its mask, exponent, tint and fresnel.
 	// Note that Source does NOT mask the highlight with $envmapmask - that texture gates the cubemap
 	// reflection only.
+#if defined(_PHONG) || defined(_ENVMAP)
+	float3 worldNormal = WorldNormalVector(IN, o.Normal);
+	float3 viewWorld   = normalize(_WorldSpaceCameraPos - IN.worldPos);
+#endif
+
 #ifdef _PHONG
 	#ifdef _PHONGMASK
 		half phongMask = tex2D(_PhongMask, IN.uv_MainTex).r;
@@ -348,8 +376,6 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	// vSpecularTint from baseColor.rgb, and modulates albedo only afterwards).
 	half3 tint = lerp(_SpecColorTint.rgb, lerp(half3(1, 1, 1), base.rgb, exponentMap.g), _PhongAlbedoTint);
 
-	float3 worldNormal = WorldNormalVector(IN, o.Normal);
-	float3 viewWorld   = normalize(_WorldSpaceCameraPos - IN.worldPos);
 	half   fresnel     = SourcePhongFresnel(worldNormal, viewWorld, _PhongFresnelRanges);
 	#ifdef _PHONGWARP
 		// With a warp texture the fresnel is the lookup's second coordinate rather than a multiplier:
@@ -373,6 +399,33 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	rimEdge *= rimEdge;
 	half rimWeight = saturate(lerp(1.0h, exponentMap.a, _RimMask) * rimEdge * worldNormal.y);
 	o.Emission += ShadeSH9(float4(viewWorld, 1.0)) * (_RimLight * _RimLightBoost * rimWeight) * tint;
+#endif
+
+#ifdef _ENVMAP
+	// Source adds the reflection to the lit surface (lightmappedgeneric_ps2_3_x.h,
+	// vertexlit_and_unlit_generic(_bump)_ps2x.fxc, skin_ps20b.fxc): the cubemap along the reflected view ray, masked,
+	// tinted, squared by $envmapcontrast, desaturated by $envmapsaturation and shaped by a Fresnel term. The importer
+	// sets up each shader's own subset of that (MaterialImporter.EnvMapOf).
+	float3 reflection = reflect(-viewWorld, worldNormal);
+	half3 environment = (_EnvMapFromProbes > 0.5h) ? SourceProbeReflection(IN.worldPos, reflection)
+												   : UNITY_SAMPLE_TEXCUBE_SAMPLER(_EnvMap, _SourceProbes, reflection).rgb;
+	half normalAlpha = tex2D(_PhongMask, IN.uv_MainTex).r;
+	half envMask = (1.0h - dot(_EnvMapMaskWeights, half4(1, 1, 1, 1))) + _EnvMapMaskWeights.x * normalAlpha
+				 + _EnvMapMaskWeights.y * layerAlpha + _EnvMapMaskWeights.z * (1.0h - layerAlpha);
+	#ifdef _PHONG
+		envMask += _EnvMapMaskWeights.w * phongMask;
+	#endif
+	envMask = lerp(envMask, 1.0h - envMask, _EnvMapInvertMask);
+	half3 reflected = environment * envMask * lerp(half3(1, 1, 1), tex2D(_EnvMapMask, IN.uv_MainTex).rgb, _EnvMapMaskTexture);
+	reflected *= _EnvMapTint;
+	reflected = lerp(reflected, reflected * reflected, _EnvMapContrast);
+	reflected = lerp(dot(reflected, half3(0.299h, 0.587h, 0.114h)).xxx, reflected, _EnvMapSaturation);
+	half facing = 1.0h - saturate(dot(worldNormal, viewWorld));
+	half envFresnel = pow(facing, 5.0h) * (1.0h - _FresnelReflection) + _FresnelReflection;
+	#ifdef _PHONG
+		envFresnel *= lerp(1.0h, fresnel, _EnvMapPhongFresnel);
+	#endif
+	o.Emission += reflected * envFresnel;
 #endif
 
 #ifdef _SELFILLUM
