@@ -125,6 +125,9 @@ namespace Chisel.Import.Source.VPKTools
 		public bool?        NoCull;
 
 		public float?       AlphaTestReference;
+
+		/// <summary><c>$decalscale</c>: a decal's size is its base texture's size times this (1 when unset).</summary>
+		public float?       DecalScale;
 		public bool?		AlphaTest;
 
 
@@ -446,7 +449,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$decal":
 						case "$decalfadeduration": // '2.00'.
 						case "$decalfadetime": // '0.00'. '1.0'.
-						case "$decalscale":
 						case "$decalsecondpass": // '1'.
 						case "$decay": // '0'.
 						case "$decayrate": // '0'.
@@ -1133,6 +1135,7 @@ namespace Chisel.Import.Source.VPKTools
 						}
 
 						case "$alphatestreference": { TryParseFloatProperty(property, ref vmfMaterial.AlphaTestReference); break; }
+						case "$decalscale": { TryParseFloatProperty(property, ref vmfMaterial.DecalScale); break; }
 						case "$alphatest": { TryParseBoolProperty(property, ref vmfMaterial.AlphaTest); break; }
 
 						case "$frame": { TryParseIntProperty(property, ref vmfMaterial.BaseTextureFrame); break; }
