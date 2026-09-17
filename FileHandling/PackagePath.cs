@@ -77,9 +77,15 @@ namespace Chisel.Import.Source.VPKTools
 			extension = GetExtension(filePath);
 		}
 
+		/// <summary>
+		/// Joins parts of a path in the game's file system, as the engine joins them: one after the other, with the
+		/// doubled slashes that leaves cleaned up. A part that starts with a slash does not start over from the root, as
+		/// it would with Path.Combine - materials name textures like "\models\props_lambda\pipe_set001a", which the
+		/// game finds under materials/.
+		/// </summary>
 		public static string Combine(params string[] paths)
 		{
-			var combinedPath = Path.Combine(paths);
+			var combinedPath = string.Join("/", paths);
 			CleanFullPath(ref combinedPath);
 			return combinedPath;
 		}

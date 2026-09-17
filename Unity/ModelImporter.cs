@@ -335,10 +335,22 @@ namespace Chisel.Import.Source.VPKTools
 			var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
 			if (foundAsset != null && (model == null || GeneratedAssetVersion.IsCurrent(assetPath, ModelVersion, AnimationVersion)))
 			{
-				// The animation this model shares with others is versioned on its own, so it can be out of
-				// date when the model is not.
-				ImportIncludedAnimations(gameResources, model);
-				return LoadSkinVariants(outputPath, foundAsset);
+				// The materials are versioned on their own: an outdated one is rebuilt in place, where the model file's
+				// links still find it, and a missing one is made again.
+				if (model != null)
+					ImportModelTextures(gameResources, model);
+
+				var models = LoadSkinVariants(outputPath, foundAsset);
+				// A model file can be current while the materials it links to are gone - deleted along with the
+				// materials folder, say - and Unity would bring it in without them. A material made again is a new
+				// asset, so the model file is built again, which links the materials anew.
+				if (model == null || !LinksToMissingMaterials(assetPath, models))
+				{
+					// The animation this model shares with others is versioned on its own, so it can be out of
+					// date when the model is not.
+					ImportIncludedAnimations(gameResources, model);
+					return models;
+				}
 			}
 
 			if (model == null)
@@ -840,6 +852,43 @@ namespace Chisel.Import.Source.VPKTools
 			return results.ToArray();
 		}
 
+		const string kMaterialSlotPath = "m_Materials.Array.data[";
+
+		/// <summary>
+		/// Whether a model file, or one of its skin variants, links to a material asset that no longer exists. Every link
+		/// this importer makes names a material it has just imported - the model file's remaps
+		/// (<see cref="ConfigureImportedModel"/>) and the slots a skin variant overrides - so a link that comes back empty
+		/// points at an asset that was deleted.
+		/// </summary>
+		/// <param name="models">The model file's prefab and its skin variants (<see cref="LoadSkinVariants"/>)</param>
+		internal static bool LinksToMissingMaterials(string assetPath, GameObject[] models)
+		{
+			if (AssetImporter.GetAtPath(assetPath) is UnityEditor.ModelImporter importer)
+			{
+				foreach (var link in importer.GetExternalObjectMap())
+				{
+					if (link.Key.type == typeof(Material) && link.Value == null)
+						return true;
+				}
+			}
+
+			if (models == null)
+				return false;
+			for (int i = 1; i < models.Length; i++)
+			{
+				var modifications = models[i] != null ? PrefabUtility.GetPropertyModifications(models[i]) : null;
+				if (modifications == null)
+					continue;
+				foreach (var modification in modifications)
+				{
+					if (modification.propertyPath.StartsWith(kMaterialSlotPath, StringComparison.Ordinal) &&
+						modification.objectReference == null)
+						return true;
+				}
+			}
+			return false;
+		}
+
 		/// <summary>
 		/// Points Unity's model importer at the materials this importer already created, and tells it
 		/// what the file does and does not contain.
@@ -867,6 +916,14 @@ namespace Chisel.Import.Source.VPKTools
 			// its default location and every name we remap resolves to our asset instead of to a new
 			// empty material embedded in the model.
 			importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
+			// The file being configured is the one just written, so the links are exactly its materials: one left from an
+			// earlier file, whose material may be gone since, would have the model rebuilt on every import
+			// (LinksToMissingMaterials).
+			foreach (var link in importer.GetExternalObjectMap())
+			{
+				if (link.Key.type == typeof(Material))
+					importer.RemoveRemap(link.Key);
+			}
 			if (exported?.MaterialNames != null)
 			{
 				for (int i = 0; i < exported.MaterialNames.Length; i++)
