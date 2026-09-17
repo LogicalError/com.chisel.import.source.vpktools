@@ -125,10 +125,10 @@ namespace Chisel.Import.Source.VPKTools
 		public bool?        NoCull;
 
 		public float?       AlphaTestReference;
+		public bool?		AlphaTest;
 
 		/// <summary><c>$decalscale</c>: a decal's size is its base texture's size times this (1 when unset).</summary>
 		public float?       DecalScale;
-		public bool?		AlphaTest;
 
 
 		public bool HaveCutout { get { return AlphaTest.HasValue && AlphaTest.Value; } }
