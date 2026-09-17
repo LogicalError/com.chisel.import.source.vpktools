@@ -520,14 +520,16 @@ namespace Chisel.Import.Source.VPKTools
 			};
 		}
 
-		public GameObject ImportModel(string entryName, string[] searchPaths = null)
+		/// <param name="skin">The entity's skin: which of the model's material sets it uses. One the model does not
+		/// have gives the default skin, as in the game.</param>
+		public GameObject ImportModel(string entryName, string[] searchPaths = null, int skin = 0)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
 			var sourceModel = LoadSourceModel(entryName, searchPaths);
 			if (sourceModel == null)
 				return null;
 			var outputPath = PackagePath.GetOutputPath(sourceModel.MDLEntry.keyname);
-			return ModelImporter.Import(this, sourceModel, outputPath, skin: 0);
+			return ModelImporter.Import(this, sourceModel, outputPath, skin);
 		}
 
 		public T Import<T>(GameEntry entry) where T : UnityEngine.Object
