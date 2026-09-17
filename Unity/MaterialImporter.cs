@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 7);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 8);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -546,7 +546,7 @@ namespace Chisel.Import.Source.VPKTools
 			// A material that takes its phong mask from the base texture's alpha is drawn by a skin shader that
 			// ignores the normal map altogether, so it gets none (IgnoresNormalMap).
 			if (!IgnoresNormalMap(sourceMaterial) &&
-				SetMaterialTexture(gameResources, unityMaterial, "_BumpMap", sourceMaterial.BumpMapName, isNormalMap: true, warnIfMissing: false,
+				SetMaterialTexture(gameResources, unityMaterial, "_BumpMap", BumpMapNameOf(sourceMaterial), isNormalMap: true, warnIfMissing: false,
 								   selfShadowed: sourceMaterial.BumpSelfShadowing == true) != null)
 				unityMaterial.EnableKeyword("_NORMALMAP");
 
@@ -943,6 +943,18 @@ namespace Chisel.Import.Source.VPKTools
 				sourceMaterial.BumpTransform.HasValue && !TextParser.IsIdentity(sourceMaterial.BumpTransform.Value))
 				matrix = sourceMaterial.BlendMaskTransform.Value;
 			return (new Vector4(matrix.m00, matrix.m01, 0, matrix.m03), new Vector4(matrix.m10, matrix.m11, 0, matrix.m13));
+		}
+
+		/// <summary>
+		/// The normal map a material is drawn with: its $bumpmap, or for the Cable shader, whose parameter has a default of
+		/// its own, cable/cablenormalmap (cable_dx9.cpp).
+		/// </summary>
+		internal static string BumpMapNameOf(VMT sourceMaterial)
+		{
+			if (!string.IsNullOrEmpty(sourceMaterial.BumpMapName))
+				return sourceMaterial.BumpMapName;
+			return string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "Cable", System.StringComparison.OrdinalIgnoreCase)
+				? "cable/cablenormalmap" : null;
 		}
 
 		/// <summary>
