@@ -1,11 +1,11 @@
 // Unity equivalent of Source's "VertexLitGeneric" shader, used by model (.mdl) materials.
 // In Source the difference from LightmappedGeneric is where the lighting comes from - a baked
-// lightmap versus per-vertex/dynamic lighting - which a Unity surface shader already decides for
-// itself per renderer. So the body is shared; what differs is the name the importer looks up and
-// the specular defaults, since $phong is a model-only parameter and is usually on.
+// lightmap versus per-vertex/dynamic lighting - which URP decides for itself per renderer. So the
+// body is shared (ChiselSourceGeneric.hlsl); what differs is the name the importer looks up and the
+// parameters, since $phong and $rimlight are model-only.
 Shader "Chisel/Source/VertexLitGeneric"
 {
-	Properties 
+	Properties
 	{
 		[MainColor] _Color ("$color", Color) = (1,1,1,1)
 		[MainTexture] _BaseMap ("$basetexture", 2D) = "white" {}
@@ -58,98 +58,246 @@ Shader "Chisel/Source/VertexLitGeneric"
 		[Enum(UnityEngine.Rendering.CullMode)] _Cull ("$nocull", Float) = 2
 	}
 
+	// URP's Deferred+ lays opaque materials down in the GBuffer pass and lights them there; translucent ones, and every
+	// material under a forward renderer, are lit in ForwardLit. Both light the surface as Source does
+	// (ChiselSourceGeneric.hlsl): its highlight is added rather than taken out of the diffuse, and it reflects nothing but its
+	// $envmap.
 	SubShader
 	{
-		Tags { "RenderType" = "Opaque" "Queue" = "Geometry" "RenderPipeline" = "UniversalPipeline" }
+		Tags
+		{
+			"RenderType" = "Opaque"
+			"Queue" = "Geometry"
+			"RenderPipeline" = "UniversalPipeline"
+			"UniversalMaterialType" = "Lit"
+			"IgnoreProjector" = "True"
+		}
 		LOD 300
+
 		Pass
 		{
 			Name "ForwardLit"
 			Tags { "LightMode" = "UniversalForward" }
-			Cull [_Cull]
+
 			Blend [_SrcBlend] [_DstBlend]
 			ZWrite [_ZWrite]
+			Cull [_Cull]
+
 			HLSLPROGRAM
-			#pragma target 3.5
-			#pragma vertex SourceLitVert
-			#pragma fragment SourceLitFrag
+			#pragma target 4.5
+			// The reflection probes come as a cubemap array (ChiselSourceProbes.hlsl)
+			#pragma require cubearray
+			#pragma vertex SourceLitVertex
+			#pragma fragment SourceForwardFragment
+
 			#pragma shader_feature_local _NORMALMAP
-			#pragma shader_feature_local _DETAIL
-			#pragma shader_feature_local _ENVMAP
-			#pragma shader_feature_local _PHONG
-			#pragma shader_feature_local _PHONGMASK
-			#pragma shader_feature_local _PHONGEXPONENTMAP
-			#pragma shader_feature_local _PHONGWARP
-			#pragma shader_feature_local _SELFILLUM
-			#pragma shader_feature_local _ALPHATEST_ON
-			#pragma multi_compile _ _ADDITIONAL_LIGHTS
-			#pragma multi_compile _ _CLUSTER_LIGHT_LOOP
-			#pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
+			#pragma shader_feature_local_fragment _DETAIL
+			#pragma shader_feature_local_fragment _ENVMAP
+			#pragma shader_feature_local_fragment _PHONG
+			#pragma shader_feature_local_fragment _PHONGMASK
+			#pragma shader_feature_local_fragment _PHONGEXPONENTMAP
+			#pragma shader_feature_local_fragment _PHONGWARP
+			#pragma shader_feature_local_fragment _SELFILLUM
+			#pragma shader_feature_local_fragment _ALPHATEST_ON
+
 			#pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
-			#pragma multi_compile _ LIGHTMAP_ON
-			#pragma multi_compile _ DYNAMICLIGHTMAP_ON
-			#pragma multi_compile _ DIRLIGHTMAP_COMBINED
+			#pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
+			#pragma multi_compile _ EVALUATE_SH_MIXED EVALUATE_SH_VERTEX
+			#pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
+			#pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
+			#pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
+			#pragma multi_compile_fragment _ _SCREEN_SPACE_IRRADIANCE
+			#pragma multi_compile_fragment _ _LIGHT_COOKIES
+			#pragma multi_compile _ _LIGHT_LAYERS
+			#pragma multi_compile _ _CLUSTER_LIGHT_LOOP
+			#include_with_pragmas "Packages/com.unity.render-pipelines.core/ShaderLibrary/FoveatedRenderingKeywords.hlsl"
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
+
 			#pragma multi_compile _ LIGHTMAP_SHADOW_MIXING
 			#pragma multi_compile _ SHADOWS_SHADOWMASK
-			#pragma multi_compile_fog
-			#include "ChiselSourceGenericURP.hlsl"
+			#pragma multi_compile _ DIRLIGHTMAP_COMBINED
+			#pragma multi_compile _ LIGHTMAP_ON
+			#pragma multi_compile_fragment _ LIGHTMAP_BICUBIC_SAMPLING
+			#pragma multi_compile _ DYNAMICLIGHTMAP_ON
+			#pragma multi_compile _ USE_LEGACY_LIGHTMAPS
+			#pragma multi_compile _ LOD_FADE_CROSSFADE
+			#pragma multi_compile_fragment _ DEBUG_DISPLAY
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Fog.hlsl"
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
+
+			#pragma multi_compile_instancing
+			#pragma instancing_options renderinglayer
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+
+			#include "ChiselSourceGenericLitPass.hlsl"
 			ENDHLSL
 		}
+
 		Pass
 		{
 			Name "GBuffer"
-			Tags { "LightMode" = "UniversalGBuffer" "UniversalMaterialType" = "Lit" }
-			Cull [_Cull]
-			Blend [_SrcBlend] [_DstBlend]
+			Tags { "LightMode" = "UniversalGBuffer" }
+
 			ZWrite [_ZWrite]
+			ZTest LEqual
+			Cull [_Cull]
+
 			HLSLPROGRAM
 			#pragma target 4.5
+			// Deferred rendering does not support the OpenGL-based graphics APIs
 			#pragma exclude_renderers gles3 glcore
-			#pragma vertex SourceLitVert
-			#pragma fragment SourceLitGBufferFrag
+			#pragma require cubearray
+			#pragma vertex SourceLitVertex
+			#pragma fragment SourceGBufferFragment
+
 			#pragma shader_feature_local _NORMALMAP
-			#pragma shader_feature_local _SELFILLUM
-			#pragma shader_feature_local _ALPHATEST_ON
+			#pragma shader_feature_local_fragment _DETAIL
+			#pragma shader_feature_local_fragment _ENVMAP
+			#pragma shader_feature_local_fragment _PHONG
+			#pragma shader_feature_local_fragment _PHONGMASK
+			#pragma shader_feature_local_fragment _PHONGEXPONENTMAP
+			#pragma shader_feature_local_fragment _PHONGWARP
+			#pragma shader_feature_local_fragment _SELFILLUM
+			#pragma shader_feature_local_fragment _ALPHATEST_ON
+
 			#pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
-			#pragma multi_compile _ LIGHTMAP_ON
-			#pragma multi_compile _ DYNAMICLIGHTMAP_ON
-			#pragma multi_compile _ DIRLIGHTMAP_COMBINED
+			#pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
+			#pragma multi_compile_fragment _ _RENDER_PASS_ENABLED
+			#pragma multi_compile _ _CLUSTER_LIGHT_LOOP
+			#pragma multi_compile _ EVALUATE_SH_MIXED EVALUATE_SH_VERTEX
+			#include_with_pragmas "Packages/com.unity.render-pipelines.core/ShaderLibrary/FoveatedRenderingKeywords.hlsl"
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
+
 			#pragma multi_compile _ LIGHTMAP_SHADOW_MIXING
 			#pragma multi_compile _ SHADOWS_SHADOWMASK
+			#pragma multi_compile _ DIRLIGHTMAP_COMBINED
+			#pragma multi_compile _ LIGHTMAP_ON
+			#pragma multi_compile_fragment _ LIGHTMAP_BICUBIC_SAMPLING
+			#pragma multi_compile _ DYNAMICLIGHTMAP_ON
+			#pragma multi_compile _ USE_LEGACY_LIGHTMAPS
+			#pragma multi_compile _ LOD_FADE_CROSSFADE
 			#pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
-			#pragma multi_compile_fragment _ _RENDER_PASS_ENABLED
-			#define _SPECULAR_SETUP
-			#include "ChiselSourceGenericURP.hlsl"
+			#pragma multi_compile_fragment _ _SCREEN_SPACE_IRRADIANCE
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
+
+			#pragma multi_compile_instancing
+			#pragma instancing_options renderinglayer
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+
+			#include "ChiselSourceGenericGBufferPass.hlsl"
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/GBufferOutputFormat.hlsl"
 			ENDHLSL
 		}
-		
-		
+
 		Pass
 		{
 			Name "ShadowCaster"
 			Tags { "LightMode" = "ShadowCaster" }
 
-			Cull [_Cull]
 			ZWrite On
 			ZTest LEqual
 			ColorMask 0
+			Cull [_Cull]
 
 			HLSLPROGRAM
-			#pragma target 3.5
-			#pragma vertex SourceShadowVert
-			#pragma fragment SourceShadowFrag
+			#pragma target 2.0
+			#pragma vertex SourceShadowVertex
+			#pragma fragment SourceShadowFragment
 
+			#pragma shader_feature_local_fragment _ENVMAP
+			#pragma shader_feature_local_fragment _SELFILLUM
 			#pragma shader_feature_local _ALPHATEST_ON
-			#pragma shader_feature_local _SELFILLUM
 
 			#pragma multi_compile_instancing
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+			#pragma multi_compile _ LOD_FADE_CROSSFADE
+			// Directional and punctual lights bias their shadows differently
 			#pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
 
-			#include "ChiselSourceGenericURP.hlsl"
+			#include "ChiselSourceGenericDepthPasses.hlsl"
+			ENDHLSL
+		}
 
+		Pass
+		{
+			Name "DepthOnly"
+			Tags { "LightMode" = "DepthOnly" }
+
+			ZWrite On
+			ColorMask R
+			Cull [_Cull]
+
+			HLSLPROGRAM
+			#pragma target 2.0
+			#pragma vertex SourceDepthVertex
+			#pragma fragment SourceDepthOnlyFragment
+
+			#pragma shader_feature_local_fragment _ENVMAP
+			#pragma shader_feature_local_fragment _SELFILLUM
+			#pragma shader_feature_local _ALPHATEST_ON
+
+			#pragma multi_compile _ LOD_FADE_CROSSFADE
+
+			#pragma multi_compile_instancing
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+
+			#include "ChiselSourceGenericDepthPasses.hlsl"
+			ENDHLSL
+		}
+
+		Pass
+		{
+			Name "DepthNormals"
+			Tags { "LightMode" = "DepthNormals" }
+
+			ZWrite On
+			Cull [_Cull]
+
+			HLSLPROGRAM
+			#pragma target 2.0
+			#pragma vertex SourceDepthVertex
+			#pragma fragment SourceDepthNormalsFragment
+
+			#pragma shader_feature_local _NORMALMAP
+			#pragma shader_feature_local_fragment _ENVMAP
+			#pragma shader_feature_local_fragment _SELFILLUM
+			#pragma shader_feature_local _ALPHATEST_ON
+
+			#pragma multi_compile _ LOD_FADE_CROSSFADE
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
+			#pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
+
+			#pragma multi_compile_instancing
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+
+			#define SOURCE_DEPTH_NORMALS 1
+			#include "ChiselSourceGenericDepthPasses.hlsl"
+			ENDHLSL
+		}
+
+		// Only for lightmap baking
+		Pass
+		{
+			Name "Meta"
+			Tags { "LightMode" = "Meta" }
+
+			Cull Off
+
+			HLSLPROGRAM
+			#pragma target 2.0
+			#pragma vertex SourceMetaVertex
+			#pragma fragment SourceMetaFragment
+
+			#pragma shader_feature_local_fragment _DETAIL
+			#pragma shader_feature_local_fragment _ENVMAP
+			#pragma shader_feature_local_fragment _SELFILLUM
+			#pragma shader_feature_local_fragment _ALPHATEST_ON
+			#pragma shader_feature EDITOR_VISUALIZATION
+
+			#include "ChiselSourceGenericMetaPass.hlsl"
 			ENDHLSL
 		}
 	}
 
-	FallBack Off
+	FallBack "Hidden/Universal Render Pipeline/FallbackError"
 }
