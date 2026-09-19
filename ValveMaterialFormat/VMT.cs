@@ -18,6 +18,9 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>$color2 - every Source shader's second tint, which the material system multiplies into
 		/// $color (BaseShader.h: GetColorParameter "return tint color (color*color2)").</summary>
 		public RGBColor		Color2;
+		/// <summary>$alpha - the material-wide opacity modulation. Source multiplies this with the
+		/// base texture and vertex alpha; it is independent of whether $translucent enables blending.</summary>
+		public float?		Alpha;
 		/// <summary>$vertexcolor / $vertexalpha - modulate by the mesh's vertex colour and alpha, in the
 		/// shaders that honour them (MaterialImporter.VertexColorOf).</summary>
 		public bool?		VertexColor;
@@ -40,6 +43,11 @@ namespace Chisel.Import.Source.VPKTools
 		
 		public string       NormalMapName;
 		public bool?        NormalMapAlphaEnvMapMask;
+		public RGBColor     RefractTint;
+		public RGBColor     ReflectTint;
+		public RGBColor     FogColor;
+		public float?       RefractAmount;
+		public float?       ReflectAmount;
 
 		public bool?		SelfIllumination;
 		public string       SelfIlluminationMask;
@@ -342,7 +350,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$basealmapalphaenvmapmask": // '1'.
 						case "$baseapalphaenvmapmask": // '1'.
 						case "$basemapluminancephongmask": // '1'.
-						case "$basenormalmap2": // 'nature\bnc_dirt_rocky_large_001_norm'. 'xen/xen_swamp_roots_01a_ssbump'. 'xen/xen_tree_roots_01a_n'. 'xen/xen_wetmud_01a_normal'.
 						case "$basetexture3": // 'xen\xen_rockwall_001a'. 'xen/xen_sludge_02a'. 'xen/xen_wetmud_01a_diff'.
 						case "$basetexturelow": // '_rt_dofblurdownsampled'.
 												//case "$basetexturetransform2": // 'center .5 .5 scale 1 1 rotate 0 translate 0 0'.
@@ -446,7 +453,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$darkpassdimscale": // '1.5'.
 						case "$darkpassluminancepow": // '0.8'.
 						case "$debug": // '0'.
-						case "$decal":
 						case "$decalfadeduration": // '2.00'.
 						case "$decalfadetime": // '0.00'. '1.0'.
 						case "$decalsecondpass": // '1'.
@@ -554,7 +560,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$flowmap": //texture effects/fizzler_flow
 						case "$flowmapscrollrate": // '[.0475 .133]'.
 						case "$flowmaptexcoordoffset": // '1.0'.
-						case "$fogcolor":
 						case "$fogenable":
 						case "$fogend":
 						case "$fogstart":
@@ -771,16 +776,12 @@ namespace Chisel.Import.Source.VPKTools
 						case "$radius_ring_outer": // '1.0'.
 						case "$raytracesphere": // '0'. '1'.
 						case "$receiveflashlight": // '1'.
-						case "$reflectamount":
 						case "$reflectblendfactor": // '0.4'.
 						case "$reflectentities":
 						case "$reflectivity": // '[0.29 0.29 0.29]'.
 						case "$reflecttexture":
-						case "$reflecttint":
-						case "$refractamount":
 						case "$refractionamount": // '[.005 .005]'.
 						case "$refracttexture":
-						case "$refracttint":
 						case "$refracttinttexture":
 						case "$rgb_thresholda": // '0'.
 						case "$rgb_thresholdb": // '0.35'.
@@ -1102,6 +1103,21 @@ namespace Chisel.Import.Source.VPKTools
 						//case "$additive": // '.3'.expected boolean value.
 						case "$additive": { TryParseFloatProperty(property, ref vmfMaterial.Additive); break; }
 
+						case "$decal":
+						{
+							float? decal = null;
+							TryParseFloatProperty(property, ref decal);
+							if (decal == null || decal != 1.0f)
+							{
+								Debug.Log("Unknown $decal value");
+								break;
+							}
+
+							vmfMaterial.AlphaTest = true;
+							vmfMaterial.AlphaTestReference = 0.5f;
+							break;
+						}
+
 						//case "$nocull": // ''.expected boolean value.
 						case "$nocull": { TryParseBoolProperty(property, ref vmfMaterial.NoCull); break; }
 
@@ -1116,9 +1132,10 @@ namespace Chisel.Import.Source.VPKTools
 						case "$vertexcolor": { TryParseBoolProperty(property, ref vmfMaterial.VertexColor); break; }
 						case "$vertexalpha": { TryParseBoolProperty(property, ref vmfMaterial.VertexAlpha); break; }
 
-						case "$allowalphatocoverage": // '1'.
 						case "$alpha": // '.85'. '1.000000'. '0.700000'. '0.800000'. '0.50'.
-						case "srgb?$alpha": // '.375'.
+						case "srgb?$alpha": { TryParseFloatProperty(property, ref vmfMaterial.Alpha); break; }
+
+						case "$allowalphatocoverage": // '1'.
 						case "$alphatest2": // '1'.
 						case "$alphatest2_texture": // 'models/props_xen/foliage/cavebulbs_alpha'.
 						case "$alpha_bias": // '0.05'. '0.2'.
@@ -1155,6 +1172,7 @@ namespace Chisel.Import.Source.VPKTools
 						case "$bumpframe": { TryParseIntProperty(property, ref vmfMaterial.BumpFrame); break; }
 						case "$bumpamp":
 						case "$bumpmap": { vmfMaterial.BumpMapName = property.Value; break; }
+						case "$basenormalmap2": // Black Mesa's Lightmapped_4WayBlend spelling
 						case "$bumpmap2": { vmfMaterial.BumpMap2Name = property.Value; break; }
 						case "$bumpmap3": { vmfMaterial.BumpMap3Name = property.Value; break; }
 
@@ -1163,6 +1181,11 @@ namespace Chisel.Import.Source.VPKTools
 						case "$ssbump": { TryParseBoolProperty(property, ref vmfMaterial.BumpSelfShadowing); break; }
 
 						case "$normalmap": { vmfMaterial.NormalMapName = property.Value; break; }
+						case "$refracttint": { vmfMaterial.RefractTint = TextParser.ParseColor(property.Value); break; }
+						case "$reflecttint": { vmfMaterial.ReflectTint = TextParser.ParseColor(property.Value); break; }
+						case "$fogcolor": { vmfMaterial.FogColor = TextParser.ParseColor(property.Value); break; }
+						case "$refractamount": { TryParseFloatProperty(property, ref vmfMaterial.RefractAmount); break; }
+						case "$reflectamount": { TryParseFloatProperty(property, ref vmfMaterial.ReflectAmount); break; }
 
 						case "$normalalphaenvmapmask":
 						case "$normalmapalphaenvmapmask": { TryParseBoolProperty(property, ref vmfMaterial.NormalMapAlphaEnvMapMask); break; }

@@ -5,10 +5,10 @@
 // the specular defaults, since $phong is a model-only parameter and is usually on.
 Shader "Chisel/Source/VertexLitGeneric"
 {
-	Properties
+	Properties 
 	{
 		[MainColor] _Color ("$color", Color) = (1,1,1,1)
-		[MainTexture] _MainTex ("$basetexture", 2D) = "white" {}
+		[MainTexture] _BaseMap ("$basetexture", 2D) = "white" {}
 		_Cutoff ("$alphatestreference", Range(0,1)) = 0.5
 
 		_Smoothness ("Smoothness", Range(0,1)) = 0.0
@@ -60,40 +60,96 @@ Shader "Chisel/Source/VertexLitGeneric"
 
 	SubShader
 	{
-		Tags { "RenderType" = "Opaque" "Queue" = "Geometry" }
+		Tags { "RenderType" = "Opaque" "Queue" = "Geometry" "RenderPipeline" = "UniversalPipeline" }
 		LOD 300
+		Pass
+		{
+			Name "ForwardLit"
+			Tags { "LightMode" = "UniversalForward" }
+			Cull [_Cull]
+			Blend [_SrcBlend] [_DstBlend]
+			ZWrite [_ZWrite]
+			HLSLPROGRAM
+			#pragma target 3.5
+			#pragma vertex SourceLitVert
+			#pragma fragment SourceLitFrag
+			#pragma shader_feature_local _NORMALMAP
+			#pragma shader_feature_local _DETAIL
+			#pragma shader_feature_local _ENVMAP
+			#pragma shader_feature_local _PHONG
+			#pragma shader_feature_local _PHONGMASK
+			#pragma shader_feature_local _PHONGEXPONENTMAP
+			#pragma shader_feature_local _PHONGWARP
+			#pragma shader_feature_local _SELFILLUM
+			#pragma shader_feature_local _ALPHATEST_ON
+			#pragma multi_compile _ _ADDITIONAL_LIGHTS
+			#pragma multi_compile _ _CLUSTER_LIGHT_LOOP
+			#pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
+			#pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+			#pragma multi_compile _ LIGHTMAP_ON
+			#pragma multi_compile _ DYNAMICLIGHTMAP_ON
+			#pragma multi_compile _ DIRLIGHTMAP_COMBINED
+			#pragma multi_compile _ LIGHTMAP_SHADOW_MIXING
+			#pragma multi_compile _ SHADOWS_SHADOWMASK
+			#pragma multi_compile_fog
+			#include "ChiselSourceGenericURP.hlsl"
+			ENDHLSL
+		}
+		Pass
+		{
+			Name "GBuffer"
+			Tags { "LightMode" = "UniversalGBuffer" "UniversalMaterialType" = "Lit" }
+			Cull [_Cull]
+			Blend [_SrcBlend] [_DstBlend]
+			ZWrite [_ZWrite]
+			HLSLPROGRAM
+			#pragma target 4.5
+			#pragma exclude_renderers gles3 glcore
+			#pragma vertex SourceLitVert
+			#pragma fragment SourceLitGBufferFrag
+			#pragma shader_feature_local _NORMALMAP
+			#pragma shader_feature_local _SELFILLUM
+			#pragma shader_feature_local _ALPHATEST_ON
+			#pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+			#pragma multi_compile _ LIGHTMAP_ON
+			#pragma multi_compile _ DYNAMICLIGHTMAP_ON
+			#pragma multi_compile _ DIRLIGHTMAP_COMBINED
+			#pragma multi_compile _ LIGHTMAP_SHADOW_MIXING
+			#pragma multi_compile _ SHADOWS_SHADOWMASK
+			#pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
+			#pragma multi_compile_fragment _ _RENDER_PASS_ENABLED
+			#define _SPECULAR_SETUP
+			#include "ChiselSourceGenericURP.hlsl"
+			ENDHLSL
+		}
+		
+		
+		Pass
+		{
+			Name "ShadowCaster"
+			Tags { "LightMode" = "ShadowCaster" }
 
-		Cull [_Cull]
-		Blend [_SrcBlend] [_DstBlend]
-		ZWrite [_ZWrite]
+			Cull [_Cull]
+			ZWrite On
+			ZTest LEqual
+			ColorMask 0
 
-		CGPROGRAM
-		#pragma target 3.0
-		// The reflection probes come as a cubemap array (ChiselSourceProbes.cginc)
-		#pragma require cubearray
+			HLSLPROGRAM
+			#pragma target 3.5
+			#pragma vertex SourceShadowVert
+			#pragma fragment SourceShadowFrag
 
-		#pragma shader_feature_local _NORMALMAP
-		#pragma shader_feature_local _DETAIL
-		#pragma shader_feature_local _ENVMAP
-		#pragma shader_feature_local _PHONG
-		#pragma shader_feature_local _PHONGMASK
-		#pragma shader_feature_local _PHONGEXPONENTMAP
-		#pragma shader_feature_local _PHONGWARP
-		#pragma shader_feature_local _SELFILLUM
-		#pragma shader_feature_local _ALPHATEST_ON
+			#pragma shader_feature_local _ALPHATEST_ON
+			#pragma shader_feature_local _SELFILLUM
 
-		#include "ChiselSourceGeneric.cginc"
-		// SourceSpecular (ChiselSourceGeneric.cginc) is Unity's StandardSpecular BRDF without the reflection
-		// probes and the energy conservation, neither of which Source has. It provides
-		// Lighting<Name>_Deferred on purpose: a lighting model without one has no deferred pass, and Unity
-		// then draws the surface in FORWARD even under a deferred camera. There a map-spanning Chisel
-		// renderer is lit per pixel by QualitySettings.pixelLightCount lights, picked among the ones the
-		// camera can see, and every other light is folded into ambient without any falloff - the level's
-		// lighting went flat and changed as the camera turned. Source's phong reaches Unity's lighting
-		// through the specular inputs instead (SourcePhongToStandard).
-#pragma surface surf SourceSpecular fullforwardshadows addshadow keepalpha
-		ENDCG
+			#pragma multi_compile_instancing
+			#pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
+
+			#include "ChiselSourceGenericURP.hlsl"
+
+			ENDHLSL
+		}
 	}
 
-	FallBack "Standard (Specular setup)"
+	FallBack Off
 }

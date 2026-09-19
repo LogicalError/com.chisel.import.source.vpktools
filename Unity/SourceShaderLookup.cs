@@ -34,6 +34,11 @@ namespace Chisel.Import.Source.VPKTools
 		readonly static Dictionary<string, string> s_Aliases = new(System.StringComparer.OrdinalIgnoreCase)
 		{
 			{ "WorldVertexTransition", "LightmappedGeneric" },
+			// Black Mesa's four-way shader is not part of stock Source. Until all four of its
+			// luminance-selected layers are represented, render its first two painted layers with
+			// the same vertex-alpha blend used by LightmappedGeneric instead of falling back to
+			// Unity's built-in Standard shader (which is magenta in URP projects).
+			{ "Lightmapped_4WayBlend", "LightmappedGeneric" },
 		};
 
 		/// <summary>The Source shader a VMT's shader name stands for, aliases resolved - which is what

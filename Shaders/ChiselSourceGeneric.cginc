@@ -78,10 +78,10 @@ inline void LightingSourceSpecular_GI(SurfaceOutputStandardSpecular s, UnityGIIn
 	gi = UnityGlobalIllumination(data, s.Occlusion, s.Normal);
 }
 
-// NOTE: do NOT declare _MainTex_ST / _DetailTex_ST here. Naming a field uv_MainTex in the Input
+// NOTE: do NOT declare _BaseMap_ST / _DetailTex_ST here. Naming a field uv_BaseMap in the Input
 //       struct makes the surface shader compiler declare the matching _ST itself and apply the
 //       tiling/offset before surf() runs; declaring it again is a redefinition error.
-sampler2D _MainTex;
+sampler2D _BaseMap;
 fixed4    _Color;
 half      _Cutoff;
 
@@ -222,7 +222,7 @@ fixed4 _SpecColorTint;
 //       whether or not it had a normal map at all. One unused float2 interpolator is the price.
 struct Input
 {
-	float2 uv_MainTex;
+    float2 uv_BaseMap;
 	float2 uv_DetailTex;
 	// World space, for the phong fresnel, which Source takes from the view angle alone.
 	float3 worldPos;
@@ -264,7 +264,7 @@ struct Input
 
 void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 {
-	fixed4 base = tex2D(_MainTex, IN.uv_MainTex);
+    fixed4 base = tex2D(_BaseMap, IN.uv_BaseMap);
 
 #ifdef _VERTEXBLEND
 	// The weight the second layer comes in by is the vertex alpha (lightmappedgeneric_vs20.fxc). With a
@@ -275,15 +275,15 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	// the blend outright (lightmappedgeneric_ps2_3_x.h, MASKEDBLENDING).
 	half layerBlend = lerp(IN.color.a, 0.5h, _MaskedBlending);
 	#ifndef _SELFILLUM
-		float2 maskCoord = float2(dot(IN.uv_MainTex, _BlendMaskTransformU.xy) + _BlendMaskTransformU.w,
-								  dot(IN.uv_MainTex, _BlendMaskTransformV.xy) + _BlendMaskTransformV.w);
+		float2 maskCoord = float2(dot(IN.uv_BaseMap, _BlendMaskTransformU.xy) + _BlendMaskTransformU.w,
+								  dot(IN.uv_BaseMap, _BlendMaskTransformV.xy) + _BlendMaskTransformV.w);
 		half4 modulation = tex2D(_BlendModulateTexture, maskCoord);
 		half  sharpened  = smoothstep(saturate(modulation.g - modulation.r), saturate(modulation.g + modulation.r), layerBlend);
 		layerBlend = lerp(layerBlend, lerp(sharpened, modulation.g, _MaskedBlending), _BlendModulate);
 	#endif
 	// Only the colour blends. The alpha Source goes on reading as opacity and as the self-illum mask is
 	// still the first layer's.
-	half4 base2 = tex2D(_BaseTexture2, IN.uv_MainTex);
+	half4 base2 = tex2D(_BaseTexture2, IN.uv_BaseMap);
 	base.rgb = lerp(base.rgb, base2.rgb, layerBlend * _BlendBase2);
 	// The envmap mask reads the two layers' alphas blended (blendedAlpha)
 	half layerAlpha = lerp(base.a, base2.a, layerBlend * _BlendBase2);
@@ -298,7 +298,7 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	// Source reads the self-illum mask from the base texture's alpha, which means that alpha is
 	// NOT transparency on a $selfillum material - taking it as such is what makes these surfaces
 	// come out see-through or unlit.
-	half illumMask = lerp(tex2D(_SelfIllumMask, IN.uv_MainTex).r, base.a, _SelfIllumFromBaseAlpha);
+	half illumMask = lerp(tex2D(_SelfIllumMask, IN.uv_BaseMap).r, base.a, _SelfIllumFromBaseAlpha);
 	alpha = lerp(alpha, _Color.a, _SelfIllumFromBaseAlpha);
 #endif
 
@@ -335,11 +335,11 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	// no-normal-map case keeps viewDir in the same space for every variant, so the fresnel below has
 	// a normal and a view vector it can actually dot together.
 #ifdef _NORMALMAP
-	fixed3 normal = UnpackNormal(tex2D(_BumpMap, IN.uv_MainTex));
+	fixed3 normal = UnpackNormal(tex2D(_BumpMap, IN.uv_BaseMap));
 	normal.xy *= _BumpScale;
 	#ifdef _VERTEXBLEND
 		// Source only blends a second normal map into a first one.
-		fixed3 normal2 = UnpackNormal(tex2D(_BumpMap2, IN.uv_MainTex));
+		fixed3 normal2 = UnpackNormal(tex2D(_BumpMap2, IN.uv_BaseMap));
 		normal2.xy *= _BumpScale;
 		normal = lerp(normal, normal2, layerBlend * _BlendBump2);
 	#endif
@@ -358,8 +358,8 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 
 #ifdef _PHONG
 	#ifdef _PHONGMASK
-		half phongMask = tex2D(_PhongMask, IN.uv_MainTex).r;
-	#else
+		half phongMask = tex2D(_PhongMask, IN.uv_BaseMap).r;
+#else
 		half phongMask = lerp(1.0h, base.a, _PhongMaskFromBaseAlpha);
 	#endif
 
@@ -367,8 +367,8 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	// expressions below have to fall back to: exponent 1 + 149, and a fully albedo-coloured tint.
 	half4 exponentMap = half4(1, 1, 1, 1);
 	#ifdef _PHONGEXPONENTMAP
-		exponentMap = tex2D(_PhongExponentMap, IN.uv_MainTex);
-	#endif
+		exponentMap = tex2D(_PhongExponentMap, IN.uv_BaseMap);
+#endif
 	half exponent = (_PhongExponentFactor > 0) ? (1.0h + _PhongExponentFactor * exponentMap.r)
 				  : (_PhongExponent >= 0)      ? _PhongExponent
 											   : (1.0h + 149.0h * exponentMap.r);
@@ -409,20 +409,20 @@ void surf(Input IN, inout SurfaceOutputStandardSpecular o)
 	float3 reflection = reflect(-viewWorld, worldNormal);
 	half3 environment = (_EnvMapFromProbes > 0.5h) ? SourceProbeReflection(IN.worldPos, reflection)
 												   : UNITY_SAMPLE_TEXCUBE_SAMPLER(_EnvMap, _SourceProbes, reflection).rgb;
-	half normalAlpha = tex2D(_PhongMask, IN.uv_MainTex).r;
+	half normalAlpha = tex2D(_PhongMask, IN.uv_BaseMap).r;
 	half envMask = (1.0h - dot(_EnvMapMaskWeights, half4(1, 1, 1, 1))) + _EnvMapMaskWeights.x * normalAlpha
 				 + _EnvMapMaskWeights.y * layerAlpha + _EnvMapMaskWeights.z * (1.0h - layerAlpha);
-	#ifdef _PHONG
+#ifdef _PHONG
 		envMask += _EnvMapMaskWeights.w * phongMask;
 	#endif
 	envMask = lerp(envMask, 1.0h - envMask, _EnvMapInvertMask);
-	half3 reflected = environment * envMask * lerp(half3(1, 1, 1), tex2D(_EnvMapMask, IN.uv_MainTex).rgb, _EnvMapMaskTexture);
+	half3 reflected = environment * envMask * lerp(half3(1, 1, 1), tex2D(_EnvMapMask, IN.uv_BaseMap).rgb, _EnvMapMaskTexture);
 	reflected *= _EnvMapTint;
 	reflected = lerp(reflected, reflected * reflected, _EnvMapContrast);
 	reflected = lerp(dot(reflected, half3(0.299h, 0.587h, 0.114h)).xxx, reflected, _EnvMapSaturation);
 	half facing = 1.0h - saturate(dot(worldNormal, viewWorld));
 	half envFresnel = pow(facing, 5.0h) * (1.0h - _FresnelReflection) + _FresnelReflection;
-	#ifdef _PHONG
+#ifdef _PHONG
 		envFresnel *= lerp(1.0h, fresnel, _EnvMapPhongFresnel);
 	#endif
 	o.Emission += reflected * envFresnel;

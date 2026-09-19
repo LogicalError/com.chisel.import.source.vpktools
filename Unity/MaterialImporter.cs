@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 9);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 12);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -170,18 +170,178 @@ namespace Chisel.Import.Source.VPKTools
 			return skybox;
 		}
 
-		private const string _standardShaderName				= "Standard (Specular setup)";
-		private const string _unlitShaderName					= "Unlit/Texture";
-		private const string _unlitTransparentShaderName		= "Unlit/Transparent";
-		private const string _unlitTransparentCutoutShaderName	= "Unlit/Transparent Cutout";
-		private const string _additiveShaderName				= "Particles/Standard Unlit";
+		private const string _litShaderName = "Universal Render Pipeline/Lit";
+		private const string _unlitShaderName = "Universal Render Pipeline/Unlit";
+		private const string _particleUnlitShaderName = "Universal Render Pipeline/Particles/Unlit";
 
-		private static Shader _standardShader;
-		private static Shader _additiveShader;
+		private static Shader _litShader;
 		private static Shader _unlitShader;
-		private static Shader _unlitTransparentShader;
-		private static Shader _unlitTransparentCutoutShader;
-		private static Shader _softParticleShader;
+		private static Shader _particleUnlitShader;
+
+		private static Shader FindFallbackShader(string shaderName)
+		{
+			var shader = Shader.Find(shaderName);
+			if (!shader)
+				Debug.LogWarning("URP shader not found: " + shaderName);
+
+			return shader;
+		}
+
+		private static Shader GetLitShader()
+		{
+			if (!_litShader)
+				_litShader = FindFallbackShader(_litShaderName);
+
+			return _litShader;
+		}
+
+		private static Shader GetUnlitShader()
+		{
+			if (!_unlitShader)
+				_unlitShader = FindFallbackShader(_unlitShaderName);
+
+			return _unlitShader;
+		}
+
+		private static Shader GetParticleUnlitShader()
+		{
+			if (!_particleUnlitShader)
+				_particleUnlitShader = FindFallbackShader(_particleUnlitShaderName);
+
+			return _particleUnlitShader;
+		}
+		
+		private static void SetFloatIfPresent(Material material, string property, float value)
+		{
+			if (material && material.HasProperty(property))
+				material.SetFloat(property, value);
+		}
+
+		private static void SetIntIfPresent(Material material, string property, int value)
+		{
+			if (material && material.HasProperty(property))
+				material.SetInt(property, value);
+		}
+
+		private static void ApplyURPFallbackSurfaceState(Material material, VMT sourceMaterial)
+		{
+			if (!material)
+				return;
+
+			var cutout		= sourceMaterial.HaveCutout;
+			var transparent = sourceMaterial.HaveTranslucency;
+			var additive	= sourceMaterial.HaveAdditiveBlending;
+
+			if (cutout)
+			{
+				material.SetOverrideTag("RenderType", "TransparentCutout");
+				// URP Surface Type:
+				// 0 = Opaque
+				// 1 = Transparent
+				SetIntIfPresent(material, "_Surface", 0);
+
+				// Alpha clipping.
+				SetFloatIfPresent(material, "_AlphaClip", 1.0f);
+
+				if (sourceMaterial.AlphaTestReference.HasValue)
+					SetFloatIfPresent(material, "_Cutoff", sourceMaterial.AlphaTestReference.Value);
+
+				SetIntIfPresent(material, "_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+				SetIntIfPresent(material, "_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+				SetIntIfPresent(material, "_ZWrite", 1);
+				
+				material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
+				
+				material.EnableKeyword("_ALPHATEST_ON");
+				material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
+			} else			
+			if (additive)
+			{
+				material.SetOverrideTag("RenderType", "Transparent");
+				// URP Surface Type:
+				// 0 = Opaque
+				// 1 = Transparent
+				SetIntIfPresent(material, "_Surface", 1);
+
+				// URP Blend mode:
+				// 0 = Alpha
+				// 1 = Premultiply
+				// 2 = Additive
+				// 3 = Multiply
+				SetIntIfPresent(material, "_Blend", 2);
+
+				// Alpha clipping.
+				SetFloatIfPresent(material, "_AlphaClip", 0.0f);
+
+				SetIntIfPresent(material, "_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+				SetIntIfPresent(material, "_DstBlend", (int)UnityEngine.Rendering.BlendMode.One);
+				SetIntIfPresent(material, "_ZWrite", 0);
+
+				material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+				
+				material.DisableKeyword("_ALPHATEST_ON");
+				material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+			} else
+			if (transparent)
+			{
+				material.SetOverrideTag("RenderType", "Transparent");
+				// URP Surface Type:
+				// 0 = Opaque
+				// 1 = Transparent
+				SetIntIfPresent(material, "_Surface", 1);
+
+				// URP:
+				// 0 = Alpha
+				// 1 = Premultiply
+				// 2 = Additive
+				// 3 = Multiply
+				SetIntIfPresent(material, "_Blend", 0);
+
+				// Alpha clipping.
+				SetFloatIfPresent(material, "_AlphaClip", 0.0f);
+
+				SetIntIfPresent(material, "_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+				SetIntIfPresent(material, "_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+				SetIntIfPresent(material, "_ZWrite", 0);
+
+				material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+
+				material.DisableKeyword("_ALPHATEST_ON");
+				material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+			}
+			else
+			{
+				material.SetOverrideTag("RenderType", "Opaque");
+				// URP Surface Type:
+				// 0 = Opaque
+				// 1 = Transparent
+				SetIntIfPresent(material, "_Surface", 0);
+
+				SetIntIfPresent(material, "_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+				SetIntIfPresent(material, "_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+				SetIntIfPresent(material, "_ZWrite", 1);
+
+				material.renderQueue = -1;
+
+				material.DisableKeyword("_ALPHATEST_ON");
+				material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
+			}
+		}
+
+		private static void ApplyURPParticleColorMode(Material material, VMT sourceMaterial)
+		{
+			if (!material || !sourceMaterial.HaveAdditiveBlending || !material.HasProperty("_ColorMode"))
+				return;
+
+			// URP ParticleGUI.ColorMode.Additive. This controls how the particle vertex color
+			// combines with its texture; it is separate from the material's additive framebuffer blend.
+			material.SetFloat("_ColorMode", 1.0f);
+			if (material.HasProperty("_BaseColorAddSubDiff"))
+				material.SetVector("_BaseColorAddSubDiff", new Vector4(1, 0, 0, 0));
+			material.DisableKeyword("_COLOROVERLAY_ON");
+			material.DisableKeyword("_COLORCOLOR_ON");
+			material.EnableKeyword("_COLORADDSUBDIFF_ON");
+		}
 
 		private static Material CreateMaterial(GameResources gameResources, VMT sourceMaterial, string materialName, bool isSprite)
 		{
@@ -213,11 +373,10 @@ namespace Chisel.Import.Source.VPKTools
 
 			if (isSprite)
 			{
-				if (_softParticleShader == null)
-				{
-					_softParticleShader = Shader.Find("Particles/Additive (Soft) Camera Aligned");
-				}
-				shader = _softParticleShader;
+				shader = GetParticleUnlitShader();
+
+				if (!shader)
+					return null;
 			} else
 			{
 				switch (sourceMaterial.MaterialTypeName.ToLowerInvariant())
@@ -233,76 +392,17 @@ namespace Chisel.Import.Source.VPKTools
 							if (unlitSourceShader != null)
 								return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, unlitSourceShader);
 						}
-						if (!complexShader && translucency && haveCutout)
-						{
-							if (!_unlitTransparentCutoutShader)
-							{
-								_unlitTransparentCutoutShader = Shader.Find(_unlitTransparentCutoutShaderName);
-								if (!_unlitTransparentCutoutShader)
-									Debug.LogWarning("unlitTransparentCutoutShader not found");
-							}
-							if (_unlitTransparentCutoutShader)
-							{
-								shader = _unlitTransparentCutoutShader;
-								break;
-							}
-						}
-						if (!complexShader && translucency)
-						{
-							if (!_unlitTransparentShader)
-							{
-								_unlitTransparentShader = Shader.Find(_unlitTransparentShaderName);
-								if (!_unlitTransparentShader)
-									Debug.LogWarning("unlitTransparentShader not found");
-							}
-							if (_unlitTransparentShader)
-							{
-								shader = _unlitTransparentShader;
-								break;
-							}
-						}
-
-						if (!complexShader && additiveBlending)
-						{
-							if (!_additiveShader)
-							{
-								_additiveShader = Shader.Find(_additiveShaderName);
-								if (!_additiveShader)
-									Debug.LogWarning("additiveShaderName not found");
-
-							}
-							if (_additiveShader)
-							{
-								shader = _additiveShader;
-								break;
-							}
-						}
-
 						if (!complexShader)
 						{
-							if (!_unlitShader)
-							{
-								_unlitShader = Shader.Find(_unlitShaderName);
-								if (!_unlitShader)
-									Debug.LogWarning("unlitShader not found");
-							}
-							if (_unlitShader)
-							{
-								shader = _unlitShader;
+							shader = GetUnlitShader();
+
+							if (shader)
 								break;
-							}
 						}
 
-						if (!_standardShader)
-						{
-							_standardShader = Shader.Find(_standardShaderName);
-							if (!_standardShader)
-							{
-								Debug.LogWarning("standardShader not found");
-								return null;
-							}
-						}
-						shader = _standardShader;
+						shader = GetLitShader();
+						if (!shader)
+							return null;
 						break;
 					}
 					default:
@@ -320,16 +420,11 @@ namespace Chisel.Import.Source.VPKTools
 								return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, unlitSourceShader);
 						}
 
-						if (!_standardShader)
-						{
-							_standardShader = Shader.Find(_standardShaderName);
-							if (!_standardShader)
-							{
-								Debug.LogWarning("standardShader not found");
-								return null;
-							}
-						}
-						shader = _standardShader;
+
+						shader = GetLitShader();
+						if (!shader)
+							return null;
+						 
 						break;
 					}
 				}
@@ -345,15 +440,24 @@ namespace Chisel.Import.Source.VPKTools
 			if (!unityMaterial)
 			{
 				Debug.Log("!unityMaterial");
-				return null;
+				return null; 
 			}
 			unityMaterial.hideFlags = HideFlags.DontUnloadUnusedAsset;
 			unityMaterial.name = materialName.ToString();
+			if (unityMaterial.HasProperty("_Smoothness"))
+				unityMaterial.SetFloat("_Smoothness", 0);
 
-			if (unityMaterial.HasProperty("_Glossiness")) unityMaterial.SetFloat("_Glossiness", 0);
-			if (unityMaterial.HasProperty("_SmoothnessTextureChannel")) unityMaterial.SetInt("_SmoothnessTextureChannel", 0);
+			if (unityMaterial.HasProperty("_Metallic"))
+				unityMaterial.SetFloat("_Metallic", 0);
 
-			Texture2D mainTexture = SetMaterialTexture(gameResources, unityMaterial, "_MainTex", sourceMaterial.BaseTextureName);
+			if (unityMaterial.HasProperty("_SpecularHighlights"))
+				unityMaterial.SetFloat("_SpecularHighlights", 0);
+
+			if (unityMaterial.HasProperty("_EnvironmentReflections"))
+				unityMaterial.SetFloat("_EnvironmentReflections", 0);
+
+
+			Texture2D mainTexture = SetMaterialTexture(gameResources, unityMaterial, "_BaseMap", sourceMaterial.BaseTextureName);
 			Texture2D normalMap = SetMaterialTexture(gameResources, unityMaterial, "_BumpMap", sourceMaterial.BumpMapName, isNormalMap: true,
 													 selfShadowed: sourceMaterial.BumpSelfShadowing == true);
 			Texture2D selfIlluminationMap = SetMaterialTexture(gameResources, unityMaterial, "_EmissionMap", sourceMaterial.SelfIlluminationTexture);
@@ -367,16 +471,49 @@ namespace Chisel.Import.Source.VPKTools
 			// this far: CreateSourceShaderMaterial reads the map properly in ApplySourceSpecular.
 			var setSpecMap = SetMaterialTexture(gameResources, unityMaterial, "_SpecGlossMap", sourceMaterial.PhongExponentTextureName,
 												warnIfMissing: false) != null;
-			if (!setSpecMap && unityMaterial.HasProperty("_SpecColor"))
-				unityMaterial.SetColor("_SpecColor", UnityEngine.Color.black);
+
+			if (!setSpecMap)
+			{
+				if (unityMaterial.HasProperty("_SpecColor"))
+					unityMaterial.SetColor("_SpecColor", Color.black);
+
+				if (unityMaterial.HasProperty("_Metallic"))
+					unityMaterial.SetFloat("_Metallic", 0);
+
+				if (unityMaterial.HasProperty("_Smoothness"))
+					unityMaterial.SetFloat("_Smoothness", 0);
+			}
 
 			var setNormalMapOn = normalMap != null;
 
 			var setDetailTextureOn = false;
-			setDetailTextureOn = setDetailTextureOn || SetMaterialTexture(gameResources, unityMaterial, "_DetailAlbedoMap", sourceMaterial.DetailTextureName) != null;
-			setDetailTextureOn = setDetailTextureOn || SetMaterialTexture(gameResources, unityMaterial, "_DetailAlbedoMap", sourceMaterial.BaseTexture2Name) != null;
-			setDetailTextureOn = setDetailTextureOn || SetMaterialTexture(gameResources, unityMaterial, "_DetailMask", sourceMaterial.BlendModulateTextureName) != null;
+			if (unityMaterial.HasProperty("_DetailAlbedoMap"))
+			{
+				setDetailTextureOn |=
+					SetMaterialTexture(
+						gameResources,
+						unityMaterial,
+						"_DetailAlbedoMap",
+						sourceMaterial.DetailTextureName) != null;
 
+				setDetailTextureOn |=
+					SetMaterialTexture(
+						gameResources,
+						unityMaterial,
+						"_DetailAlbedoMap",
+						sourceMaterial.BaseTexture2Name) != null;
+			}
+
+			if (unityMaterial.HasProperty("_DetailMask"))
+			{
+				setDetailTextureOn |=
+					SetMaterialTexture(
+						gameResources,
+						unityMaterial,
+						"_DetailMask",
+						sourceMaterial.BlendModulateTextureName) != null;
+			}
+			
 			if (SetMaterialTexture(gameResources, unityMaterial, "_DetailNormalMap", sourceMaterial.BumpMap2Name, isNormalMap: true,
 								   selfShadowed: sourceMaterial.BumpSelfShadowing == true) != null)
 			{
@@ -456,10 +593,14 @@ namespace Chisel.Import.Source.VPKTools
 				unityMaterial.SetColor("_SpecColor", UnityEngine.Color.black);
 
 			if (sourceMaterial.Color != null)
-				unityMaterial.SetColor("_Color", sourceMaterial.Color);
+				SetMaterialColor(unityMaterial, sourceMaterial.Color);
+
+			unityMaterial.SetFloat("_AlphaClip", haveCutout ? 1.0f : 0.0f);
 
 			if (haveCutout && sourceMaterial.AlphaTestReference.HasValue)
+			{
 				unityMaterial.SetFloat("_Cutoff", sourceMaterial.AlphaTestReference.Value);
+			}
 
 			if ((haveCutout || translucency) ||
 				(sourceMaterial.NoCull.HasValue && sourceMaterial.NoCull.Value))
@@ -468,24 +609,11 @@ namespace Chisel.Import.Source.VPKTools
 				unityMaterial.SetFloat("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
 			}
 
-			if (_standardShader && shader == _standardShader)
-			{
-				if (haveCutout)
-				{
-					unityMaterial.SetFloat("_Mode", (int)BlendMode.Fade);
-					ChangeRenderMode(unityMaterial, BlendMode.Fade);
-				}
-				else
-				if (translucency)
-				{
-					unityMaterial.SetFloat("_Mode", (int)BlendMode.Transparent);
-					ChangeRenderMode(unityMaterial, BlendMode.Transparent);
-				}
-			}
-			if (_additiveShader && shader == _additiveShader)
-			{
-				unityMaterial.SetFloat("_Mode", 4); // additive
-			}
+			// Particle/Unlit uses the same URP surface and blend properties as the other
+			// fallbacks. Skipping sprites here left glow materials opaque.
+			ApplyURPFallbackSurfaceState(unityMaterial, sourceMaterial);
+			if (isSprite)
+				ApplyURPParticleColorMode(unityMaterial, sourceMaterial);
 
 			if (setNormalMapOn)
 			{
@@ -529,8 +657,8 @@ namespace Chisel.Import.Source.VPKTools
 				hideFlags = HideFlags.DontUnloadUnusedAsset
 			};
 
-			var mainTexture = SetMaterialTexture(gameResources, unityMaterial, "_MainTex", sourceMaterial.BaseTextureName);
-			unityMaterial.SetColor("_Color", ShaderColor(ModulationColorOf(sourceMaterial)));
+			var mainTexture = SetMaterialTexture(gameResources, unityMaterial, "_BaseMap", sourceMaterial.BaseTextureName);
+			SetMaterialColor(unityMaterial, ShaderColor(ModulationColorOf(sourceMaterial)));
 
 			// UnlitTwoTexture: $texture2 is multiplied over the base texture, with a transform of its own.
 			if (unityMaterial.HasProperty("_Texture2"))
@@ -603,6 +731,18 @@ namespace Chisel.Import.Source.VPKTools
 			ApplySourceEnvMap(gameResources, unityMaterial, sourceMaterial, mainTexture);
 			ApplySourceVertexColor(gameResources, unityMaterial, sourceMaterial);
 			ApplySourceBlendState(unityMaterial, sourceMaterial);
+
+			if (string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "Water",
+						  System.StringComparison.OrdinalIgnoreCase))
+			{
+				Color tint = sourceMaterial.RefractTint ?? sourceMaterial.FogColor ?? (RGBColor)new Color(0.2f, 0.5f, 0.4f);
+				if (unityMaterial.HasProperty("_WaterTint"))
+					unityMaterial.SetColor("_WaterTint", ShaderColor(tint));
+				if (unityMaterial.HasProperty("_Opacity"))
+					unityMaterial.SetFloat("_Opacity", Mathf.Clamp01(0.45f + (sourceMaterial.RefractAmount ?? 0.2f) * 0.5f));
+				if (unityMaterial.HasProperty("_ReflectionStrength"))
+					unityMaterial.SetFloat("_ReflectionStrength", Mathf.Clamp01(sourceMaterial.ReflectAmount ?? 0.2f));
+			}
 
 			// $nocull, which the Standard shader cannot express at all. Source uses it for glass,
 			// grates and foliage, all of which have to be visible from both sides.
@@ -983,7 +1123,8 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// The tint a Source shader multiplies the base colour by: $color times $color2 (BaseShader.h:
-		/// GetColorParameter), taken out of gamma space as a product.
+		/// GetColorParameter), taken out of gamma space as a product. $alpha is the independent opacity
+		/// modulation and is not gamma decoded.
 		/// </summary>
 		internal static Color ModulationColorOf(VMT sourceMaterial)
 		{
@@ -992,7 +1133,8 @@ namespace Chisel.Import.Source.VPKTools
 			Color color2 = (sourceMaterial.Color2 != null) ? (Color)sourceMaterial.Color2 : Color.white;
 			return new Color(GammaToLinearConstant(color.r * color2.r),
 							 GammaToLinearConstant(color.g * color2.g),
-							 GammaToLinearConstant(color.b * color2.b), 1);
+							 GammaToLinearConstant(color.b * color2.b),
+							 Mathf.Clamp01(sourceMaterial.Alpha ?? 1.0f));
 		}
 
 		/// <summary>$selfillumtint, which Source hands to the shader as written (SetPixelShaderConstant),
@@ -1116,6 +1258,10 @@ namespace Chisel.Import.Source.VPKTools
 		/// </summary>
 		internal static string BumpMapNameOf(VMT sourceMaterial)
 		{
+			if (string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "Water",
+						  System.StringComparison.OrdinalIgnoreCase) &&
+				!string.IsNullOrEmpty(sourceMaterial.NormalMapName))
+				return sourceMaterial.NormalMapName;
 			if (!string.IsNullOrEmpty(sourceMaterial.BumpMapName))
 				return sourceMaterial.BumpMapName;
 			return string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "Cable", System.StringComparison.OrdinalIgnoreCase)
@@ -1153,6 +1299,26 @@ namespace Chisel.Import.Source.VPKTools
 			var zWrite = 1;
 			var renderQueue = -1;
 
+			unityMaterial.SetFloat("_AlphaClip", sourceMaterial.HaveCutout ? 1.0f : 0.0f);
+
+			if (string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "DecalModulate",
+						  System.StringComparison.OrdinalIgnoreCase))
+			{
+				// Intrinsic Source blend: 2 * source * destination. DecalModulate VMTs do
+				// not also spell this out as $translucent.
+				blend = UnityEngine.Rendering.BlendMode.DstColor;
+				blendTo = UnityEngine.Rendering.BlendMode.SrcColor;
+				zWrite = 0;
+				renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+			} else
+			if (string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "Water",
+						  System.StringComparison.OrdinalIgnoreCase))
+			{
+				blend = UnityEngine.Rendering.BlendMode.SrcAlpha;
+				blendTo = UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha;
+				zWrite = 0;
+				renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+			} else
 			if (sourceMaterial.HaveCutout)
 			{
 				// Alpha tested surfaces stay opaque: they write depth and are not sorted, the
@@ -1199,6 +1365,7 @@ namespace Chisel.Import.Source.VPKTools
 			switch (materialPropertyName)
 			{
 				case "_MainTex":
+				case "_BaseMap":
 				case "_DetailAlbedoMap":
 				// LightmappedGeneric's second layer is a base texture like the first.
 				case "_BaseTexture2":
@@ -1213,6 +1380,45 @@ namespace Chisel.Import.Source.VPKTools
 			}
 		}
 
+		private static bool SetMaterialColor(Material material, Color color)
+		{
+			if (!material)
+				return false;
+
+			// Stock URP Lit / Unlit / Particle Unlit.
+			if (material.HasProperty("_BaseColor"))
+			{
+				material.SetColor("_BaseColor", color);
+				return true;
+			}
+
+			// Compatibility with custom/legacy shaders.
+			if (material.HasProperty("_Color"))
+			{
+				material.SetColor("_Color", color);
+				return true;
+			}
+
+			return false;
+		}
+
+		private static string ResolveTextureProperty(Material material, string propertyName)
+		{
+			if (!material)
+				return null;
+
+			if (material.HasProperty(propertyName))
+				return propertyName;
+
+			// The Source importer historically uses _MainTex, while stock URP uses _BaseMap.
+			if (propertyName == "_MainTex" && material.HasProperty("_BaseMap"))
+				return "_BaseMap";
+			if (propertyName == "_BaseMap" && material.HasProperty("_MainTex"))
+				return "_MainTex";
+
+			return null;
+		}
+
 		/// <param name="isNormalMap">
 		/// True when the VMT named this texture under a bump-map parameter. The caller is the only
 		/// place that knows - a VTF's own normal flag is unreliable - so it is passed down here and
@@ -1223,43 +1429,63 @@ namespace Chisel.Import.Source.VPKTools
 		/// decoding rather than merely re-typing. Same reasoning as <paramref name="isNormalMap"/>:
 		/// only the VMT knows.
 		/// </param>
-		private static Texture2D SetMaterialTexture(GameResources gameResources, Material material, string materialPropertyName, string textureName, bool isNormalMap = false, bool warnIfMissing = true, bool selfShadowed = false)
+		private static Texture2D SetMaterialTexture(GameResources gameResources,
+													Material material,
+													string materialPropertyName,
+													string textureName,
+													bool isNormalMap = false,
+													bool warnIfMissing = true,
+													bool selfShadowed = false)
 		{
 			if (string.IsNullOrEmpty(textureName) || !material)
 				return null;
 
-			if (!material.HasProperty(materialPropertyName))
+			var resolvedProperty = ResolveTextureProperty(material, materialPropertyName);
+
+			if (resolvedProperty == null)
 			{
-				// Not every Source shader equivalent has every slot - UnlitGeneric has no normal
-				// map or specular - so the caller can say that a missing property is expected.
+				// Not every Source shader equivalent has every slot.
 				if (warnIfMissing)
-					Debug.LogWarning("Unknown property " + materialPropertyName + " on shader " + material.shader.name, material);
+					Debug.LogWarning(
+						"Unknown property " + materialPropertyName +
+						" on shader " + material.shader.name,
+						material);
+
 				return null;
 			}
 
+			var images = gameResources.ImportVTF(
+				textureName,
+				PackagePath.DefaultMaterialPaths);
 
-			var images = gameResources.ImportVTF(textureName, PackagePath.DefaultMaterialPaths);
 			if (images == null || images.Length == 0)
-			{
 				return null;
-			}
 
 			var image = images[0];
+
 			if (isNormalMap)
+			{
 				Texture2DImporter.MarkAsNormalMap(image, selfShadowed);
+			}
 			else if (IsColorSlot(material, materialPropertyName))
+			{
 				Texture2DImporter.MarkAsColor(image);
+			}
+
 			try
 			{
-				material.SetTexture(materialPropertyName, image);
+				material.SetTexture(resolvedProperty, image);
 			}
 			catch (System.Exception ex)
 			{
 				Debug.LogException(ex, material);
+				return null;
 			}
+
 			return image;
 		}
-		
+
+		/*
 		private enum BlendMode
 		{
 			Opaque,
@@ -1267,7 +1493,6 @@ namespace Chisel.Import.Source.VPKTools
 			Fade,
 			Transparent
 		}
-
 		private static void ChangeRenderMode(Material standardShaderMaterial, BlendMode blendMode)
 		{
 			switch (blendMode)
@@ -1310,21 +1535,22 @@ namespace Chisel.Import.Source.VPKTools
 					break;
 			} 
 		}
-
+		*/
 		internal static Material GenerateEditorColorMaterial(Color color)
 		{
-			var name = "Color:" + color;
-
-			var shader = Shader.Find("Unlit/Color");
+			var shader = Shader.Find("Universal Render Pipeline/Unlit");
 			if (!shader)
+			{
+				Debug.LogWarning("Universal Render Pipeline/Unlit shader not found");
 				return null;
+			}
 
 			var material = new Material(shader)
 			{
-				name = name.Replace(':', '_'),
+				name = "Color_" + color,
 				hideFlags = HideFlags.None | HideFlags.DontUnloadUnusedAsset
 			};
-			material.SetColor("_Color", color);
+			material.SetColor("_BaseColor", color);
 			return material;
 		}
 
@@ -1341,29 +1567,50 @@ namespace Chisel.Import.Source.VPKTools
 			}
 			return colorMaterial;
 		}
+		
+		private const string _skyboxShaderName = "Skybox/Cubemap Skybox";
 
 		private static Shader _skyboxShader;
+
+		private static Shader GetSkyboxShader()
+		{
+			if (!_skyboxShader)
+			{
+				_skyboxShader = Shader.Find(_skyboxShaderName);
+
+				if (!_skyboxShader)
+					Debug.LogWarning("URP skybox shader not found: " + _skyboxShaderName);
+			}
+
+			return _skyboxShader;
+		}
 
 		public static Material CreateSkyboxMaterial(GameResources gameResources, 
 												    string materialName,
 													Cubemap cubemap)
 		{
-			if (!_skyboxShader)
-			{
-				_skyboxShader = Shader.Find("Skybox/Surface Skybox");
-				if (!_skyboxShader)
-					return null;
-			}
+			var shader = GetSkyboxShader();
+			if (!shader)
+				return null;
 
-			var unityMaterial = new Material(_skyboxShader) {name = materialName};
-			unityMaterial.hideFlags = HideFlags.DontUnloadUnusedAsset;
+			var unityMaterial = new Material(shader)
+			{
+				name = materialName,
+				hideFlags = HideFlags.DontUnloadUnusedAsset
+			};
 
 			try
 			{
-				unityMaterial.SetTexture("_MainTex", cubemap);
+				if (unityMaterial.HasProperty("_BaseMap"))
+					unityMaterial.SetTexture("_BaseMap", cubemap);
+				else if (unityMaterial.HasProperty("_Tex"))
+					unityMaterial.SetTexture("_Tex", cubemap);
+				else if (unityMaterial.HasProperty("_MainTex"))
+					unityMaterial.SetTexture("_MainTex", cubemap);
 
 				// ... we use the rotation setting to rotate it back (cubemap has rotated surfaces), so it matches the original game
-				unityMaterial.SetFloat("_Rotation", 270);
+				if (unityMaterial.HasProperty("_Rotation"))
+					unityMaterial.SetFloat("_Rotation", 270);
 			}
 			catch (System.Exception ex)
 			{

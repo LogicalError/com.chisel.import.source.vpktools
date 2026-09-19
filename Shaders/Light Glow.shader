@@ -13,7 +13,7 @@ Shader "Chisel/Import/LightGlow"
 {
 	Properties
 	{
-		_MainTex ("Glow Texture", 2D) = "white" {}
+		_BaseMap ("Glow Texture", 2D) = "white" {}
 		_TintColor ("Tint Color", Color) = (1,1,1,1)
 		_Intensity ("Intensity", Float) = 1
 		// x = MinDist, y = MaxDist, z = OuterMaxDist, in meters.
@@ -42,8 +42,8 @@ Shader "Chisel/Import/LightGlow"
 
 			#include "UnityCG.cginc"
 
-			sampler2D _MainTex;
-			float4 _MainTex_ST;
+			sampler2D _BaseMap;
+			float4 _BaseMap_ST;
 			float4 _TintColor;
 			float _Intensity;
 			float4 _FadeDistances;
@@ -115,7 +115,7 @@ Shader "Chisel/Import/LightGlow"
 
 				float4 originView = mul(UNITY_MATRIX_V, float4(originWorld, 1));
 				o.vertex = mul(UNITY_MATRIX_P, originView + float4(v.vertex.xy * size, 0, 0));
-				o.uv = TRANSFORM_TEX(v.uv, _MainTex);
+				o.uv = TRANSFORM_TEX(v.uv, _BaseMap);
 
 				float3 toViewer = _WorldSpaceCameraPos - originWorld;
 				float viewerDistance = length(toViewer);
@@ -143,7 +143,7 @@ Shader "Chisel/Import/LightGlow"
 
 			float4 frag(v2f i) : SV_Target
 			{
-				float4 glow = tex2D(_MainTex, i.uv);
+				float4 glow = tex2D(_BaseMap, i.uv);
 				return float4(glow.rgb * glow.a * i.color, 0);
 			}
 			ENDCG

@@ -2,7 +2,7 @@
 
 Shader "Particles/Additive (Soft) Camera Aligned" {
 Properties {
-	_MainTex ("Particle Texture", 2D) = "white" {}
+	_BaseMap ("Particle Texture", 2D) = "white" {}
 	_TintColor ("Tint Color", Color) = (1,1,1,1)
 	_InvFade ("Soft Particles Factor", Range(0.01,3.0)) = 1.0
 	_Alpha ("Alpha", Range(0.01,1.0)) = 1.0
@@ -26,7 +26,7 @@ Category {
 
 			#include "UnityCG.cginc"
 
-			sampler2D _MainTex;
+			sampler2D _BaseMap;
 			fixed4 _TintColor;
 			
 			struct appdata_t {
@@ -76,7 +76,7 @@ Category {
 			}
 
 
-			float4 _MainTex_ST;
+			float4 _BaseMap_ST;
 			
 			v2f vert (appdata_t v)
 			{
@@ -98,7 +98,7 @@ Category {
 				#endif
 				
 				o.color = v.color;
-				o.texcoord = TRANSFORM_TEX(v.texcoord,_MainTex);
+				o.texcoord = TRANSFORM_TEX(v.texcoord,_BaseMap);
 				UNITY_TRANSFER_FOG(o,o.vertex);
 				return o;
 			}
@@ -119,7 +119,7 @@ Category {
 				// _TintColor carries the per-sprite colour: a Source env_sprite tints and dims a
 				// shared glow material with its own rendercolor/renderamt, and the alpha rides
 				// through the premultiply below as the brightness.
-				half4 col = i.color * _TintColor * tex2D(_MainTex, i.texcoord);
+				half4 col = i.color * _TintColor * tex2D(_BaseMap, i.texcoord);
 				col.rgb *= col.a;
 				UNITY_APPLY_FOG_COLOR(i.fogCoord, col, fixed4(0,0,0,0)); // fog towards black due to our blend mode
 				return col; 

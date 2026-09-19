@@ -8,7 +8,7 @@ Shader "Chisel/Import/SpotlightBeam"
 {
 	Properties
 	{
-		_MainTex ("Beam Texture", 2D) = "white" {}
+		_BaseMap ("Beam Texture", 2D) = "white" {}
 		_TintColor ("Tint Color", Color) = (1,1,1,1)
 		_Intensity ("Intensity", Float) = 1
 	}
@@ -30,8 +30,8 @@ Shader "Chisel/Import/SpotlightBeam"
 
 			#include "UnityCG.cginc"
 
-			sampler2D _MainTex;
-			float4 _MainTex_ST;
+			sampler2D _BaseMap;
+			float4 _BaseMap_ST;
 			float4 _TintColor;
 			float _Intensity;
 
@@ -72,7 +72,7 @@ Shader "Chisel/Import/SpotlightBeam"
 
 				o.vertex = mul(UNITY_MATRIX_VP, float4(position, 1));
 				// Stretched once along the length (FBEAM_NOTILE), starting at the lamp.
-				o.uv = TRANSFORM_TEX(float2(v.vertex.x + 0.5, 1 - along), _MainTex);
+				o.uv = TRANSFORM_TEX(float2(v.vertex.x + 0.5, 1 - along), _BaseMap);
 
 				// FBEAM_SHADEOUT: full strength at the lamp, nothing at the far end.
 				float fade = 1 - along;
@@ -88,7 +88,7 @@ Shader "Chisel/Import/SpotlightBeam"
 
 			float4 frag(v2f i) : SV_Target
 			{
-				float4 beam = tex2D(_MainTex, i.uv);
+				float4 beam = tex2D(_BaseMap, i.uv);
 				float4 col = float4(beam.rgb * beam.a * i.color, 0);
 				// Additive: fog takes it toward black rather than toward the fog colour.
 				UNITY_APPLY_FOG_COLOR(i.fogCoord, col, fixed4(0, 0, 0, 0));

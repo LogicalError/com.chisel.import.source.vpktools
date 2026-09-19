@@ -7,7 +7,7 @@ Shader "Chisel/Source/UnlitTwoTexture"
 	Properties
 	{
 		[MainColor] _Color ("$color", Color) = (1,1,1,1)
-		[MainTexture] _MainTex ("$basetexture", 2D) = "white" {}
+		[MainTexture] _BaseMap ("$basetexture", 2D) = "white" {}
 		_Texture2 ("$texture2", 2D) = "white" {}
 		// TextureScroll proxies, as a uv offset per second. Set by the importer from the VMT.
 		_BaseTextureScroll ("$basetexturetransform scroll", Vector) = (0,0,0,0)
@@ -22,7 +22,7 @@ Shader "Chisel/Source/UnlitTwoTexture"
 
 	SubShader
 	{
-		Tags { "RenderType" = "Opaque" "Queue" = "Geometry" }
+		Tags { "RenderType" = "Opaque" "Queue" = "Geometry" "RenderPipeline" = "UniversalPipeline" }
 		LOD 100
 
 		Cull [_Cull]
@@ -31,65 +31,44 @@ Shader "Chisel/Source/UnlitTwoTexture"
 
 		Pass
 		{
-			CGPROGRAM
-			#pragma vertex vert
-			#pragma fragment frag
+			Tags { "LightMode" = "UniversalForward" }
+			HLSLPROGRAM
+			#pragma target 3.5
+			#pragma vertex SourceUnlitVert
+			#pragma fragment SourceUnlitFrag
 			#pragma multi_compile_fog
 			#pragma shader_feature_local _ALPHATEST_ON
+			#define CHISEL_TWO_TEXTURE
+			#include "ChiselSourceUnlitURP.hlsl"
+			ENDHLSL
+		}
+		
+		Pass
+		{
+			Name "ShadowCaster"
+			Tags { "LightMode" = "ShadowCaster" }
 
-			#include "UnityCG.cginc"
+			Cull [_Cull]
+			ZWrite On
+			ZTest LEqual
+			ColorMask 0
 
-			struct appdata
-			{
-				float4 vertex : POSITION;
-				float2 uv : TEXCOORD0;
-				UNITY_VERTEX_INPUT_INSTANCE_ID
-			};
+			HLSLPROGRAM
+			#pragma target 3.5
+			#pragma vertex SourceShadowVert
+			#pragma fragment SourceShadowFrag
 
-			struct v2f
-			{
-				float2 uv : TEXCOORD0;
-				float2 uv2 : TEXCOORD1;
-				UNITY_FOG_COORDS(2)
-				float4 vertex : SV_POSITION;
-				UNITY_VERTEX_OUTPUT_STEREO
-			};
+			#pragma shader_feature_local _ALPHATEST_ON
+			#pragma shader_feature_local _SELFILLUM
 
-			sampler2D _MainTex;
-			float4 _MainTex_ST;
-			sampler2D _Texture2;
-			float4 _Texture2_ST;
-			float4 _BaseTextureScroll;
-			float4 _Texture2Scroll;
-			fixed4 _Color;
-			half _Cutoff;
+			#pragma multi_compile_instancing
+			#pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
 
-			v2f vert(appdata v)
-			{
-				v2f o;
-				UNITY_SETUP_INSTANCE_ID(v);
-				UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
-				o.vertex = UnityObjectToClipPos(v.vertex);
-				// frac() keeps the offset in [0,1) however long the level has been running, which is
-				// also what the proxy does - an ever-growing offset loses precision.
-				o.uv = TRANSFORM_TEX(v.uv, _MainTex) + frac(_BaseTextureScroll.xy * _Time.y);
-				o.uv2 = TRANSFORM_TEX(v.uv, _Texture2) + frac(_Texture2Scroll.xy * _Time.y);
-				UNITY_TRANSFER_FOG(o, o.vertex);
-				return o;
-			}
+			#include "ChiselSourceGenericURP.hlsl"
 
-			fixed4 frag(v2f i) : SV_Target
-			{
-				fixed4 col = tex2D(_MainTex, i.uv) * tex2D(_Texture2, i.uv2) * _Color;
-			#ifdef _ALPHATEST_ON
-				clip(col.a - _Cutoff);
-			#endif
-				UNITY_APPLY_FOG(i.fogCoord, col);
-				return col;
-			}
-			ENDCG
+			ENDHLSL
 		}
 	}
 
-	FallBack "Unlit/Texture"
+	FallBack Off
 }
