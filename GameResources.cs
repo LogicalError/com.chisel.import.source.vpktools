@@ -177,7 +177,7 @@ namespace Chisel.Import.Source.VPKTools
 			var sourceTexture = LoadVTF(entry);
 			if (sourceTexture == null)
 				return null;			
-			var outputPath = PackagePath.GetOutputPath(entry.keyname);
+			var outputPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname));
 			return Texture2DImporter.Import(sourceTexture, outputPath);
 		}
 
@@ -200,7 +200,7 @@ namespace Chisel.Import.Source.VPKTools
 			var sourceTexture = LoadVTF(entry);
 			if (sourceTexture == null || (sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ENVMAP) == 0)
 				return null;
-			return Texture2DImporter.ImportCubemap(sourceTexture, PackagePath.GetOutputPath(entry.keyname));
+			return Texture2DImporter.ImportCubemap(sourceTexture, PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname)));
 		}
 
 		/// <summary>
@@ -215,7 +215,7 @@ namespace Chisel.Import.Source.VPKTools
 			GameEntry entry = GetEntry(entryName, searchPaths);
 			if (entry == null || entry.extension != PackagePath.ExtensionVTF)
 				return null;
-			return Texture2DImporter.ImportAlphaMask(LoadVTF(entry), PackagePath.GetOutputPath(entry.keyname));
+			return Texture2DImporter.ImportAlphaMask(LoadVTF(entry), PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname)));
 		}
 
 

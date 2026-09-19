@@ -53,6 +53,31 @@ namespace Chisel.Import.Source.VPKTools
 
 			return Combine(AnimationSubPath, cleaned);
 		}
+
+		/// <summary>
+		/// Where textures go: a tree of their own beside the materials, so the materials can all be deleted and
+		/// imported again without extracting every texture again (see <see cref="TextureFolders"/>).
+		/// </summary>
+		public const string TextureSubPath = "textures";
+
+		/// <summary>
+		/// Rewrites a texture's entry name so it lands under <see cref="TextureSubPath"/>: Source keeps its
+		/// textures under "materials/" like its materials, which is replaced rather than nested, so
+		/// materials/metal/floor01.vtf goes to import/textures/metal/floor01.
+		/// </summary>
+		public static string GetTextureEntryName(string entryName)
+		{
+			if (string.IsNullOrEmpty(entryName))
+				return entryName;
+
+			var cleaned = entryName.Replace('\\', '/');
+			const string materialsPrefix = "materials/";
+			if (cleaned.StartsWith(materialsPrefix, StringComparison.OrdinalIgnoreCase))
+				cleaned = cleaned.Substring(materialsPrefix.Length);
+
+			return Combine(TextureSubPath, cleaned);
+		}
+
 		public static string GetOutputPath(string fullname) { return Path.GetFullPath(Path.Combine(Application.dataPath, GetImportPath(fullname))); }
 		public static string GetAssetPath(string fullname) { return Path.Combine("Assets", Path.GetRelativePath(Application.dataPath, GetOutputPath(fullname))); }
 

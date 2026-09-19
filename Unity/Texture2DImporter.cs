@@ -305,6 +305,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			// Save the texture to the specified path, and destroy the temporary object
 			var bytes = isHDR ? cubeTexture.EncodeToEXR() : cubeTexture.EncodeToPNG();
+			PackagePath.EnsureDirectoriesExist(destinationPath);
 			File.WriteAllBytes(destinationPath, bytes);
 			Object.DestroyImmediate(cubeTexture);
 		}

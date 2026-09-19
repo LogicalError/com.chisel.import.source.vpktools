@@ -151,7 +151,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			PackagePath.EnsureDirectoriesExist(destinationPath);
 
-			var cubemapPath = Path.ChangeExtension(destinationPath, ".png");
+			var cubemapPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(Path.ChangeExtension(outputPath, ".png")));
 			var cubemap = Texture2DImporter.ImportSkybox(frontVTF, backVTF, upVTF, downVTF, leftVTF, rightVTF, cubemapPath);
 
 			var skybox = CreateSkyboxMaterial(gameResources, skyname, cubemap);
