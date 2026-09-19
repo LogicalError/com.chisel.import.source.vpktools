@@ -172,11 +172,12 @@ namespace Chisel.Import.Source.VPKTools
 
 		private const string _litShaderName = "Universal Render Pipeline/Lit";
 		private const string _unlitShaderName = "Universal Render Pipeline/Unlit";
-		private const string _particleUnlitShaderName = "Universal Render Pipeline/Particles/Unlit";
+		/// <summary>Chisel's billboard shader for sprites (Shaders/Particle AddSmooth Aligned.shader)</summary>
+		private const string _spriteShaderName = "Particles/Additive (Soft) Camera Aligned";
 
 		private static Shader _litShader;
 		private static Shader _unlitShader;
-		private static Shader _particleUnlitShader;
+		private static Shader _spriteShader;
 
 		private static Shader FindFallbackShader(string shaderName)
 		{
@@ -203,12 +204,12 @@ namespace Chisel.Import.Source.VPKTools
 			return _unlitShader;
 		}
 
-		private static Shader GetParticleUnlitShader()
+		private static Shader GetSpriteShader()
 		{
-			if (!_particleUnlitShader)
-				_particleUnlitShader = FindFallbackShader(_particleUnlitShaderName);
+			if (!_spriteShader)
+				_spriteShader = FindFallbackShader(_spriteShaderName);
 
-			return _particleUnlitShader;
+			return _spriteShader;
 		}
 		
 		private static void SetFloatIfPresent(Material material, string property, float value)
@@ -328,22 +329,28 @@ namespace Chisel.Import.Source.VPKTools
 			}
 		}
 
-		private static void ApplyURPParticleColorMode(Material material, VMT sourceMaterial)
+		/// <summary>
+		/// A sprite's material (env_sprite and whatever else names a .spr or sprite .vmt): Chisel's billboard shader with the
+		/// sprite's texture. A sprite entity tints and dims it with its rendercolor and renderamt, through _TintColor on a
+		/// variant of it (VmfEntityConverter.GetTintedSpriteMaterial). URP's Particles/Unlit, which sprites used to get,
+		/// neither faces the camera nor has a _TintColor.
+		/// </summary>
+		internal static Material CreateSpriteMaterial(GameResources gameResources, VMT sourceMaterial, string materialName)
 		{
-			if (!material || !sourceMaterial.HaveAdditiveBlending || !material.HasProperty("_ColorMode"))
-				return;
+			var shader = GetSpriteShader();
+			if (!shader)
+				return null;
 
-			// URP ParticleGUI.ColorMode.Additive. This controls how the particle vertex color
-			// combines with its texture; it is separate from the material's additive framebuffer blend.
-			material.SetFloat("_ColorMode", 1.0f);
-			if (material.HasProperty("_BaseColorAddSubDiff"))
-				material.SetVector("_BaseColorAddSubDiff", new Vector4(1, 0, 0, 0));
-			material.DisableKeyword("_COLOROVERLAY_ON");
-			material.DisableKeyword("_COLORCOLOR_ON");
-			material.EnableKeyword("_COLORADDSUBDIFF_ON");
+			var unityMaterial = new Material(shader)
+			{
+				name = materialName,
+				hideFlags = HideFlags.DontUnloadUnusedAsset
+			};
+			SetMaterialTexture(gameResources, unityMaterial, "_BaseMap", sourceMaterial.BaseTextureName);
+			return unityMaterial;
 		}
 
-		private static Material CreateMaterial(GameResources gameResources, VMT sourceMaterial, string materialName, bool isSprite)
+		internal static Material CreateMaterial(GameResources gameResources, VMT sourceMaterial, string materialName, bool isSprite)
 		{
 			var haveCutout		 = sourceMaterial.HaveCutout;
 			var translucency	 = sourceMaterial.HaveTranslucency;
@@ -359,74 +366,64 @@ namespace Chisel.Import.Source.VPKTools
 			if (string.IsNullOrEmpty(sourceMaterial.MaterialTypeName))
 				sourceMaterial.MaterialTypeName = "lightmappedgeneric";
 
+			// "sprite" is not a Source shader type: it is our own billboard handling of .spr references
+			if (isSprite)
+				return CreateSpriteMaterial(gameResources, sourceMaterial, materialName);
+
 			// When we have a Unity shader standing in for the Source shader this VMT asks for, use
 			// it and carry the VMT's parameters across as written. Otherwise fall through to the
 			// approximation with Unity's Standard shader below, which is unchanged.
-			// Sprites are excluded: "sprite" is not a Source shader type, it is our own billboard
-			// handling of .spr references.
-			if (!isSprite)
-			{
-				var sourceShader = SourceShaderLookup.Find(sourceMaterial.MaterialTypeName);
-				if (sourceShader != null)
-					return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, sourceShader);
-			}
+			var sourceShader = SourceShaderLookup.Find(sourceMaterial.MaterialTypeName);
+			if (sourceShader != null)
+				return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, sourceShader);
 
-			if (isSprite)
+			switch (sourceMaterial.MaterialTypeName.ToLowerInvariant())
 			{
-				shader = GetParticleUnlitShader();
-
-				if (!shader)
-					return null;
-			} else
-			{
-				switch (sourceMaterial.MaterialTypeName.ToLowerInvariant())
+				case "unlitgeneric":
 				{
-					case "unlitgeneric":
+					if (!complexShader && translucency && additiveBlending)
 					{
-						if (!complexShader && translucency && additiveBlending)
-						{
-							// This used to be Unity's FX/Flare. That is a lens-flare shader and never depth
-							// tests, so every material that landed here showed through walls. The unlit
-							// Source shader with the VMT's own additive blend state is the real equivalent.
-							var unlitSourceShader = SourceShaderLookup.Find("UnlitGeneric");
-							if (unlitSourceShader != null)
-								return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, unlitSourceShader);
-						}
-						if (!complexShader)
-						{
-							shader = GetUnlitShader();
-
-							if (shader)
-								break;
-						}
-
-						shader = GetLitShader();
-						if (!shader)
-							return null;
-						break;
+						// This used to be Unity's FX/Flare. That is a lens-flare shader and never depth
+						// tests, so every material that landed here showed through walls. The unlit
+						// Source shader with the VMT's own additive blend state is the real equivalent.
+						var unlitSourceShader = SourceShaderLookup.Find("UnlitGeneric");
+						if (unlitSourceShader != null)
+							return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, unlitSourceShader);
 					}
-					default:
-					//case "vertexlitgeneric":
-					//case "lightmappedgeneric":
-					//case "worldvertextransition":
+					if (!complexShader)
 					{
-						if (!complexShader && translucency && additiveBlending)
-						{
-							// This used to be Unity's FX/Flare. That is a lens-flare shader and never depth
-							// tests, so every material that landed here showed through walls. The unlit
-							// Source shader with the VMT's own additive blend state is the real equivalent.
-							var unlitSourceShader = SourceShaderLookup.Find("UnlitGeneric");
-							if (unlitSourceShader != null)
-								return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, unlitSourceShader);
-						}
+						shader = GetUnlitShader();
 
-
-						shader = GetLitShader();
-						if (!shader)
-							return null;
-						 
-						break;
+						if (shader)
+							break;
 					}
+
+					shader = GetLitShader();
+					if (!shader)
+						return null;
+					break;
+				}
+				default:
+				//case "vertexlitgeneric":
+				//case "lightmappedgeneric":
+				//case "worldvertextransition":
+				{
+					if (!complexShader && translucency && additiveBlending)
+					{
+						// This used to be Unity's FX/Flare. That is a lens-flare shader and never depth
+						// tests, so every material that landed here showed through walls. The unlit
+						// Source shader with the VMT's own additive blend state is the real equivalent.
+						var unlitSourceShader = SourceShaderLookup.Find("UnlitGeneric");
+						if (unlitSourceShader != null)
+							return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, unlitSourceShader);
+					}
+
+
+					shader = GetLitShader();
+					if (!shader)
+						return null;
+					 
+					break;
 				}
 			}
 
@@ -609,11 +606,7 @@ namespace Chisel.Import.Source.VPKTools
 				unityMaterial.SetFloat("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
 			}
 
-			// Particle/Unlit uses the same URP surface and blend properties as the other
-			// fallbacks. Skipping sprites here left glow materials opaque.
 			ApplyURPFallbackSurfaceState(unityMaterial, sourceMaterial);
-			if (isSprite)
-				ApplyURPParticleColorMode(unityMaterial, sourceMaterial);
 
 			if (setNormalMapOn)
 			{
