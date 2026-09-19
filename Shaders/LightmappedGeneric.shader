@@ -58,6 +58,13 @@ Shader "Chisel/Source/LightmappedGeneric"
 		_SelfIllumTint ("$selfillumtint", Color) = (0,0,0,1)
 		_SelfIllumFromBaseAlpha ("Self-illum mask is base alpha", Float) = 1
 
+		// VertexLitGeneric's rim light. UnityPerMaterial is shared by both shaders (ChiselSourceGenericInput.hlsl),
+		// and the GPU Resident Drawer only takes a shader whose every buffer variable is a property. The world
+		// shader leaves it off.
+		[HideInInspector] _RimLight ("$rimlight", Float) = 0
+		[HideInInspector] _RimLightBoost ("$rimlightboost", Float) = 1
+		[HideInInspector] _RimMask ("$rimmask", Float) = 0
+
 		[HideInInspector] _SrcBlend ("__src", Float) = 1.0
 		[HideInInspector] _DstBlend ("__dst", Float) = 0.0
 		[HideInInspector] _ZWrite ("__zw", Float) = 1.0

@@ -52,6 +52,18 @@ Shader "Chisel/Source/VertexLitGeneric"
 		_SelfIllumTint ("$selfillumtint", Color) = (0,0,0,1)
 		_SelfIllumFromBaseAlpha ("Self-illum mask is base alpha", Float) = 1
 
+		// LightmappedGeneric's vertex colour and second layer. UnityPerMaterial is shared by both shaders
+		// (ChiselSourceGenericInput.hlsl), and the GPU Resident Drawer only takes a shader whose every buffer
+		// variable is a property. The model shader leaves them all off.
+		[HideInInspector] _VertexColor ("$vertexcolor", Float) = 0
+		[HideInInspector] _VertexAlpha ("Vertex alpha is opacity", Float) = 0
+		[HideInInspector] _BlendBase2 ("Blend $basetexture2", Float) = 0
+		[HideInInspector] _BlendBump2 ("Blend $bumpmap2", Float) = 0
+		[HideInInspector] _BlendModulate ("Modulate the blend", Float) = 0
+		[HideInInspector] _MaskedBlending ("$maskedblending", Float) = 0
+		[HideInInspector] _BlendMaskTransformU ("$blendmasktransform u row", Vector) = (1,0,0,0)
+		[HideInInspector] _BlendMaskTransformV ("$blendmasktransform v row", Vector) = (0,1,0,0)
+
 		[HideInInspector] _SrcBlend ("__src", Float) = 1.0
 		[HideInInspector] _DstBlend ("__dst", Float) = 0.0
 		[HideInInspector] _ZWrite ("__zw", Float) = 1.0

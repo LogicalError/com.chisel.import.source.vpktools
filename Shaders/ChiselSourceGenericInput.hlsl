@@ -3,8 +3,9 @@
 
 // The material of Source's *Generic shaders (ChiselSourceGeneric.hlsl), and the parts of their surface that every pass
 // needs: the base colour, opacity and normal. Everything in UnityPerMaterial is declared by both shaders' passes, whatever
-// their keywords, which is what URP's SRP batcher needs. VertexLitGeneric has no properties for LightmappedGeneric's
-// second layer and vertex colour, which leaves them 0: the model shader ignores vertex colour.
+// their keywords, which is what URP's SRP batcher needs, and every variable in it is a property of both shaders, which
+// is what the GPU Resident Drawer needs: each declares the other's (the second layer and vertex colour, the rim light)
+// hidden, and leaves them off.
 
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/DebugMipmapStreamingMacros.hlsl"
