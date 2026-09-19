@@ -8,14 +8,15 @@ Shader "Chisel/Import/SpotlightBeam"
 {
 	Properties
 	{
-		_BaseMap ("Beam Texture", 2D) = "white" {}
+		// [MainTexture]: the importer hands the texture over as Material.mainTexture
+		[MainTexture] _BaseMap ("Beam Texture", 2D) = "white" {}
 		_TintColor ("Tint Color", Color) = (1,1,1,1)
 		_Intensity ("Intensity", Float) = 1
 	}
 
 	SubShader
 	{
-		Tags { "Queue" = "Transparent" "IgnoreProjector" = "True" "RenderType" = "Transparent" "DisableBatching" = "True" }
+		Tags { "Queue" = "Transparent" "IgnoreProjector" = "True" "RenderType" = "Transparent" "DisableBatching" = "True" "RenderPipeline" = "UniversalPipeline" }
 
 		Blend One One
 		ZWrite Off
@@ -23,44 +24,53 @@ Shader "Chisel/Import/SpotlightBeam"
 
 		Pass
 		{
-			CGPROGRAM
+			Name "SpotlightBeam"
+
+			HLSLPROGRAM
+			#pragma target 3.5
 			#pragma vertex vert
 			#pragma fragment frag
-			#pragma multi_compile_fog
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Fog.hlsl"
 
-			#include "UnityCG.cginc"
+			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
-			sampler2D _BaseMap;
-			float4 _BaseMap_ST;
-			float4 _TintColor;
-			float _Intensity;
+			CBUFFER_START(UnityPerMaterial)
+				float4 _BaseMap_ST;
+				float4 _TintColor;
+				float  _Intensity;
+			CBUFFER_END
 
-			struct appdata
+			TEXTURE2D(_BaseMap);
+			SAMPLER(sampler_BaseMap);
+
+			struct Attributes
 			{
 				// x in [-0.5, 0.5] across the beam, z in [0, 1] from the lamp to the far end.
-				float4 vertex : POSITION;
+				float4 positionOS : POSITION;
 			};
 
-			struct v2f
+			struct Varyings
 			{
-				float4 vertex : SV_POSITION;
-				float2 uv : TEXCOORD0;
-				float3 color : TEXCOORD1;
-				UNITY_FOG_COORDS(2)
+				float4 positionCS : SV_POSITION;
+				float2 uv         : TEXCOORD0;
+				float3 color      : TEXCOORD1;
+				float3 positionWS : TEXCOORD2;
+				half   fogFactor  : TEXCOORD3;
 			};
 
-			v2f vert(appdata v)
+			Varyings vert(Attributes input)
 			{
-				v2f o;
-				float3 lamp = mul(unity_ObjectToWorld, float4(0, 0, 0, 1)).xyz;
-				float3 axis = unity_ObjectToWorld._m02_m12_m22;
+				Varyings output = (Varyings)0;
+				float4x4 objectToWorld = GetObjectToWorldMatrix();
+				float3 lamp = TransformObjectToWorld(float3(0, 0, 0));
+				float3 axis = objectToWorld._m02_m12_m22;
 				float beamLength = length(axis);
 				axis /= max(beamLength, 1e-5);
-				float beamWidth = length(unity_ObjectToWorld._m00_m10_m20);
+				float beamWidth = length(objectToWorld._m00_m10_m20);
 
-				float along = v.vertex.z;
+				float along = input.positionOS.z;
 				float3 position = lamp + axis * (along * beamLength);
-				float3 toCamera = _WorldSpaceCameraPos - position;
+				float3 toCamera = GetCameraPositionWS() - position;
 
 				float3 side = cross(axis, toCamera);
 				float sideLength = length(side);
@@ -68,11 +78,12 @@ Shader "Chisel/Import/SpotlightBeam"
 				// fade below has the beam gone by then.
 				side = (sideLength > 1e-5) ? side / sideLength
 										   : normalize(cross(axis, (abs(axis.y) < 0.99) ? float3(0, 1, 0) : float3(1, 0, 0)));
-				position += side * (v.vertex.x * beamWidth);
+				position += side * (input.positionOS.x * beamWidth);
 
-				o.vertex = mul(UNITY_MATRIX_VP, float4(position, 1));
+				output.positionCS = TransformWorldToHClip(position);
+				output.positionWS = position;
 				// Stretched once along the length (FBEAM_NOTILE), starting at the lamp.
-				o.uv = TRANSFORM_TEX(float2(v.vertex.x + 0.5, 1 - along), _BaseMap);
+				output.uv = TRANSFORM_TEX(float2(input.positionOS.x + 0.5, 1 - along), _BaseMap);
 
 				// FBEAM_SHADEOUT: full strength at the lamp, nothing at the far end.
 				float fade = 1 - along;
@@ -81,20 +92,20 @@ Shader "Chisel/Import/SpotlightBeam"
 				float endOn = abs(dot(axis, normalize(toCamera)));
 				fade *= 1 - smoothstep(0.7, 0.98, endOn);
 
-				o.color = _TintColor.rgb * (_Intensity * fade);
-				UNITY_TRANSFER_FOG(o, o.vertex);
-				return o;
+				output.color = _TintColor.rgb * (_Intensity * fade);
+				output.fogFactor = ComputeFogFactor(output.positionCS.z);
+				return output;
 			}
 
-			float4 frag(v2f i) : SV_Target
+			half4 frag(Varyings input) : SV_Target
 			{
-				float4 beam = tex2D(_BaseMap, i.uv);
-				float4 col = float4(beam.rgb * beam.a * i.color, 0);
+				half4 beam = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv);
+				half3 color = beam.rgb * beam.a * input.color;
 				// Additive: fog takes it toward black rather than toward the fog colour.
-				UNITY_APPLY_FOG_COLOR(i.fogCoord, col, fixed4(0, 0, 0, 0));
-				return col;
+				color = MixFogColor(color, half3(0, 0, 0), InitializeInputDataFog(float4(input.positionWS, 1.0), input.fogFactor));
+				return half4(color, 0);
 			}
-			ENDCG
+			ENDHLSL
 		}
 	}
 }
