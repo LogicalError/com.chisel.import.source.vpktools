@@ -18,7 +18,8 @@ namespace Chisel.Import.Source.VPKTools
 		/// as, and a material claims its textures again as it rebuilds. See
 		/// <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("texture", 1);
+		// 2: I8, A8 and IA88 textures read as Direct3D 9 samples them (they were (I, 1, 1) and (I, A, 1))
+		public static readonly (string generator, int version) GeneratedVersion = ("texture", 2);
 
 		static bool IsCurrent(Texture texture)
 		{

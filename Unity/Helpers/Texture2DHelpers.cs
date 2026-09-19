@@ -70,10 +70,14 @@ namespace Chisel.Import.Source.VPKTools
         public static Color[] DecompressRawBytes( Stream data, ushort width, ushort height, uint dataSize, TextureFormat textureFormat )
         {
             Color[] colors = null;
-			if (textureFormat == TextureFormat.R8)
-				colors = DecompressR8(data, width, height);
+			if (textureFormat == TextureFormat.I8)
+				colors = DecompressOneByte(data, width, height, alpha: false);
+			else if (textureFormat == TextureFormat.A8)
+				colors = DecompressOneByte(data, width, height, alpha: true);
+			else if (textureFormat == TextureFormat.IA88)
+				colors = DecompressTwoBytes(data, width, height, luminanceAlpha: true);
 			else if ( textureFormat == TextureFormat.RG88)
-                colors = DecompressRG88( data, width, height );
+                colors = DecompressTwoBytes( data, width, height, luminanceAlpha: false );
             else if( textureFormat == TextureFormat.BGR888 )
                 colors = DecompressBGR888( data, width, height );
             else if( textureFormat == TextureFormat.BGRA8888 )
@@ -93,75 +97,43 @@ namespace Chisel.Import.Source.VPKTools
 		}
 
 		/// <summary>
-		/// Turn raw R8 bytes to a Color array that can be used in a Texture2D.
+		/// Turn raw one-byte pixels to a Color array, as Direct3D 9 samples them, which is how Source's textures are made to
+		/// be read: I8 is luminance, (I, I, I, 1), and A8 is alpha alone, (0, 0, 0, A).
 		/// </summary>
 		/// <param name="data">Raw image byte data</param>
 		/// <param name="width">Expected width of the image</param>
 		/// <param name="height">Expected height of the image</param>
+		/// <param name="alpha">A8 rather than I8</param>
 		/// <returns>Pixel color data</returns>
-		public static Color[] DecompressR8(Stream data, ushort width, ushort height)
+		public static Color[] DecompressOneByte(Stream data, ushort width, ushort height, bool alpha)
 		{
 			Color[] texture2DColors = new Color[width * height];
-
-			bool exceededArray = false;
-			for (int row = 0; row < height; row++)
+			for (int i = 0; i < texture2DColors.Length; i++)
 			{
-				for (int col = 0; col < width; col++)
-				{
-					byte red = data.ReadValueByte();
-
-					int flattenedIndex = row * width + col;
-					if (flattenedIndex < texture2DColors.Length)
-						texture2DColors[flattenedIndex] = new Color(((float)red) / byte.MaxValue, 1.0f, 1.0f);
-					else
-					{
-						Debug.LogError("BGR888: Exceeded expected texture size");
-						exceededArray = true;
-						break;
-					}
-				}
-
-				if (exceededArray)
-					break;
+				float value = data.ReadValueByte() / (float)byte.MaxValue;
+				texture2DColors[i] = alpha ? new Color(0, 0, 0, value) : new Color(value, value, value, 1);
 			}
-
 			return texture2DColors;
 		}
 
 		/// <summary>
-		/// Turn raw RG88 bytes to a Color array that can be used in a Texture2D.
+		/// Turn raw two-byte pixels to a Color array, as Direct3D 9 samples them: IA88 is luminance and alpha, (I, I, I, A);
+		/// otherwise the two channels are red and green, (R, G, 1, 1), as UV88 keeps them.
 		/// </summary>
 		/// <param name="data">Raw image byte data</param>
 		/// <param name="width">Expected width of the image</param>
 		/// <param name="height">Expected height of the image</param>
+		/// <param name="luminanceAlpha">IA88 rather than two plain channels</param>
 		/// <returns>Pixel color data</returns>
-		public static Color[] DecompressRG88(Stream data, ushort width, ushort height)
+		public static Color[] DecompressTwoBytes(Stream data, ushort width, ushort height, bool luminanceAlpha)
 		{
 			Color[] texture2DColors = new Color[width * height];
-
-			bool exceededArray = false;
-			for (int row = 0; row < height; row++)
+			for (int i = 0; i < texture2DColors.Length; i++)
 			{
-				for (int col = 0; col < width; col++)
-				{
-					byte red = data.ReadValueByte();
-					byte green = data.ReadValueByte();
-
-					int flattenedIndex = row * width + col;
-					if (flattenedIndex < texture2DColors.Length)
-						texture2DColors[flattenedIndex] = new Color(((float)red) / byte.MaxValue, ((float)green) / byte.MaxValue, 1.0f);
-					else
-					{
-						Debug.LogError("BGR888: Exceeded expected texture size");
-						exceededArray = true;
-						break;
-					}
-				}
-
-				if (exceededArray)
-					break;
+				float first = data.ReadValueByte() / (float)byte.MaxValue;
+				float second = data.ReadValueByte() / (float)byte.MaxValue;
+				texture2DColors[i] = luminanceAlpha ? new Color(first, first, first, second) : new Color(first, second, 1, 1);
 			}
-
 			return texture2DColors;
 		}
 
@@ -514,8 +486,10 @@ namespace Chisel.Import.Source.VPKTools
         /// </summary>
         public enum TextureFormat
 		{
-			R8,
-			RG88,
+			I8,     // luminance
+			A8,     // alpha alone
+			IA88,   // luminance and alpha
+			RG88,   // two plain channels
 			BGR888,
             BGRA8888,
             DXT1,

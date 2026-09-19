@@ -322,12 +322,14 @@ namespace Chisel.Import.Source.VPKTools
                 case VTFImageFormat.IMAGE_FORMAT_DXT3:  format = Texture2DHelpers.TextureFormat.DXT3; break;
                 case VTFImageFormat.IMAGE_FORMAT_DXT5:  format = Texture2DHelpers.TextureFormat.DXT5; break;
 
+				// As Direct3D 9 samples them: I8 is (I, I, I, 1), A8 (0, 0, 0, A), IA88 (I, I, I, A). A VTF stores no palette,
+				// so P8 can only be read as its indices.
 				case VTFImageFormat.IMAGE_FORMAT_I8:
-				case VTFImageFormat.IMAGE_FORMAT_P8:
-				case VTFImageFormat.IMAGE_FORMAT_A8: format = Texture2DHelpers.TextureFormat.R8; break;
+				case VTFImageFormat.IMAGE_FORMAT_P8: format = Texture2DHelpers.TextureFormat.I8; break;
+				case VTFImageFormat.IMAGE_FORMAT_A8: format = Texture2DHelpers.TextureFormat.A8; break;
+				case VTFImageFormat.IMAGE_FORMAT_IA88: format = Texture2DHelpers.TextureFormat.IA88; break;
 
-				case VTFImageFormat.IMAGE_FORMAT_UV88:
-				case VTFImageFormat.IMAGE_FORMAT_IA88: format = Texture2DHelpers.TextureFormat.RG88; break;
+				case VTFImageFormat.IMAGE_FORMAT_UV88: format = Texture2DHelpers.TextureFormat.RG88; break;
 
 				case VTFImageFormat.IMAGE_FORMAT_BGR888: format = Texture2DHelpers.TextureFormat.BGR888; break;
 				case VTFImageFormat.IMAGE_FORMAT_RGB888: format = Texture2DHelpers.TextureFormat.BGR888; break;
