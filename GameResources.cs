@@ -183,6 +183,28 @@ namespace Chisel.Import.Source.VPKTools
 
 
 		/// <summary>
+		/// All the frames of an animated texture as one texture array (<see cref="Texture2DImporter.ImportFrames"/>), or null
+		/// when it has one frame. A current array is taken as it is, without reading the texture.
+		/// </summary>
+		public Texture2DArray ImportVTFFrames(string entryName, bool isNormalMap, string[] searchPaths = null)
+		{
+			if (string.IsNullOrEmpty(entryName)) return null;
+			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVTF);
+			searchPaths ??= PackagePath.DefaultMaterialPaths;
+			GameEntry entry = GetEntry(entryName, searchPaths);
+			if (entry == null || entry.extension != PackagePath.ExtensionVTF)
+				return null;
+			var outputPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname));
+			var found = Texture2DImporter.LoadFrames(outputPath);
+			if (found != null)
+				return found;
+			var sourceTexture = LoadVTF(entry);
+			if (sourceTexture == null)
+				return null;
+			return Texture2DImporter.ImportFrames(sourceTexture, outputPath, isNormalMap);
+		}
+
+		/// <summary>
 		/// A cubemap a material names ($envmap), as a Unity cubemap asset, or null when there is none or the texture isn't an
 		/// environment map. The game renders in HDR - its maps carry only HDR cubemaps - and an environment map's HDR version
 		/// sits beside it as "&lt;name&gt;.hdr.vtf", so that one is taken first.

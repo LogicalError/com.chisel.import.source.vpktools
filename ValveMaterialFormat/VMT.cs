@@ -42,6 +42,8 @@ namespace Chisel.Import.Source.VPKTools
 		public string       BumpMap2Name;
 		public string       BumpMap3Name;
 		public int?			BumpFrame;
+		/// <summary>An AnimatedTexture proxy on $normalmap: frames a second (the water shader's normal map)</summary>
+		public float?		NormalMapFrameRate;
 		
 		public string       NormalMapName;
 		public bool?        NormalMapAlphaEnvMapMask;
@@ -1248,17 +1250,37 @@ namespace Chisel.Import.Source.VPKTools
 
 						case "$phongexponenttexture": { vmfMaterial.PhongExponentTextureName = property.Value; break; }
 
-						// Material proxies animate a material at runtime. TextureScroll is the one simple
-						// enough to carry over - a fixed rate in a fixed direction - so it is kept and the
-						// others are left at their defaults.
+						// Material proxies animate a material at runtime. TextureScroll is simple enough to carry
+						// over - a fixed rate in a fixed direction - and so is AnimatedTexture on the water's normal
+						// map. The others are left at their defaults.
 						case "proxies":
 						{
 							if (property.Children == null)
 								break;
 							foreach (var proxy in property.Children)
 							{
-								if (proxy.Children == null ||
-									!string.Equals(proxy.Name, "texturescroll", StringComparison.OrdinalIgnoreCase))
+								if (proxy.Children == null)
+									continue;
+
+								// CAnimatedTextureProxy steps a texture through its frames, framerate a second from the start
+								if (string.Equals(proxy.Name, "animatedtexture", StringComparison.OrdinalIgnoreCase))
+								{
+									string animated = null;
+									float frameRate = 0;
+									foreach (var parameter in proxy.Children)
+									{
+										switch (parameter.Name.ToLowerInvariant())
+										{
+											case "animatedtexturevar": animated = parameter.Value?.Trim().ToLowerInvariant(); break;
+											case "animatedtextureframerate": float.TryParse(parameter.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out frameRate); break;
+										}
+									}
+									if (animated == "$normalmap")
+										vmfMaterial.NormalMapFrameRate = frameRate;
+									continue;
+								}
+
+								if (!string.Equals(proxy.Name, "texturescroll", StringComparison.OrdinalIgnoreCase))
 									continue;
 
 								string target = null;

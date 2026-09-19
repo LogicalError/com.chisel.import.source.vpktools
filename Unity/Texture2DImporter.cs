@@ -311,6 +311,74 @@ namespace Chisel.Import.Source.VPKTools
 			Object.DestroyImmediate(cubeTexture);
 		}
 
+		// Where an animated texture's frames are written as one flipbook, beside the PNGs of its frames
+		static string FramesPath(string outputPath)
+		{
+			return Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + " (frames).png");
+		}
+
+		/// <summary>The texture array <see cref="ImportFrames"/> wrote for a texture, when it is current</summary>
+		public static Texture2DArray LoadFrames(string outputPath)
+		{
+			var found = UnityAssets.Load<Texture2DArray>(FramesPath(outputPath));
+			return (found != null && IsCurrent(found)) ? found : null;
+		}
+
+		/// <summary>
+		/// All the frames of an animated texture as one texture array, for a shader that picks the frame itself, as Source's
+		/// AnimatedTexture proxy does. The frames go into one PNG beside the texture's own, frame 0 on top, which Unity imports
+		/// as a flipbook of one slice per frame. A normal map is converted as a single one is (<see cref="MarkAsNormalMap"/>).
+		/// Null for a texture of one frame.
+		/// </summary>
+		public static Texture2DArray ImportFrames(VTF sourceTexture, string outputPath, bool isNormalMap)
+		{
+			var found = LoadFrames(outputPath);
+			if (found != null)
+				return found;
+			if (sourceTexture?.Frames == null || sourceTexture.Frames.Length < 2)
+				return null;
+
+			var destinationPath = FramesPath(outputPath);
+			var bytes = ImageConversion.EncodeArrayToPNG(StackFrames(sourceTexture.Frames, sourceTexture.Width, sourceTexture.Height),
+				UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
+				(uint)sourceTexture.Width, (uint)(sourceTexture.Height * sourceTexture.Frames.Length));
+			PackagePath.EnsureDirectoriesExist(destinationPath);
+			File.WriteAllBytes(destinationPath, bytes);
+
+			var assetPath = UnityAssets.GetAssetPath(destinationPath);
+			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUncompressedImport);
+			ConfigureTextureImporter(sourceTexture, assetPath);
+			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter textureImporter)
+				return null;
+
+			TextureImporterSettings settings = new();
+			textureImporter.ReadTextureSettings(settings);
+			if (isNormalMap && ConvertSourceNormalMapFile(assetPath, selfShadowed: false))
+			{
+				textureImporter.userData += ";" + kNormalMapStamp;
+				settings.textureType = TextureImporterType.NormalMap;
+			}
+			settings.textureShape = TextureImporterShape.Texture2DArray;
+			settings.flipbookRows = sourceTexture.Frames.Length;
+			settings.flipbookColumns = 1;
+			textureImporter.SetTextureSettings(settings);
+			textureImporter.SaveAndReimport();
+			return AssetDatabase.LoadAssetAtPath<Texture2DArray>(assetPath);
+		}
+
+		/// <summary>
+		/// The frames in one image, frame 0 on top. Pixels run bottom row first, in each frame and in the result, as Unity keeps
+		/// them, so the last frame's rows come first.
+		/// </summary>
+		internal static Color[] StackFrames(VTF.Frame[] frames, int width, int height)
+		{
+			var size = width * height;
+			var stacked = new Color[size * frames.Length];
+			for (int i = 0; i < frames.Length; i++)
+				System.Array.Copy(frames[i].Pixels, 0, stacked, (frames.Length - 1 - i) * size, size);
+			return stacked;
+		}
+
 		public static string[] SaveFramesAsPNG(VTF texture, string destinationPath)
 		{
 			if (texture.Frames == null || texture.Frames.Length == 0)

@@ -17,11 +17,15 @@ Shader "Chisel/Source/Water"
         _BumpTransformU ("$bumptransform u row", Vector) = (1,0,0,0)
         _BumpTransformV ("$bumptransform v row", Vector) = (0,1,0,0)
         _BumpScroll ("TextureScroll on $bumptransform", Vector) = (0,0,0,0)
+        [NoScaleOffset] _BumpFrames ("$normalmap frames (AnimatedTexture)", 2DArray) = "" {}
+        _BumpFrameRate ("AnimatedTexture frame rate", Float) = 0
+        _BumpFrameCount ("Frames", Float) = 0
         _Scroll1 ("$scroll1", Vector) = (0,0,0,0)
         _Scroll2 ("$scroll2", Vector) = (0,0,0,0)
         _RefractTint ("$refracttint", Color) = (1,1,1,1)
         _RefractAmount ("$refractamount", Float) = 0
         _ReflectTint ("$reflecttint", Color) = (1,1,1,1)
+        _ReflectAmount ("$reflectamount", Float) = 0.8
         _WaterFogColor ("$fogcolor", Color) = (1,0,0,1)
         _WaterFogRange ("$fogend - $fogstart, in units", Float) = 1
         [NoScaleOffset] _EnvMap ("$envmap", Cube) = "black" {}
@@ -64,7 +68,14 @@ Shader "Chisel/Source/Water"
             #include "ChiselSourceProbes.hlsl"
 
             TEXTURE2D(_BumpMap); SAMPLER(sampler_BumpMap);
+            TEXTURE2D_ARRAY(_BumpFrames); SAMPLER(sampler_BumpFrames);
             TEXTURECUBE(_EnvMap);
+
+            // Source's planar reflection (SourceWaterReflection): the level mirrored in the water plane at
+            // _SourceWaterReflectionHeight, rendered for this camera, flipped left to right
+            TEXTURE2D(_SourceWaterReflection); SAMPLER(sampler_SourceWaterReflection);
+            float _SourceWaterReflectionEnabled;
+            float _SourceWaterReflectionHeight;
             CBUFFER_START(UnityPerMaterial)
                 float4 _BumpMap_ST;
                 float4 _BumpTransformU;
@@ -76,7 +87,10 @@ Shader "Chisel/Source/Water"
                 half4 _ReflectTint;
                 half4 _WaterFogColor;
                 float4 _CheapWaterDistances;
+                float _BumpFrameRate;
+                float _BumpFrameCount;
                 float _RefractAmount;
+                float _ReflectAmount;
                 float _WaterFogRange;
                 half _EnvMapFromProbes;
                 half _Refract;
@@ -119,6 +133,19 @@ Shader "Chisel/Source/Water"
                 return output;
             }
 
+            // The normal map, or with an AnimatedTexture proxy the frame it is at: frame rate times time, from the first frame
+            // (CAnimatedTextureProxy)
+            half4 SampleNormalMap(float2 uv)
+            {
+                half4 texel;
+                UNITY_BRANCH
+                if (_BumpFrameCount > 1.5)
+                    texel = SAMPLE_TEXTURE2D_ARRAY(_BumpFrames, sampler_BumpFrames, uv, fmod(floor(_Time.y * _BumpFrameRate), _BumpFrameCount));
+                else
+                    texel = SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, uv);
+                return texel;
+            }
+
             // The normal map, decoded. water_vs20.fxc transforms the coordinates by $bumptransform, which a TextureScroll
             // proxy replaces by a scrolling offset. With $scroll1 (MULTITEXTURE) Source averages two more samples: the
             // coordinates turned 45 degrees at a tenth of their scale and swapped at 0.45, each scrolling by its $scroll.
@@ -126,13 +153,13 @@ Shader "Chisel/Source/Water"
             {
                 float2 bumpUV = float2(dot(uv, _BumpTransformU.xy) + _BumpTransformU.w,
                                        dot(uv, _BumpTransformV.xy) + _BumpTransformV.w) + frac(_BumpScroll.xy * _Time.y);
-                half4 texel = SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, bumpUV);
+                half4 texel = SampleNormalMap(bumpUV);
                 UNITY_BRANCH
                 if (_Scroll1.x != 0)
                 {
                     float2 uv1 = float2(uv.x + uv.y, uv.y - uv.x) * 0.1 + _Scroll1.xy * _Time.y;
                     float2 uv2 = uv.yx * 0.45 + _Scroll2.xy * _Time.y;
-                    texel = 0.33h * (texel + SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, uv1) + SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, uv2));
+                    texel = 0.33h * (texel + SampleNormalMap(uv1) + SampleNormalMap(uv2));
                 }
                 return UnpackNormal(texel);
             }
@@ -178,6 +205,16 @@ Shader "Chisel/Source/Water"
                 float2 screenUV = GetNormalizedScreenSpaceUV(input.positionCS);
                 half fogBehind = WaterFog(screenUV, input.positionWS.y);
 
+                // The planar reflection where this camera has one for the plane of this surface, flipped back and offset by
+                // the normal times $reflectamount and the fog behind (DrawWater); the envmap elsewhere
+                half3 mirrored = reflection;
+                UNITY_BRANCH
+                if (_SourceWaterReflectionEnabled > 0.5 && abs(input.positionWS.y - _SourceWaterReflectionHeight) < 0.05)
+                {
+                    float2 reflectUV = float2(1.0 - screenUV.x, screenUV.y) + normalTS.xy * (_ReflectAmount * fogBehind);
+                    mirrored = SAMPLE_TEXTURE2D(_SourceWaterReflection, sampler_SourceWaterReflection, reflectUV).rgb * _ReflectTint.rgb;
+                }
+
                 half3 color = half3(0, 0, 0);
                 half alpha = 1.0h;
                 bool expensive = (_Refract > 0.5h) || (_Reflect > 0.5h);
@@ -207,9 +244,9 @@ Shader "Chisel/Source/Water"
                     // Fresnel, less over shallow water
                     half fresnel = pow(1.0h - saturate(dot(viewWS, normalWS)), 5.0h) * saturate((fog - 0.05h) * 20.0h);
                     if (_Refract > 0.5h && _Reflect > 0.5h)
-                        color = lerp(refraction, reflection, fresnel);
+                        color = lerp(refraction, mirrored, fresnel);
                     else
-                        color = (_Reflect > 0.5h) ? reflection : refraction;
+                        color = (_Reflect > 0.5h) ? mirrored : refraction;
                 }
 
                 if (_Cheap > 0.5h)

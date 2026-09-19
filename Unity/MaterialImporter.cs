@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 13);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 14);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -742,8 +742,8 @@ namespace Chisel.Import.Source.VPKTools
 		/// names a $reflecttexture and is expensive, which water is on a PC unless it asks for $forcecheap ($forceexpensive
 		/// defaults to 1 there). Water that doesn't reflect also draws the cheap version: its $envmap (env_cubemap unless it
 		/// names one) faded in by fresnel and distance. The tints and the fog colour come out of gamma space as water.cpp sets
-		/// them, and distances go across in units. $reflectamount offsets the game's planar reflection; the env_cubemap probe
-		/// that stands in for that has no use for it.
+		/// them, and distances go across in units. $reflectamount offsets the planar reflection (SourceWaterReflection), as it
+		/// offsets the game's.
 		/// </summary>
 		internal static void ApplySourceWater(GameResources gameResources, Material unityMaterial, VMT sourceMaterial)
 		{
@@ -762,6 +762,7 @@ namespace Chisel.Import.Source.VPKTools
 			// water.cpp's fog colour defaults to red, which shows a material that has none
 			unityMaterial.SetColor("_WaterFogColor", WaterColor(sourceMaterial.FogColor, Color.red));
 			unityMaterial.SetFloat("_RefractAmount", sourceMaterial.RefractAmount ?? 0.0f);
+			unityMaterial.SetFloat("_ReflectAmount", sourceMaterial.ReflectAmount ?? 0.8f);
 
 			// The fog under the surface reaches its colour after $fogend - $fogstart of water in front of the scene
 			var fogRange = Mathf.Max((sourceMaterial.FogEnd ?? 0.0f) - (sourceMaterial.FogStart ?? 0.0f), 1.0f);
@@ -779,6 +780,14 @@ namespace Chisel.Import.Source.VPKTools
 			unityMaterial.SetVector("_BumpTransformV", new Vector4(bumpTransform.m10, bumpTransform.m11, 0, bumpTransform.m13));
 			var bumpScroll = sourceMaterial.BumpTextureScroll ?? Vector2.zero;
 			unityMaterial.SetVector("_BumpScroll", new Vector4(bumpScroll.x, -bumpScroll.y));
+			// An AnimatedTexture proxy on $normalmap steps it through its frames (CAnimatedTextureProxy): the shader picks the
+			// frame from a texture array of them
+			var frames = (sourceMaterial.NormalMapFrameRate > 0 && gameResources != null)
+					   ? gameResources.ImportVTFFrames(BumpMapNameOf(sourceMaterial), isNormalMap: true) : null;
+			if (frames != null)
+				unityMaterial.SetTexture("_BumpFrames", frames);
+			unityMaterial.SetFloat("_BumpFrameRate", (frames != null) ? sourceMaterial.NormalMapFrameRate.Value : 0);
+			unityMaterial.SetFloat("_BumpFrameCount", (frames != null) ? frames.depth : 0);
 			var scroll1 = sourceMaterial.Scroll1 ?? Vector3.zero;
 			var scroll2 = sourceMaterial.Scroll2 ?? Vector3.zero;
 			unityMaterial.SetVector("_Scroll1", new Vector4(scroll1.x, -scroll1.y));
