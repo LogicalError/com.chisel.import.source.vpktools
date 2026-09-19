@@ -23,6 +23,9 @@ Shader "Chisel/Source/DecalModulate"
             Blend [_SrcBlend] [_DstBlend]
             ZWrite [_ZWrite]
             ZTest LEqual
+            // DecalModulate_dx9.cpp: the decal polygon offset, and no destination alpha writes
+            Offset -1, -1
+            ColorMask RGB
 
             HLSLPROGRAM
             #pragma target 3.5
@@ -36,6 +39,12 @@ Shader "Chisel/Source/DecalModulate"
                 float4 _BaseMap_ST;
                 half4 _Color;
             CBUFFER_END
+
+            // Source blends in gamma space (no sRGB read or write), where 2 * decal * destination leaves the surface
+            // alone at mid-grey. Blending linear values instead, the same grey would darken the surface to ~43%.
+            // Raising the gamma-space factor to 2.2 gives 2^2.2 * decal (linear), and the blend's own 2 is divided
+            // out: 2^1.2, which is built-in Unity's unity_ColorSpaceDouble / 2.
+            #define GAMMA_SPACE_MODULATE_SCALE 2.2974
 
             struct Attributes { float4 positionOS : POSITION; float2 uv : TEXCOORD0; half4 color : COLOR; };
             struct Varyings { float4 positionCS : SV_POSITION; float2 uv : TEXCOORD0; half4 color : COLOR; half fog : TEXCOORD1; };
@@ -52,7 +61,12 @@ Shader "Chisel/Source/DecalModulate"
 
             half4 Frag(Varyings input) : SV_Target
             {
-                half4 color = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv) * _Color;
+                half4 texel = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv);
+                // DecalModulate_dx9.cpp alpha tests with GREATER 0: only fully transparent texels are left out
+                clip(texel.a > 0.0h ? 1.0h : -1.0h);
+                half4 color = texel * _Color;
+                color.rgb *= GAMMA_SPACE_MODULATE_SCALE;
+                // FogToGrey: fog takes the decal toward the neutral factor, which leaves the fogged surface as it is
                 color.rgb = MixFogColor(color.rgb, half3(0.5h, 0.5h, 0.5h), input.fog);
                 return color;
             }
