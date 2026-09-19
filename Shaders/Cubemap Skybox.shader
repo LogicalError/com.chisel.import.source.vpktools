@@ -1,3 +1,4 @@
+// A Source 2D skybox: the six sky faces as one cubemap, turned about the vertical axis, tinted and exposed.
 Shader "Skybox/Cubemap Skybox"
 {
     Properties
@@ -15,123 +16,80 @@ Shader "Skybox/Cubemap Skybox"
             "Queue" = "Background"
             "RenderType" = "Background"
             "PreviewType" = "Skybox"
+            "RenderPipeline" = "UniversalPipeline"
         }
 
         ZWrite Off
         ZTest LEqual
 
-        CGINCLUDE
-
-        #pragma target 5.0
-        #pragma only_renderers d3d11
-        #include "UnityCG.cginc"
-
-        ENDCG
-
         Pass
         {
-            CGPROGRAM
+            Name "Skybox"
+
+            HLSLPROGRAM
 
             #pragma vertex vert
             #pragma fragment frag
 
-            samplerCUBE _Tex;
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
-            float4 _Tint;
-            float _Exposure;
-            float _Rotation;
+            CBUFFER_START(UnityPerMaterial)
+                half4 _Tint;
+                half _Exposure;
+                float _Rotation;
+            CBUFFER_END
 
-            struct appdata
+            TEXTURECUBE(_Tex);
+            SAMPLER(sampler_Tex);
+
+            struct Attributes
             {
-                float4 vertex : POSITION;
+                float4 positionOS : POSITION;
             };
 
-            struct v2f
+            struct Varyings
             {
-                float4 vertex : SV_POSITION;
+                float4 positionCS : SV_POSITION;
                 float3 direction : TEXCOORD0;
             };
 
-            float4 RotateAroundYInDegrees(float4 vPositionOs, float flDegrees)
+            Varyings vert(Attributes input)
             {
-                float flRadians = flDegrees * UNITY_PI / 180.0;
+                Varyings output;
 
-                float flSin;
-                float flCos;
-
-                sincos(flRadians, flSin, flCos);
-
-                float2x2 m = float2x2(
-                    flCos, -flSin,
-                    flSin,  flCos
-                );
-
-                return float4(
-                    mul(m, vPositionOs.xz),
-                    vPositionOs.yw
-                ).xzyw;
-            }
-
-            v2f vert(appdata v)
-            {
-                v2f o;
-
-                // Get the world position of the skybox vertex.
-                float3 worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;
-
-                // Normal transformation.
-                float4 clipPos = UnityObjectToClipPos(v.vertex);
+                float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                float4 positionCS = TransformWorldToHClip(positionWS);
 
                 // Force the skybox to the far depth plane.
                 // This makes it behave as if it is infinitely far away.
-                #if defined(UNITY_REVERSED_Z)
-                    clipPos.z = 0.0;
+                #if UNITY_REVERSED_Z
+                    positionCS.z = 0.0;
                 #else
-                    clipPos.z = clipPos.w;
+                    positionCS.z = positionCS.w;
                 #endif
 
-                o.vertex = clipPos;
-
-                o.direction =
-                    worldPos - _WorldSpaceCameraPos;
-
-                return o;
+                output.positionCS = positionCS;
+                output.direction = positionWS - GetCameraPositionWS();
+                return output;
             }
 
-            fixed4 frag(v2f i) : SV_Target
+            half4 frag(Varyings input) : SV_Target
             {
-                float3 direction = normalize(i.direction);
-
-                // Convert degrees to radians.
-                float angle = radians(_Rotation);
-
-                float sinAngle = sin(angle);
-                float cosAngle = cos(angle);
+                float3 direction = normalize(input.direction);
 
                 // Rotate around world Y.
-                float3 rotatedDirection;
+                float sinAngle, cosAngle;
+                sincos(radians(_Rotation), sinAngle, cosAngle);
+                float3 rotatedDirection = float3(direction.x * cosAngle - direction.z * sinAngle,
+                                                 direction.y,
+                                                 direction.x * sinAngle + direction.z * cosAngle);
 
-                rotatedDirection.x =
-                    direction.x * cosAngle -
-                    direction.z * sinAngle;
-
-                rotatedDirection.y =
-                    direction.y;
-
-                rotatedDirection.z =
-                    direction.x * sinAngle +
-                    direction.z * cosAngle;
-
-                fixed4 color =
-                    texCUBE(_Tex, rotatedDirection);
-
-                color.rgb *= _Tint.rgb;
-                color.rgb *= _Exposure;
-
+                half4 color = SAMPLE_TEXTURECUBE(_Tex, sampler_Tex, rotatedDirection);
+                color.rgb *= _Tint.rgb * _Exposure;
                 return color;
             }
 
-            ENDCG
+            ENDHLSL
         }
     }
 
