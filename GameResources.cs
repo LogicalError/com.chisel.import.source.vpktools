@@ -268,7 +268,8 @@ namespace Chisel.Import.Source.VPKTools
 			if (entry == null)
 				return null;
 
-			if (importedMaterials.TryGetValue((entry, isSprite, brushFace), out var cachedMaterial))
+			if (importedMaterials.TryGetValue((entry, isSprite, brushFace), out var cachedMaterial) &&
+				cachedMaterial)
 				return cachedMaterial;
 
 			Material material = null;
@@ -480,7 +481,7 @@ namespace Chisel.Import.Source.VPKTools
 			}
 
 			var vvdHeaderName = Path.ChangeExtension(entryName, PackagePath.ExtensionVVD);
-			var vvdEntry = GetEntry(vvdHeaderName);
+			var vvdEntry = GetEntry(vvdHeaderName, searchPaths);
 			var vvd = (vvdEntry != null) ? LoadVVD(vvdEntry, mdl) : null;
 			if (vvd == null)
 			{
@@ -488,17 +489,49 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			}
 
-			var vtxHeaderName = Path.ChangeExtension(entryName, PackagePath.ExtensionVTX_DX90);
-			var vtxEntry = GetEntry(vtxHeaderName);
-			var vtx = (vtxEntry != null) ? LoadVTX(vtxEntry) : null;
+			if (vvd.Checksum != mdl.Checksum)
+			{
+				Debug.LogError($"Model sidecar checksum mismatch for {entryName}: " +
+							   $"MDL {mdl.Checksum} ({mdlEntry.sourceFilename}), " +
+							   $"VVD {vvd.Checksum} ({vvdEntry.sourceFilename})");
+				return null;
+			}
+
+			// Black Mesa ships a few models whose dx90 VTX is stale while the software VTX belongs to the
+			// current MDL (c2a5a_lower_dam_foliage_07 is one). Source validates these checksums before use;
+			// do the same and try the other compiled VTX flavours instead of combining incompatible files.
+			GameEntry vtxEntry = null;
+			VTX vtx = null;
+			var vtxExtensions = new[] { PackagePath.ExtensionVTX_DX90, "sw.vtx", "dx80.vtx" };
+			var rejectedVtx = new List<string>();
+			foreach (var extension in vtxExtensions)
+			{
+				var candidateName = Path.ChangeExtension(entryName, extension);
+				var candidateEntry = GetEntry(candidateName, searchPaths);
+				if (candidateEntry == null)
+					continue;
+
+				var candidate = LoadVTX(candidateEntry);
+				if (candidate == null)
+					continue;
+				if (candidate.CheckSum == mdl.Checksum)
+				{
+					vtxEntry = candidateEntry;
+					vtx = candidate;
+					break;
+				}
+				rejectedVtx.Add($"{candidateName}={candidate.CheckSum}");
+			}
 			if (vtx == null)
 			{
-				Debug.LogError($"Failed to load vtxHeader {vtxHeaderName}");
+				Debug.LogError($"Failed to load a VTX matching {entryName} checksum {mdl.Checksum}. " +
+							   (rejectedVtx.Count == 0 ? "No VTX sidecars were found." :
+								$"Rejected: {string.Join(", ", rejectedVtx)}"));
 				return null;
 			}
 
 			// Collision is optional: a model without any has no .phy at all.
-			var phyEntry = GetEntry(Path.ChangeExtension(entryName, PackagePath.ExtensionPHY));
+			var phyEntry = GetEntry(Path.ChangeExtension(entryName, PackagePath.ExtensionPHY), searchPaths);
 			var phy = (phyEntry != null) ? LoadPHY(phyEntry) : null;
 			
 			for (var i = 0; i < mdl.TextureDirs.Length; i++)
@@ -655,7 +688,7 @@ namespace Chisel.Import.Source.VPKTools
 							keyname			= keyname,
 							extension		= extension,
 							name			= name,
-							sourceFilename	= relativefilename,
+							sourceFilename	= filename,
 							entry			= new VPKEntry { }
 						};
 						lookup[keyname] = entry;

@@ -1431,6 +1431,17 @@ namespace Chisel.Import.Source.VPKTools
 											var vertex2 = vtxVertexOffsets[i1].OriginalMeshVertexIndex + mdlVertexOffset + mdlMeshVertexIndexStart;
 											var vertex3 = vtxVertexOffsets[i2].OriginalMeshVertexIndex + mdlVertexOffset + mdlMeshVertexIndexStart;
 
+											if ((uint)vertex1 >= (uint)vertices.Length ||
+												(uint)vertex2 >= (uint)vertices.Length ||
+												(uint)vertex3 >= (uint)vertices.Length)
+											{
+												throw new InvalidDataException(
+													$"Model {model.MDLEntry?.keyname ?? mdlHeader.Name} contains a VTX vertex outside its VVD " +
+													$"(body {bodyID}, model {vtxModelID}, LOD {nLod}, mesh {meshIndex}, " +
+													$"strip group {nGroup}, strip {nStrip}, triangle {i / 3}: " +
+													$"[{vertex1}, {vertex2}, {vertex3}] vs {vertices.Length} vertices).");
+											}
+
 											{
 												if (!indexLookup.TryGetValue(vertex1, out int index1)) index1 = -1;
 												if (!indexLookup.TryGetValue(vertex2, out int index2)) index2 = -1;
