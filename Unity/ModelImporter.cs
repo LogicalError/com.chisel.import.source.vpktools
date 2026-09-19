@@ -39,7 +39,6 @@ namespace Chisel.Import.Source.VPKTools
 	{
 		public int		   LodIndex;
 		public float       SwitchPoint;
-		public bool		   isDoubleSided;
 		public string	   Name;
 		public SourceModel    Model;
 		public Studioflags Flags;
@@ -218,10 +217,6 @@ namespace Chisel.Import.Source.VPKTools
 					skinnedMeshRenderer.updateWhenOffscreen = true;
 					if ((Model.MDL.Flags & Studioflags.DoNotCastShadows) == Studioflags.DoNotCastShadows)
 						skinnedMeshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-					else
-					if (isDoubleSided ||
-						(Model.MDL.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass)
-						skinnedMeshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.TwoSided;
 
 					// TODO: figure out the root-bones (zombie -> headcrab needs a different rootbone than body? maybe?)
 					//skinnedMeshRenderer.rootBone = skeleton.Bones[0];
@@ -233,10 +228,6 @@ namespace Chisel.Import.Source.VPKTools
 					meshFilter.sharedMesh = Mesh;
 					if ((Model.MDL.Flags & Studioflags.DoNotCastShadows) == Studioflags.DoNotCastShadows)
 						meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-					else
-					if (isDoubleSided ||
-						(Model.MDL.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass)
-						meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.TwoSided;
 
 					Renderer = meshRenderer;
 				}
@@ -302,7 +293,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// </list>
 		/// When unsure which one a change falls under, bump AnimationVersion: it rebuilds both.
 		/// </summary>
-		internal static readonly (string generator, int version) ModelVersion     = ("model", 3);
+		internal static readonly (string generator, int version) ModelVersion     = ("model", 4);
 		static readonly (string generator, int version) AnimationVersion = ("animation", 1);
 
 		/// <summary>
@@ -1385,17 +1376,10 @@ namespace Chisel.Import.Source.VPKTools
 
 							//var sourceMaterial = sourceMaterials[mdlMesh.MaterialIndex];
 
-							//var isTransparent  = sourceMaterial.HaveTransparency;
-							var isDoubleSided  = //material.NoCull || 
-												 (//isTransparent & 
-												((model.MDL.Flags & Studioflags.TranslucentTwopass) == Studioflags.TranslucentTwopass));
-
-							modelEntry.isDoubleSided = isDoubleSided;
 
 							modelEntry.Name = mdlModel.Name + " +" + mdlBodyPart.Name + "[" + mdlMesh.MaterialIndex + "]".Trim();
 
 							var indexLookup			= new Dictionary<int, int>();
-							var inverseIndexLookup	= new Dictionary<int, int>();
 							
 							var mdlMeshVertexIndexStart = mdlMesh.VertexIndexStart;
 
@@ -1481,60 +1465,6 @@ namespace Chisel.Import.Source.VPKTools
 													indexLookup[vertex3] = index3;
 												}
 
-												#pragma warning disable CS0162 // Unreachable code detected
-												if (SourceEngineUnits.InvertPlanes)
-												{
-													meshEntry.Indices.Add(index1);
-													meshEntry.Indices.Add(index3);
-													meshEntry.Indices.Add(index2);
-												} else
-												{
-													meshEntry.Indices.Add(index1);
-													meshEntry.Indices.Add(index2);
-													meshEntry.Indices.Add(index3);
-												}
-												#pragma warning restore CS0162 // Unreachable code detected
-											}
-
-											if (isDoubleSided)
-											{
-												if (!inverseIndexLookup.TryGetValue(vertex1, out int index1)) index1 = -1;
-												if (!inverseIndexLookup.TryGetValue(vertex2, out int index2)) index2 = -1;
-												if (!inverseIndexLookup.TryGetValue(vertex3, out int index3)) index3 = -1;
-
-												if (index1 == -1)
-												{
-													index1 = modelEntry.Vertices.Count;
-													modelEntry.Vertices.Add(vertices[vertex1].Position);
-													modelEntry.Normals.Add(-vertices[vertex1].Normal);
-													modelEntry.Uvs.Add(SourceEngineUnits.VmfFixTexcoord(vertices[vertex1].TexCoord));
-													if (hasBones) modelEntry.BoneWeights.Add(ToUnityBoneWeight(vertices[vertex1]));
-													if (tangents != null) modelEntry.Tangents.Add(-tangents[vertex1]);
-													inverseIndexLookup[vertex1] = index1;
-												}
-
-												if (index3 == -1)
-												{
-													index3 = modelEntry.Vertices.Count;
-													modelEntry.Vertices.Add(vertices[vertex3].Position);
-													modelEntry.Normals.Add(-vertices[vertex3].Normal);
-													modelEntry.Uvs.Add(SourceEngineUnits.VmfFixTexcoord(vertices[vertex3].TexCoord));
-													if (hasBones) modelEntry.BoneWeights.Add(ToUnityBoneWeight(vertices[vertex3]));
-													if (tangents != null) modelEntry.Tangents.Add(-tangents[vertex3]);
-													inverseIndexLookup[vertex3] = index3;
-												}
-
-												if (index2 == -1)
-												{
-													index2 = modelEntry.Vertices.Count;
-													modelEntry.Vertices.Add(vertices[vertex2].Position);
-													modelEntry.Normals.Add(-vertices[vertex2].Normal);
-													modelEntry.Uvs.Add(SourceEngineUnits.VmfFixTexcoord(vertices[vertex2].TexCoord));
-													if (hasBones) modelEntry.BoneWeights.Add(ToUnityBoneWeight(vertices[vertex2]));
-													if (tangents != null) modelEntry.Tangents.Add(-tangents[vertex2]);
-													inverseIndexLookup[vertex2] = index2;
-												}
-												
 												#pragma warning disable CS0162 // Unreachable code detected
 												if (SourceEngineUnits.InvertPlanes)
 												{
