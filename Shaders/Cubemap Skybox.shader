@@ -42,6 +42,11 @@ Shader "Skybox/Cubemap Skybox"
             TEXTURECUBE(_Tex);
             SAMPLER(sampler_Tex);
 
+            // Source's 3D skybox (SourceSkyCamera): the camera's sky view, rendered just before it into a texture its size
+            TEXTURE2D(_SourceSky3D);
+            SAMPLER(sampler_SourceSky3D);
+            float _SourceSky3DEnabled;
+
             struct Attributes
             {
                 float4 positionOS : POSITION;
@@ -75,6 +80,10 @@ Shader "Skybox/Cubemap Skybox"
 
             half4 frag(Varyings input) : SV_Target
             {
+                UNITY_BRANCH
+                if (_SourceSky3DEnabled > 0.5)
+                    return SAMPLE_TEXTURE2D(_SourceSky3D, sampler_SourceSky3D, GetNormalizedScreenSpaceUV(input.positionCS));
+
                 float3 direction = normalize(input.direction);
 
                 // Rotate around world Y.

@@ -1630,6 +1630,57 @@ namespace Chisel.Import.Source.VPKTools
 		}
 		
 		private const string _skyboxShaderName = "Skybox/Cubemap Skybox";
+		private const string _skyFaceShaderName = "Chisel/Source/Sky Face";
+
+		// The last sky whose face material was asked for, and that material: a map asks once per sky face
+		private static Material _skyFaceSource, _skyFaceMaterial;
+
+		/// <summary>
+		/// The material the level's sky faces are drawn with (toolsskybox): the 2D sky's cubemap, tint, exposure and rotation on
+		/// Chisel/Source/Sky Face, which shows the 3D skybox's view there when the map has one, and writes the faces' depth, so
+		/// nothing behind them shows, as nothing does in the game. It is kept beside the sky's material ("&lt;sky&gt; (faces).mat")
+		/// and rebuilt in place. The sky's material itself without that shader.
+		/// </summary>
+		public static Material SkyFaceMaterialOf(Material skybox)
+		{
+			if (skybox == null)
+				return null;
+			if (skybox == _skyFaceSource && _skyFaceMaterial != null)
+				return _skyFaceMaterial;
+
+			var shader = Shader.Find(_skyFaceShaderName);
+			if (!shader)
+			{
+				Debug.LogWarning("Sky face shader not found: " + _skyFaceShaderName);
+				return skybox;
+			}
+			var built = new Material(shader)
+			{
+				name = skybox.name + " (faces)",
+				hideFlags = HideFlags.DontUnloadUnusedAsset
+			};
+			built.CopyMatchingPropertiesFromMaterial(skybox);
+
+			var skyboxPath = UnityEditor.AssetDatabase.GetAssetPath(skybox);
+			if (!string.IsNullOrEmpty(skyboxPath))
+			{
+				var path = Path.Combine(Path.GetDirectoryName(skyboxPath), built.name + ".mat").Replace('\\', '/');
+				var existing = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(path);
+				if (existing != null)
+				{
+					Overwrite(existing, built);
+					built = existing;
+				}
+				else
+				{
+					UnityEditor.AssetDatabase.CreateAsset(built, path);
+					StampCurrent(built);
+				}
+			}
+			_skyFaceSource = skybox;
+			_skyFaceMaterial = built;
+			return built;
+		}
 
 		private static Shader _skyboxShader;
 
