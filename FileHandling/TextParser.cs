@@ -127,20 +127,35 @@ namespace Chisel.Import.Source.VPKTools
 				else
 					input = input.Substring(1);
 			}
-			var values = input.Split(new [] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+			var tokens = input.Split(new [] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+			var values = new List<string>(tokens.Length);
+			for (var i = 0; i < tokens.Length; i++)
+			{
+				var token = tokens[i];
+				// A small number of shipped Black Mesa materials contain a decimal point separated from its
+				// digits (for example creosotebush.vmt's "[.125 -.5 . 5]"). Treat it as the obvious .5;
+				// rejecting the whole vector otherwise floods a map import with warnings for valid game data.
+				if (token == "." && i + 1 < tokens.Length &&
+					Double.TryParse(tokens[i + 1].TrimEnd(']'), NumberStyles.Integer,
+									CultureInfo.InvariantCulture, out _))
+				{
+					token += tokens[++i];
+				}
+				values.Add(token);
+			}
 			var result = Vector3.zero;
-			if (values.Length != 3)
+			if (values.Count != 3)
 			{
 				Debug.LogWarning($"Unexpected value found {input}");
-				if (values.Length == 0)
+				if (values.Count == 0)
 					return result;
-				if (values.Length == 1)
+				if (values.Count == 1)
 				{
 					if (!SafeParse(values[0], out result.x))
 						return result;
 					return result;
 				}
-				if (values.Length == 2)
+				if (values.Count == 2)
 				{
 					if (!SafeParse(values[0], out result.x) ||
 						!SafeParse(values[1], out result.y))
