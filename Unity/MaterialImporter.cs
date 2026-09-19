@@ -13,7 +13,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 12);
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 13);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -734,15 +734,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			if (string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "Water",
 						  System.StringComparison.OrdinalIgnoreCase))
-			{
-				Color tint = sourceMaterial.RefractTint ?? sourceMaterial.FogColor ?? (RGBColor)new Color(0.2f, 0.5f, 0.4f);
-				if (unityMaterial.HasProperty("_WaterTint"))
-					unityMaterial.SetColor("_WaterTint", ShaderColor(tint));
-				if (unityMaterial.HasProperty("_Opacity"))
-					unityMaterial.SetFloat("_Opacity", Mathf.Clamp01(0.45f + (sourceMaterial.RefractAmount ?? 0.2f) * 0.5f));
-				if (unityMaterial.HasProperty("_ReflectionStrength"))
-					unityMaterial.SetFloat("_ReflectionStrength", Mathf.Clamp01(sourceMaterial.ReflectAmount ?? 0.2f));
-			}
+				ApplySourceWater(gameResources, unityMaterial, sourceMaterial);
 
 			// $nocull, which the Standard shader cannot express at all. Source uses it for glass,
 			// grates and foliage, all of which have to be visible from both sides.
@@ -750,6 +742,73 @@ namespace Chisel.Import.Source.VPKTools
 			unityMaterial.SetFloat("_Cull", (int)(noCull ? UnityEngine.Rendering.CullMode.Off
 													     : UnityEngine.Rendering.CullMode.Back));
 			return unityMaterial;
+		}
+
+		/// <summary>
+		/// Sets up Source's Water shader (water.cpp). Water refracts when it names a $refracttexture, and reflects when it
+		/// names a $reflecttexture and is expensive, which water is on a PC unless it asks for $forcecheap ($forceexpensive
+		/// defaults to 1 there). Water that doesn't reflect also draws the cheap version: its $envmap (env_cubemap unless it
+		/// names one) faded in by fresnel and distance. The tints and the fog colour come out of gamma space as water.cpp sets
+		/// them, and distances go across in units. $reflectamount offsets the game's planar reflection; the env_cubemap probe
+		/// that stands in for that has no use for it.
+		/// </summary>
+		internal static void ApplySourceWater(GameResources gameResources, Material unityMaterial, VMT sourceMaterial)
+		{
+			var forceCheap = sourceMaterial.ForceCheap == true;
+			var refract = !forceCheap && !string.IsNullOrEmpty(sourceMaterial.RefractTextureName);
+			var reflect = !forceCheap && (sourceMaterial.ForceExpensive ?? true) && !string.IsNullOrEmpty(sourceMaterial.ReflectTextureName);
+			unityMaterial.SetFloat("_Refract", refract ? 1 : 0);
+			unityMaterial.SetFloat("_Reflect", reflect ? 1 : 0);
+			unityMaterial.SetFloat("_Cheap", reflect ? 0 : 1);
+			unityMaterial.SetFloat("_CheapBlend", forceCheap ? 0 : 1);
+			unityMaterial.SetFloat("_CheapFresnel", (sourceMaterial.NoFresnel == true) ? 0 : 1);
+			unityMaterial.SetFloat("_ReflectBlendFactor", sourceMaterial.ReflectBlendFactor ?? 1.0f);
+
+			unityMaterial.SetColor("_RefractTint", WaterColor(sourceMaterial.RefractTint, Color.white));
+			unityMaterial.SetColor("_ReflectTint", WaterColor(sourceMaterial.ReflectTint, Color.white));
+			// water.cpp's fog colour defaults to red, which shows a material that has none
+			unityMaterial.SetColor("_WaterFogColor", WaterColor(sourceMaterial.FogColor, Color.red));
+			unityMaterial.SetFloat("_RefractAmount", sourceMaterial.RefractAmount ?? 0.0f);
+
+			// The fog under the surface reaches its colour after $fogend - $fogstart of water in front of the scene
+			var fogRange = Mathf.Max((sourceMaterial.FogEnd ?? 0.0f) - (sourceMaterial.FogStart ?? 0.0f), 1.0f);
+			unityMaterial.SetFloat("_WaterFogRange", (sourceMaterial.FogEnable == false) ? kNoWaterFog : fogRange * SourceEngineUnits.VmfInvMeters);
+			// water.cpp's defaults; in the game a WaterLOD proxy puts the map's water_lod_control distances here
+			var cheapStart = sourceMaterial.CheapWaterStartDistance ?? 500.0f;
+			var cheapEnd   = sourceMaterial.CheapWaterEndDistance ?? 1000.0f;
+			unityMaterial.SetVector("_CheapWaterDistances", new Vector4(cheapStart, cheapEnd, 0, 0) * SourceEngineUnits.VmfInvMeters);
+
+			// A TextureScroll proxy on $bumptransform replaces it by an offset that grows with time (CTextureScrollMaterialProxy).
+			// Source's t axis runs down the image and the importer flips v, so second components change sign.
+			var bumpTransform = (sourceMaterial.BumpTextureScroll.HasValue || !sourceMaterial.BumpTransform.HasValue)
+							  ? Matrix4x4.identity : sourceMaterial.BumpTransform.Value;
+			unityMaterial.SetVector("_BumpTransformU", new Vector4(bumpTransform.m00, bumpTransform.m01, 0, bumpTransform.m03));
+			unityMaterial.SetVector("_BumpTransformV", new Vector4(bumpTransform.m10, bumpTransform.m11, 0, bumpTransform.m13));
+			var bumpScroll = sourceMaterial.BumpTextureScroll ?? Vector2.zero;
+			unityMaterial.SetVector("_BumpScroll", new Vector4(bumpScroll.x, -bumpScroll.y));
+			var scroll1 = sourceMaterial.Scroll1 ?? Vector3.zero;
+			var scroll2 = sourceMaterial.Scroll2 ?? Vector3.zero;
+			unityMaterial.SetVector("_Scroll1", new Vector4(scroll1.x, -scroll1.y));
+			unityMaterial.SetVector("_Scroll2", new Vector4(scroll2.x, -scroll2.y));
+
+			// $envmap is env_cubemap unless the material names a cubemap: the reflection probe nearest to the pixel
+			var envMap = string.IsNullOrWhiteSpace(sourceMaterial.EnvMapTextureName) ? "env_cubemap" : sourceMaterial.EnvMapTextureName.Trim();
+			Cubemap cubemap = null;
+			if (!string.Equals(envMap, "env_cubemap", System.StringComparison.OrdinalIgnoreCase))
+				cubemap = gameResources.ImportCubemap(envMap);
+			if (cubemap != null)
+				unityMaterial.SetTexture("_EnvMap", cubemap);
+			unityMaterial.SetFloat("_EnvMapFromProbes", (cubemap == null) ? 1 : 0);
+		}
+
+		/// <summary>What the shader's water fog range is without $fogenable: further than any view</summary>
+		const float kNoWaterFog = 1.0e9f;
+
+		/// <summary>A water colour as water.cpp sets it: out of gamma space (SetPixelShaderConstantGammaToLinear)</summary>
+		static Color WaterColor(RGBColor value, Color fallback)
+		{
+			Color color = (value != null) ? (Color)value : fallback;
+			return ShaderColor(new Color(GammaToLinearConstant(color.r), GammaToLinearConstant(color.g), GammaToLinearConstant(color.b), 1));
 		}
 
 		/// <summary>Maps the $phong* parameters onto the shader's specular/smoothness.</summary>

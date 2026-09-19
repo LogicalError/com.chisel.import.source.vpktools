@@ -33,6 +33,8 @@ namespace Chisel.Import.Source.VPKTools
 		/// offset per second, in Source's texture space (t runs down the image).</summary>
 		public Vector2?     BaseTextureScroll;
 		public Vector2?     Texture2Scroll;
+		/// <summary>A TextureScroll proxy on $bumptransform, which replaces that transform by the offset (as above)</summary>
+		public Vector2?     BumpTextureScroll;
 		public float?       BaseAlphaEnvMapMask;
 
 		public bool?		BumpSelfShadowing;
@@ -48,6 +50,25 @@ namespace Chisel.Import.Source.VPKTools
 		public RGBColor     FogColor;
 		public float?       RefractAmount;
 		public float?       ReflectAmount;
+		/// <summary>Water: the fog under its surface ($fogstart and $fogend in units, $fogenable)</summary>
+		public float?       FogStart;
+		public float?       FogEnd;
+		public bool?        FogEnable;
+		/// <summary>Water refracts when it names a $refracttexture, and reflects when it names a $reflecttexture</summary>
+		public string       RefractTextureName;
+		public string       ReflectTextureName;
+		public bool?        ForceCheap;
+		public bool?        ForceExpensive;
+		/// <summary>Water's cheap version: its $envmap, faded in between these distances (units), by a Fresnel term unless
+		/// $nofresnel, which uses $reflectblendfactor instead</summary>
+		public float?       CheapWaterStartDistance;
+		public float?       CheapWaterEndDistance;
+		public bool?        NoFresnel;
+		public float?       ReflectBlendFactor;
+		/// <summary>Water's $scroll1/$scroll2: with $scroll1, two more normal map lookups scroll by these (texture space per
+		/// second)</summary>
+		public Vector3?     Scroll1;
+		public Vector3?     Scroll2;
 
 		public bool?		SelfIllumination;
 		public string       SelfIlluminationMask;
@@ -406,8 +427,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$chargerate": // '0'.
 						case "$chargereset": // '0'.
 						case "$chargestart": // '1'.
-						case "$cheapwaterenddistance": // '1000.0'. '3000'.
-						case "$cheapwaterstartdistance": // '2000'. '500.0'.
 						case "$chromatic_cubic_distortion": // '0.00'.
 						case "$chromatic_dispertionby": // '0.5'.
 						case "$chromatic_dispertionrc": // '0.5'.
@@ -560,11 +579,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$flowmap": //texture effects/fizzler_flow
 						case "$flowmapscrollrate": // '[.0475 .133]'.
 						case "$flowmaptexcoordoffset": // '1.0'.
-						case "$fogenable":
-						case "$fogend":
-						case "$fogstart":
-						case "$forcecheap": // '0'. '1'.
-						case "$forceexpensive":
 						case "$forcerefract": // '1'.
 						case "$frameminusten": // '1'.
 						case "$freeze": // '0'.
@@ -696,7 +710,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$nodiffusebumplighting": // '1'.
 						case "$noenvmapmip": // '1'.
 						case "$nofog": // '0'. '1'.
-						case "$nofresnel": // '1'.
 						case "$noise_alpha": // '0.0'.
 						case "$noise_enable": // '1'.
 						case "$noise_luminance_weight": // '0.2'.
@@ -776,12 +789,9 @@ namespace Chisel.Import.Source.VPKTools
 						case "$radius_ring_outer": // '1.0'.
 						case "$raytracesphere": // '0'. '1'.
 						case "$receiveflashlight": // '1'.
-						case "$reflectblendfactor": // '0.4'.
 						case "$reflectentities":
 						case "$reflectivity": // '[0.29 0.29 0.29]'.
-						case "$reflecttexture":
 						case "$refractionamount": // '[.005 .005]'.
-						case "$refracttexture":
 						case "$refracttinttexture":
 						case "$rgb_thresholda": // '0'.
 						case "$rgb_thresholdb": // '0.35'.
@@ -800,8 +810,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$scanlineverticalscale": // '1'.
 						case "$scanlineverticalscroll": // '0'.
 						case "$scroll": // '[1 0]'.
-						case "$scroll1":
-						case "$scroll2":
 						case "$scrollrateresult": // '1'.
 						case "$seamless_base": // '1'.
 						case "$seamless_detail": // '0'. '1'.
@@ -1186,6 +1194,19 @@ namespace Chisel.Import.Source.VPKTools
 						case "$fogcolor": { vmfMaterial.FogColor = TextParser.ParseColor(property.Value); break; }
 						case "$refractamount": { TryParseFloatProperty(property, ref vmfMaterial.RefractAmount); break; }
 						case "$reflectamount": { TryParseFloatProperty(property, ref vmfMaterial.ReflectAmount); break; }
+						case "$fogstart": { TryParseFloatProperty(property, ref vmfMaterial.FogStart); break; }
+						case "$fogend": { TryParseFloatProperty(property, ref vmfMaterial.FogEnd); break; }
+						case "$fogenable": { TryParseBoolProperty(property, ref vmfMaterial.FogEnable); break; }
+						case "$refracttexture": { vmfMaterial.RefractTextureName = property.Value; break; }
+						case "$reflecttexture": { vmfMaterial.ReflectTextureName = property.Value; break; }
+						case "$forcecheap": { TryParseBoolProperty(property, ref vmfMaterial.ForceCheap); break; }
+						case "$forceexpensive": { TryParseBoolProperty(property, ref vmfMaterial.ForceExpensive); break; }
+						case "$cheapwaterstartdistance": { TryParseFloatProperty(property, ref vmfMaterial.CheapWaterStartDistance); break; }
+						case "$cheapwaterenddistance": { TryParseFloatProperty(property, ref vmfMaterial.CheapWaterEndDistance); break; }
+						case "$nofresnel": { TryParseBoolProperty(property, ref vmfMaterial.NoFresnel); break; }
+						case "$reflectblendfactor": { TryParseFloatProperty(property, ref vmfMaterial.ReflectBlendFactor); break; }
+						case "$scroll1": { vmfMaterial.Scroll1 = TextParser.ParseVector3(property.Value); break; }
+						case "$scroll2": { vmfMaterial.Scroll2 = TextParser.ParseVector3(property.Value); break; }
 
 						case "$normalalphaenvmapmask":
 						case "$normalmapalphaenvmapmask": { TryParseBoolProperty(property, ref vmfMaterial.NormalMapAlphaEnvMapMask); break; }
@@ -1260,6 +1281,8 @@ namespace Chisel.Import.Source.VPKTools
 									vmfMaterial.BaseTextureScroll = scroll;
 								else if (target == "$texture2transform")
 									vmfMaterial.Texture2Scroll = scroll;
+								else if (target == "$bumptransform")
+									vmfMaterial.BumpTextureScroll = scroll;
 							}
 							break;
 						}
