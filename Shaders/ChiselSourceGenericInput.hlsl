@@ -51,6 +51,7 @@ CBUFFER_START(UnityPerMaterial)
 	half   _RimLightExponent;
 	half   _RimMask;
 	half   _NoFog;
+	half   _OpaqueAlpha;
 	half   _SelfIllumFromBaseAlpha;
 	// What URP's rendering debugger shows of the mip streaming
 	UNITY_TEXTURE_STREAMING_DEBUG_VARS;

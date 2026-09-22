@@ -45,6 +45,7 @@ Shader "Chisel/Source/VertexLitGeneric"
 		// How wide the rim is. 4 is Source's value when the key is absent, and was hardcoded here.
 		_RimLightExponent ("$rimlightexponent", Float) = 4
 		_NoFog ("$nofog", Float) = 0
+		[HideInInspector] _OpaqueAlpha ("Opaque: write alpha 1, not the base texture's", Float) = 0
 		[Toggle] _RimMask ("$rimmask", Float) = 0
 		_PhongMask ("Phong mask (the $bumpmap's alpha)", 2D) = "white" {}
 		_PhongExponentMap ("$phongexponenttexture", 2D) = "white" {}

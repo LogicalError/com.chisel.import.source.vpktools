@@ -308,11 +308,18 @@ void SourceForwardFragment(
 
 	half4 color = SourceLighting(inputData, surface);
 	color.rgb = MixFog(color.rgb, inputData.fogCoord);
-	// The surface's own alpha, which is what the material's blend state expects - except that $nofog asks not to be
-	// fogged, and our fog is a screen-space pass rather than something mixed in here. A surface opts out the way sky
-	// faces do, by leaving 0 in the alpha; SourceFogPass tests it and restores the alpha to 1. The importer only sets
-	// _NoFog where the alpha is not also the blend weight, so this cannot make a translucent surface vanish.
-	outColor = half4(color.rgb, _NoFog > 0.5h ? 0.0h : color.a);
+	// WHAT GOES IN THE FRAME'S ALPHA IS A PROTOCOL, not the surface's opacity, because our fog is a screen-space pass
+	// that reads it: 0 means "do not fog this pixel" (the sky-face convention SourceFogPass tests and then restores).
+	// Three cases, and the importer decides which by the surface state it picked (ApplySourceBlendState):
+	//  - $nofog, which asks to be left out of the fog. Refused on anything whose alpha means something else, so this
+	//    can neither make a translucent surface vanish nor cut an alpha-tested one away.
+	//  - a plain OPAQUE surface writes 1. Its base alpha is a mask in Source ($selfillum, $basealphaenvmapmask,
+	//    $basemapalphaphongmask, $detail) and exporting that here excluded ~2200 materials from the fog - worst on
+	//    worldspawn walls, which is why whole rooms came out unfogged.
+	//  - everything else writes the surface's own alpha, which is its blend weight when it is blended and its
+	//    coverage when alpha to coverage is resolving its edge.
+	half frameAlpha = (_NoFog > 0.5h) ? 0.0h : ((_OpaqueAlpha > 0.5h) ? 1.0h : color.a);
+	outColor = half4(color.rgb, frameAlpha);
 
 #ifdef _WRITE_RENDERING_LAYERS
 	outRenderingLayers = EncodeMeshRenderingLayer();
