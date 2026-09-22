@@ -311,6 +311,15 @@ namespace Chisel.Import.Source.VPKTools
             return faces;
         }
 
+        /// <summary>
+        /// One level's pixels, for <see cref="VtfLevels"/>. The decoder stays private: this only lets a caller that
+        /// has already located a level hand it over, rather than re-deriving where levels live.
+        /// </summary>
+        internal static Color[] DecompressImageForLevels( Stream data, ushort width, ushort height, uint dataSize, VTFImageFormat imageFormat )
+        {
+            return DecompressImage( data, width, height, dataSize, imageFormat );
+        }
+
         private static Color[] DecompressImage( Stream data, ushort width, ushort height, uint dataSize, VTFImageFormat imageFormat )
 		{
 			Texture2DHelpers.TextureFormat format;
