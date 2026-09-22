@@ -14,6 +14,12 @@ Shader "Chisel/Source/Cable"
 		[Normal] _BumpMap ("$bumpmap", 2D) = "bump" {}
 		_Cutoff ("$alphatestreference", Range(0,1)) = 0.5
 
+		// A rope thinner than about a pixel stops covering every pixel centre and rasterises as a dashed line.
+		// Source holds it at a floor instead (c_rope.cpp, ShouldUseFakeAA, rope_smooth_minwidth). 1 pixel rather
+		// than Valve's 0.3, because 0.3 is still sub-pixel and still drops out; see the comment on
+		// SourceCableExpand.
+		_RopeMinPixels ("Minimum width on screen, in pixels", Range(0.25, 4)) = 1.0
+
 		[HideInInspector] _SrcBlend ("__src", Float) = 1.0
 		[HideInInspector] _DstBlend ("__dst", Float) = 0.0
 		[HideInInspector] _ZWrite ("__zw", Float) = 1.0
@@ -40,11 +46,73 @@ Shader "Chisel/Source/Cable"
 		CBUFFER_START(UnityPerMaterial)
 			float4 _BaseMap_ST;
 			half   _Cutoff;
+			float  _RopeMinPixels;
 		CBUFFER_END
 
 		TEXTURE2D(_BaseMap);    SAMPLER(sampler_BaseMap);
 		// Read at the base texture's coordinates, with its sampler
 		TEXTURE2D(_BumpMap);
+
+		// Where a rope's vertex really goes. The mesh puts BOTH vertices of a pair on the centre line and says which
+		// side each is (TANGENT.w) and how wide the rope is (TEXCOORD1.x, half width in metres); the strip is turned
+		// to face the camera and given its width HERE, because a width worked out on the CPU can only be right for
+		// one camera, and a level draws several in a frame - the 3D skybox companion and the Scene view among them.
+		//
+		// Source does the same and for the same reason (c_rope.cpp, ShouldUseFakeAA): below a floor it holds the rope
+		// at that width and takes the alpha down to pay for it. We hold the width and leave the alpha alone for now -
+		// fading needs blending, blending needs the transparent queue, and the transparent queue is not in the depth
+		// prepass, which would put ropes back outside the camera depth texture that the fog reads.
+		//
+		// The floor is 1 pixel, not Valve's 0.3. 0.3 is still under a pixel, so it still misses pixel centres and
+		// still dashes; their number comes with a rasteriser and a sample pattern we do not have. Measured for this
+		// map: Width 2 units = 3.81 cm is 31.7 px at 2 m, 0.63 px at 100 m and 0.13 px at 500 m.
+		//
+		// The pixel width is MEASURED, by projecting the centre and one edge and taking the distance between them,
+		// rather than derived from the projection matrix. That costs one extra transform and buys correctness under
+		// ortho, oblique and flipped projections without a special case for any of them.
+		float3 SourceCableExpand(float3 positionOS, float4 tangentOS, float halfWidth)
+		{
+			float3 centreWS = TransformObjectToWorld(positionOS);
+
+			// A mesh that carries no width is not a strip built for this: it is a LineRenderer's, whose vertices are
+			// already offset to the edges in world space. Leave them exactly where they are. Without this the rope
+			// would collapse onto its centre line and vanish in the window between this shader landing and the map
+			// being reimported, which is a regression with no upside and an easy one to miss.
+			if (!(halfWidth > 0))
+				return centreWS;
+
+			float3 alongWS  = TransformObjectToWorldDir(tangentOS.xyz);
+
+			// Perpendicular to the rope and to the view: the direction the strip has width in
+			float3 toEye  = _WorldSpaceCameraPos - centreWS;
+			float3 across = cross(alongWS, toEye);
+			float  len    = length(across);
+			// Seen exactly end-on a rope has no across direction, and no width worth arguing about either
+			if (len < 1e-6)
+				return centreWS;
+			across /= len;
+
+			float3 edgeWS   = centreWS + across * halfWidth;
+			float4 centreCS = TransformWorldToHClip(centreWS);
+			float4 edgeCS   = TransformWorldToHClip(edgeWS);
+
+			// Behind the eye the perspective divide is meaningless; leave the vertex where the mesh put it
+			if (centreCS.w < 1e-5 || edgeCS.w < 1e-5)
+				return centreWS + across * (halfWidth * tangentOS.w);
+
+			// Normalised device coordinates span 2 over _ScreenParams.x pixels. _ScreenParams is the CURRENT target,
+			// which is what makes this right in every view at once.
+			float2 centreNDC = centreCS.xy / centreCS.w;
+			float2 edgeNDC   = edgeCS.xy   / edgeCS.w;
+			float  halfPx    = length((edgeNDC - centreNDC) * _ScreenParams.xy * 0.5);
+
+			// A pure SCALE of the offset the mesh already implies. At or above the floor it is exactly 1, so every
+			// rope that was not dropping out is left bit-identical - the change can only reach the ropes it is for.
+			float wantHalfPx = max(halfPx, _RopeMinPixels * 0.5);
+			float scale      = (halfPx > 1e-6) ? (wantHalfPx / halfPx) : 1.0;
+
+			return centreWS + across * (halfWidth * tangentOS.w * scale);
+		}
 
 		// Across the rope in U and along it in V, as Source lays the texture out
 		float2 SourceCableCoord(float2 texcoord)
@@ -106,7 +174,8 @@ Shader "Chisel/Source/Cable"
 			struct SourceCableAttributes
 			{
 				float4 positionOS : POSITION;
-				float3 normalOS   : NORMAL;
+				float4 tangentOS  : TANGENT;    // xyz along the rope, w which side of the centre line
+				float2 widths     : TEXCOORD1;  // x half the rope's width, in metres
 				float2 texcoord   : TEXCOORD0;
 				UNITY_VERTEX_INPUT_INSTANCE_ID
 			};
@@ -133,15 +202,17 @@ Shader "Chisel/Source/Cable"
 				UNITY_TRANSFER_INSTANCE_ID(input, output);
 				UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
-				VertexPositionInputs vertexInput = GetVertexPositionInputs(input.positionOS.xyz);
-				output.positionCS = vertexInput.positionCS;
-				output.positionWS = vertexInput.positionWS;
-				output.normalWS   = TransformObjectToWorldNormal(input.normalOS);
+				float3 positionWS = SourceCableExpand(input.positionOS.xyz, input.tangentOS, input.widths.x);
+				output.positionCS = TransformWorldToHClip(positionWS);
+				output.positionWS = positionWS;
+				// The strip is turned to face the camera, so that is where its normal points. Nothing the mesh could
+				// author would be right, because the mesh does not know which camera is drawing.
+				output.normalWS   = (half3)GetWorldSpaceNormalizeViewDir(positionWS);
 				output.coord      = SourceCableCoord(input.texcoord);
 			#if !defined(_FOG_FRAGMENT)
-				output.fogFactor  = ComputeFogFactor(vertexInput.positionCS.z);
+				output.fogFactor  = ComputeFogFactor(output.positionCS.z);
 			#endif
-				OUTPUT_SH4(vertexInput.positionWS, output.normalWS, GetWorldSpaceNormalizeViewDir(vertexInput.positionWS), output.vertexSH, output.probeOcclusion);
+				OUTPUT_SH4(positionWS, output.normalWS, GetWorldSpaceNormalizeViewDir(positionWS), output.vertexSH, output.probeOcclusion);
 				return output;
 			}
 
@@ -240,6 +311,8 @@ Shader "Chisel/Source/Cable"
 			struct SourceCableDepthAttributes
 			{
 				float4 positionOS : POSITION;
+				float4 tangentOS  : TANGENT;
+				float2 widths     : TEXCOORD1;
 				float2 texcoord   : TEXCOORD0;
 				UNITY_VERTEX_INPUT_INSTANCE_ID
 			};
@@ -258,7 +331,10 @@ Shader "Chisel/Source/Cable"
 				UNITY_SETUP_INSTANCE_ID(input);
 				UNITY_TRANSFER_INSTANCE_ID(input, output);
 				UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
-				output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+				// The same expansion as the pass above, or the rope's depth would be a zero-width line while the
+				// frame shows a held-up one, and everything reading camera depth - the fog above all - would measure
+				// a two-metre rope against whatever stands behind it
+				output.positionCS = TransformWorldToHClip(SourceCableExpand(input.positionOS.xyz, input.tangentOS, input.widths.x));
 				output.coord      = SourceCableCoord(input.texcoord);
 				return output;
 			}
@@ -300,7 +376,8 @@ Shader "Chisel/Source/Cable"
 			struct SourceCableNormalsAttributes
 			{
 				float4 positionOS : POSITION;
-				float3 normalOS   : NORMAL;
+				float4 tangentOS  : TANGENT;
+				float2 widths     : TEXCOORD1;
 				float2 texcoord   : TEXCOORD0;
 				UNITY_VERTEX_INPUT_INSTANCE_ID
 			};
@@ -320,8 +397,9 @@ Shader "Chisel/Source/Cable"
 				UNITY_SETUP_INSTANCE_ID(input);
 				UNITY_TRANSFER_INSTANCE_ID(input, output);
 				UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
-				output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
-				output.normalWS   = TransformObjectToWorldNormal(input.normalOS);
+				float3 positionWS = SourceCableExpand(input.positionOS.xyz, input.tangentOS, input.widths.x);
+				output.positionCS = TransformWorldToHClip(positionWS);
+				output.normalWS   = (half3)GetWorldSpaceNormalizeViewDir(positionWS);
 				output.coord      = SourceCableCoord(input.texcoord);
 				return output;
 			}
