@@ -19,8 +19,17 @@
 // $IrisU/$IrisV and takes the surface normal from the sphere centre $EyeOrigin - and the client rewrites
 // all three every frame from the eye attachment, which is how an eye tracks what it is looking at. An
 // imported scene has no such runtime, so the projection is done in OBJECT space instead: the eye is taken
-// to be centred on its own origin and looking down +X, which is what Source produces when the eye looks
-// straight ahead. A static eye is the honest result, not a bug.
+// to be centred on the mesh's origin and looking along z, with x across and y up. A static eye is the
+// honest result, not a bug.
+//
+// WHAT IS STILL WRONG, so nobody reads the paragraph above as a claim that this is finished. The two axes
+// and the centre here are a DEFAULT, and Source keeps the real ones per eyeball in the model file:
+// mstudioeyeball_t (studio.h:1240) carries org, up, forward, radius and iris_scale, and baseanimating.cpp
+// puts them in world space with the eye bone's matrix. Nothing reads them yet. On a material preview, whose
+// mesh is centred and one unit across, the default is right. On an actual character it is not: an eyeball
+// is a submesh of the whole body, so object space is centred between the character's feet and the
+// projection lands far outside [0,1] - every pixel clamps to the edge of the iris texture, which is the
+// sclera, and the eye renders as a white blob. Fixing that needs the eyeball structs, not another constant.
 
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
@@ -86,24 +95,40 @@ half4 SourceEyeFragment(Varyings input) : SV_Target
 	UNITY_SETUP_INSTANCE_ID(input);
 	UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
-	// Iris projection. $IrisU/$IrisV default to [0 1 0 0] and [0 0 1 0], which project the axes across
-	// from the direction the eye faces; with the eye looking down +X that is object Y and Z.
+	// Iris projection. $IrisU/$IrisV default to [0 1 0 0] and [0 0 1 0]: u from the eye's LEFT axis, v from
+	// its UP axis, with the eye facing FORWARD, the axis the projection drops. Those names are the point -
+	// the numbers spell them in Source's frame (x forward, y left, z up), and a mesh here is in Unity's,
+	// so the three have to be named again rather than copied across. This reads u from x and v from y with
+	// the eye facing z. Copying the literal yz is what put the eye on its side in the material preview.
 	float radius = max(_EyeballRadius, 1e-4h);
-	float2 irisUv = (input.positionOS.yz / (2.0 * radius)) + 0.5;
+	float2 sphereUv = (input.positionOS.xy / (2.0 * radius)) + 0.5;
+
+	// The cornea texture is a CROPPED version of the iris texture, and Source relates the two by
+	// vSphereUv = vCorneaUv * 0.5 + 0.25 (eye_refract_ps2x.fxc:205). The projection above spans the whole
+	// eyeball across [0,1], which is Source's SPHERE uv, so the cornea's is that relation inverted. Sampling
+	// the cornea at the sphere's uv stretched a texture that covers only the middle of the eye over all of
+	// it, dome normal, highlight and all.
+	float2 corneaUv = (sphereUv - 0.25) * 2.0;
 
 	// Dilate the pupil, exactly as the original does it (eye_refract_ps2x.fxc:307-312). 0.2 is the iris's
-	// uv radius and is Valve's constant, not a tuned one.
-	irisUv -= 0.5;
+	// uv radius and is Valve's constant, not a tuned one. It moves the IRIS sample alone: the cornea's uv is
+	// the projection itself, which does not dilate.
+	float2 irisUv = sphereUv - 0.5;
 	half pupilCentreToBorder = saturate(length(irisUv) / 0.2h);
 	irisUv *= lerp(1.0h, pupilCentreToBorder, saturate(_Dilation) * 2.5h - 1.25h);
 	irisUv += 0.5;
 
 	half4 iris = SAMPLE_TEXTURE2D(_Iris, sampler_Iris, irisUv);
 
-	// The cornea holds a 2D normal in RG and the iris highlight mask in A.
-	half4 cornea = SAMPLE_TEXTURE2D(_CorneaTexture, sampler_CorneaTexture, irisUv);
-	half3 corneaTangentNormal = half3((cornea.rg * 2.0h - 1.0h) * _CorneaBumpStrength, 1.0h);
-	half  corneaNoise = cornea.b;
+	// The cornea holds a 2D normal in RG, the iris's parallax height in B and the highlight mask in A.
+	// Valve takes rg - 0.5 rather than the usual rg * 2 - 1 and says why: "Note: This scales the bump to
+	// 50% strength" (eye_refract_ps2x.fxc:236-237). The cornea NOISE is not in this texture at all - it is
+	// the IRIS texture's alpha (:229), which is what B was standing in for here.
+	half4 cornea = SAMPLE_TEXTURE2D(_CorneaTexture, sampler_CorneaTexture, corneaUv);
+	half3 corneaTangentNormal = half3((cornea.rg - 0.5h) * _CorneaBumpStrength, 1.0h);
+	// Valve offsets this by half the parallax vector; with no parallax that is the sphere uv, which is
+	// exactly what the ps_2_0 path does (:222, :228) - the same path _ParallaxStrength is unused on here.
+	half  corneaNoise = SAMPLE_TEXTURE2D(_Iris, sampler_Iris, sphereUv).a;
 	half  highlightMask = cornea.a;
 
 	half3 normalWS = normalize(input.normalWS);
@@ -127,6 +152,18 @@ half4 SourceEyeFragment(Varyings input) : SV_Target
 	half3 glints  = mainLight.color * pow(saturate(dot(reflectWS, mainLight.direction)), 128.0h) * highlightMask;
 
 #ifdef _ADDITIONAL_LIGHTS
+	// URP's clustered LIGHT_LOOP_BEGIN reads a local called "inputData" by name to find which cluster
+	// the pixel is in, so one has to exist even though this pass builds its lighting by hand. It is
+	// needed in variants that list _ADDITIONAL_LIGHTS as DISABLED too: Core.hlsl force-defines that
+	// keyword whenever the cluster loop is on (Core.hlsl:20), which is how the _CLUSTER_LIGHT_LOOP
+	// variant reached this block at all.
+	InputData inputData = (InputData)0;
+	inputData.positionWS = input.positionWS;
+	inputData.normalWS = normalWS;
+	inputData.viewDirectionWS = viewWS;
+	inputData.shadowCoord = input.shadowCoord;
+	inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
+
 	uint lightCount = GetAdditionalLightsCount();
 	LIGHT_LOOP_BEGIN(lightCount)
 		Light light = GetAdditionalLight(lightIndex, input.positionWS, half4(1, 1, 1, 1));
