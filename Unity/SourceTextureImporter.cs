@@ -45,10 +45,15 @@ namespace Chisel.Import.Source.VPKTools
 		[Tooltip("Build the mip chain. Off only for a texture whose VTF really holds a single level.")]
 		public bool generateMipmaps = true;
 
-		[Tooltip("Above zero, this texture's alpha is a cut-out silhouette tested at this value, and every " +
-				 "mip level is scaled to keep the same coverage. Set by a material claiming it; see " +
-				 "Texture2DImporter.MarkAsAlphaTested.")]
+		[Tooltip("Above zero, this texture's alpha is a cut-out silhouette tested at this value. Set by a " +
+				 "material claiming it; see Texture2DImporter.MarkAsAlphaTested.")]
 		[Range(0.0f, 1.0f)] public float alphaTestReference;
+
+		[Tooltip("Scale each mip level's alpha so the same fraction of texels passes the alpha test as at " +
+				 "level 0 (Castano). OFF BY DEFAULT: it is a deliberate deviation - Source's own resampler " +
+				 "does no such thing - and on this game's textures it did not read as an improvement. Turn " +
+				 "it on per texture to try it. Does nothing unless alphaTestReference is set.")]
+		public bool preserveAlphaCoverage;
 
 		[Tooltip("Compress to DXT once the levels are built. Off keeps RGBA32, which costs four times the memory.")]
 		public bool compress = true;
@@ -100,7 +105,8 @@ namespace Chisel.Import.Source.VPKTools
 			try
 			{
 				levels = wantMips ? SourceMipmaps.Generate(level0, width, height, normalMap: false,
-														   alphaTestReference: alphaTestReference)
+														   alphaTestReference: preserveAlphaCoverage
+																			 ? alphaTestReference : 0.0f)
 								  : new[] { level0 };
 			}
 			catch (Exception exception)

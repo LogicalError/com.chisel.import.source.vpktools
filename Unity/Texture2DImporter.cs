@@ -19,7 +19,12 @@ namespace Chisel.Import.Source.VPKTools
 		/// <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
 		// 2: I8, A8 and IA88 textures read as Direct3D 9 samples them (they were (I, 1, 1) and (I, A, 1))
-		public static readonly (string generator, int version) GeneratedVersion = ("texture", 4);
+		public static readonly (string generator, int version) GeneratedVersion = ("texture", 5);
+
+		/// <summary>
+		/// What every texture's anisotropy is set to, matching Black Mesa's own <c>mat_forceaniso "16"</c>.
+		/// </summary>
+		const int kForcedAnisoLevel = 16;
 
 		static bool IsCurrent(Texture texture)
 		{
@@ -656,14 +661,18 @@ namespace Chisel.Import.Source.VPKTools
 				return;
 
 			var filterMode = FilterMode.Bilinear;
-			int aniso = 1;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_POINTSAMPLE) != (VTFImageFlag)0) filterMode = FilterMode.Point;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_TRILINEAR) != (VTFImageFlag)0) filterMode = FilterMode.Trilinear;
-			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ANISOTROPIC) != (VTFImageFlag)0)
-			{
-				filterMode = FilterMode.Trilinear;
-				aniso = 2;
-			}
+			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ANISOTROPIC) != (VTFImageFlag)0) filterMode = FilterMode.Trilinear;
+
+			// Anisotropy is not a per-texture decision in Source: the game forces it globally, and Black
+			// Mesa's config ships mat_forceaniso "16". The VTF's own ANISOTROPIC flag is a hint from the
+			// era when it was, and following it left 574 of 691 textures at 1 - which is no anisotropy at
+			// all. Anisotropy is what stops a surface seen at a grazing angle from over-blurring along one
+			// axis while aliasing along the other, which is exactly how a fence or a road reads wrong.
+			// A point-sampled texture is excluded: it asked not to be filtered.
+			int aniso = ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_POINTSAMPLE) != (VTFImageFlag)0)
+					  ? 1 : kForcedAnisoLevel;
 
 			var serialized = new SerializedObject(importer);
 			// Whether the file HAS mips, not whether it carries TEXTUREFLAGS_NOMIP - see VTF.MipmapCount.
@@ -707,8 +716,12 @@ namespace Chisel.Import.Source.VPKTools
 
 			var serialized = new SerializedObject(importer);
 			var property = serialized.FindProperty("alphaTestReference");
-			if (property == null || Mathf.Approximately(property.floatValue, reference))
-				return;                     // idempotent: every material using it claims it
+			// The STRICTEST claim wins, not the last one. One texture is shared by several materials that
+			// can test it at different values - the four fence materials use 0.5 and 0.1 - and whichever
+			// imported last would otherwise decide. The higher cutoff is the one where thinning actually
+			// costs something, and a lower one only ever asks for less work.
+			if (property == null || reference <= property.floatValue)
+				return;                     // idempotent, and never weakened by a later claim
 
 			property.floatValue = reference;
 			serialized.ApplyModifiedPropertiesWithoutUndo();
@@ -800,11 +813,11 @@ namespace Chisel.Import.Source.VPKTools
 			settings.filterMode = FilterMode.Bilinear;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_POINTSAMPLE) != (VTFImageFlag)0) settings.filterMode = FilterMode.Point;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_TRILINEAR) != (VTFImageFlag)0) settings.filterMode = FilterMode.Trilinear;
-			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ANISOTROPIC) != (VTFImageFlag)0)
-			{
-				settings.filterMode = FilterMode.Trilinear;
-				settings.aniso = 2;
-			}
+			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ANISOTROPIC) != (VTFImageFlag)0) settings.filterMode = FilterMode.Trilinear;
+
+			// Forced globally, as Source forces it; see ConfigureSourceImporter.
+			settings.aniso = ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_POINTSAMPLE) != (VTFImageFlag)0)
+						   ? 1 : kForcedAnisoLevel;
 
 			settings.wrapMode = TextureWrapMode.Repeat;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_CLAMPS) != (VTFImageFlag)0) settings.wrapModeU = TextureWrapMode.Clamp;

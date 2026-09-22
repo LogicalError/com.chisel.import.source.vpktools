@@ -227,7 +227,7 @@ namespace Chisel.Import.Source.VPKTools
 				// Coverage rises monotonically with the scale, so bisection converges. The upper bound is
 				// generous rather than tuned: a wire one sixteenth of a texel wide needs a large multiplier
 				// to survive, and a bound that is too small fails silently by clamping.
-				float low = 0.0f, high = 32.0f, scale = 1.0f;
+				float low = 1.0f, high = 32.0f, scale = 1.0f;
 				for (int step = 0; step < 16; step++)
 				{
 					scale = 0.5f * (low + high);
@@ -237,7 +237,14 @@ namespace Chisel.Import.Source.VPKTools
 						high = scale;
 				}
 
-				if (Mathf.Abs(scale - 1.0f) < 0.01f)
+				// NEVER REDUCE. Castano's method preserves coverage exactly, which silently assumes coverage
+				// FALLS as levels shrink - true at a 0.5 cutoff, false at a low one. At a 0.1 cutoff on a
+				// chain-link fence, filtering spreads alpha so MORE texels clear the bar each level (0.142
+				// at mip 0 rising to 0.519 by mip 4), and preserving that meant scaling alpha down 6.7x and
+				// fading the fence out faster than doing nothing at all. The property actually wanted is
+				// "never let the cut-out thin away", so a scale below one is a no-op.
+				scale = Mathf.Max(1.0f, scale);
+				if (scale - 1.0f < 0.01f)
 					continue;
 				var texels = levels[level];
 				for (int i = 0; i < texels.Length; i++)
