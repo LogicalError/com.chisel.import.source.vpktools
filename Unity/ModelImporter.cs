@@ -293,7 +293,10 @@ namespace Chisel.Import.Source.VPKTools
 		/// </list>
 		/// When unsure which one a change falls under, bump AnimationVersion: it rebuilds both.
 		/// </summary>
-		internal static readonly (string generator, int version) ModelVersion     = ("model", 4);
+		// 5: an empty material slot no longer renumbers the submeshes after it (FbxExporter.CollectMaterials).
+		// Every model exported before this that had one is wearing shifted materials, with its last submesh drawn
+		// by Unity's white default, so they all have to be written again rather than only the ones anyone noticed.
+		internal static readonly (string generator, int version) ModelVersion     = ("model", 5);
 		static readonly (string generator, int version) AnimationVersion = ("animation", 1);
 
 		/// <summary>

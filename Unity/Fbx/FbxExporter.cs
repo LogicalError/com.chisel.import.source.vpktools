@@ -129,14 +129,14 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			var materialNames = new List<string>();
 			var materials     = new List<Material>();
 			var materialIds   = new List<long>();
-			CollectMaterials(nodes, ids, materialNames, materials, materialIds);
+			var missingMaterial = CollectMaterials(nodes, ids, materialNames, materials, materialIds);
 
 			var objects     = new FbxNode("Objects") { AlwaysBlock = true };
 			var connections = new FbxNode("Connections") { AlwaysBlock = true };
 
 			WriteNodeObjects(objects, connections, hierarchy, root.transform);
 			WriteMaterialObjects(objects, materialNames, materialIds);
-			WriteMaterialConnections(connections, nodes, materialNames, materialIds);
+			WriteMaterialConnections(connections, nodes, materialNames, materialIds, missingMaterial);
 			WriteSkins(objects, connections, hierarchy, ids);
 			WriteBindPose(objects, nodes, ids);
 
@@ -293,11 +293,51 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			}
 		}
 
-		static void CollectMaterials(List<NodeRecord> nodes, IdSource ids,
-									 List<string> names, List<Material> materials, List<long> materialIds)
+		/// <summary>
+		/// The name given to a submesh whose renderer slot is empty, so that it is visibly a missing material
+		/// rather than silently Unity's white default.
+		/// </summary>
+		const string kMissingMaterialName = "MissingMaterial";
+
+		/// <summary>
+		/// Emits one FBX material per distinct Unity material, and returns the index of the placeholder that
+		/// stands in for empty slots, or -1 when there are none.
+		/// </summary>
+		/// <remarks>
+		/// AN EMPTY SLOT STILL OWNS ITS SUBMESH INDEX. The geometry writes the raw submesh number into
+		/// LayerElementMaterial (<see cref="WriteGeometry"/>), and a node's material-layer indices are simply the
+		/// ORDER its materials are connected in - so skipping a null used to slide every later submesh onto its
+		/// neighbour's material and leave the last one indexing past the end of the list, where Unity substitutes a
+		/// white default material of its own. That is where the jeep's white windows came from, and the shift is the
+		/// worse half of it: the surfaces that still had a material were wearing the wrong one, which looks like
+		/// nothing at all whenever two materials happen to be similar.
+		/// One placeholder, emitted before everything else, keeps submesh N on connection N.
+		/// </remarks>
+		static int CollectMaterials(List<NodeRecord> nodes, IdSource ids,
+									List<string> names, List<Material> materials, List<long> materialIds)
 		{
 			var seen = new Dictionary<Material, int>();
 			var used = new HashSet<string>();
+
+			var missing = -1;
+			foreach (var node in nodes)
+			{
+				if (node.Materials == null)
+					continue;
+				foreach (var material in node.Materials)
+					if (material == null) { missing = 0; break; }
+				if (missing == 0)
+					break;
+			}
+			if (missing == 0)
+			{
+				used.Add(kMissingMaterialName);
+				names.Add(kMissingMaterialName);
+				// Null: there is no Unity material to remap onto, and ModelImporter skips a null rather than
+				// clearing the remap, so the model keeps whatever Unity imported for this name.
+				materials.Add(null);
+				materialIds.Add(ids.Next());
+			}
 
 			foreach (var node in nodes)
 			{
@@ -324,6 +364,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 					materialIds.Add(ids.Next());
 				}
 			}
+			return missing;
 		}
 
 		#endregion
@@ -742,16 +783,18 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 		}
 
 		static void WriteMaterialConnections(FbxNode connections, List<NodeRecord> nodes,
-											 List<string> names, List<long> ids)
+											 List<string> names, List<long> ids, int missing)
 		{
 			var indexByName = new Dictionary<string, int>();
 			for (int i = 0; i < names.Count; i++)
 				indexByName[names[i]] = i;
 
 			// The order materials are connected to a node IS their index in that node's material
-			// layer, so these have to go out per node in submesh order.
+			// layer, so these have to go out per node in submesh order - INCLUDING the empty slots,
+			// which is what CollectMaterials' placeholder is for. Leaving one out does not drop a
+			// submesh, it renumbers every submesh after it.
 			var lookup = new Dictionary<Material, int>();
-			var order  = 0;
+			var order  = (missing >= 0) ? 1 : 0;
 			foreach (var node in nodes)
 			{
 				if (node.Materials == null)
@@ -770,7 +813,14 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 
 				foreach (var material in node.Materials)
 				{
-					if (material == null || !lookup.TryGetValue(material, out var index))
+					int index;
+					if (material == null)
+					{
+						if (missing < 0)
+							continue;
+						index = missing;
+					}
+					else if (!lookup.TryGetValue(material, out index))
 						continue;
 					connections.Add("C", FbxProperty.String("OO"),
 									FbxProperty.Long(ids[index]), FbxProperty.Long(node.Id));
