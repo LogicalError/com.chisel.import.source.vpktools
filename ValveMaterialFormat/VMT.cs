@@ -86,6 +86,8 @@ namespace Chisel.Import.Source.VPKTools
 		public RGBColor		AmbientOcclusionColor;
 		public float?		EyeballRadius;
 		public float?		Dilation;
+		/// <summary>$glossiness: EyeRefract scales the cornea's cubemap reflection by it. Declared long
+		/// before anything set it, so every material read 0 until the eye shader was ported.</summary>
 		public float?		Glossiness;
 		public float?		CorneaBumpStrength;
 		public float?		ParallaxStrength;
@@ -1251,6 +1253,7 @@ namespace Chisel.Import.Source.VPKTools
 						case "$eyeballradius": { TryParseFloatProperty(property, ref vmfMaterial.EyeballRadius); break; }
 						case "$dilation": { TryParseFloatProperty(property, ref vmfMaterial.Dilation); break; }
 						case "$corneabumpstrength": { TryParseFloatProperty(property, ref vmfMaterial.CorneaBumpStrength); break; }
+						case "$glossiness": { TryParseFloatProperty(property, ref vmfMaterial.Glossiness); break; }
 						case "$parallaxstrength": { TryParseFloatProperty(property, ref vmfMaterial.ParallaxStrength); break; }
 
 						case "$phongwarptexture": { vmfMaterial.PhongWarpTextureName = property.Value; break; }

@@ -703,6 +703,9 @@ namespace Chisel.Import.Source.VPKTools
 					SetFloatIfPresent(unityMaterial, "_Dilation", sourceMaterial.Dilation.Value);
 				if (sourceMaterial.CorneaBumpStrength.HasValue)
 					SetFloatIfPresent(unityMaterial, "_CorneaBumpStrength", sourceMaterial.CorneaBumpStrength.Value);
+				// $glossiness scales the cornea's cubemap reflection (eye_refract_ps2x.fxc:396).
+				if (sourceMaterial.Glossiness.HasValue)
+					SetFloatIfPresent(unityMaterial, "_Glossiness", sourceMaterial.Glossiness.Value);
 				if (sourceMaterial.ParallaxStrength.HasValue)
 					SetFloatIfPresent(unityMaterial, "_ParallaxStrength", sourceMaterial.ParallaxStrength.Value);
 			}
@@ -1680,7 +1683,18 @@ namespace Chisel.Import.Source.VPKTools
 				PackagePath.DefaultMaterialPaths);
 
 			if (images == null || images.Length == 0)
+			{
+				// A texture the VMT names but that cannot be imported used to return null in silence, and
+				// Unity binds WHITE for an unset texture - so the material came out as a white surface with
+				// nothing anywhere saying why. It looks like a shader bug and it is not one. Ten materials
+				// in this game are in that state; five name textures that are in no VPK at all, and the
+				// rest were losing the name to a parse bug. Saying so makes the difference visible.
+				if (warnIfMissing)
+					Debug.LogWarning($"Material '{material.name}' names texture '{textureName}' for " +
+									 $"{materialPropertyName}, which could not be imported - the slot will " +
+									 "sample white.", material);
 				return null;
+			}
 
 			var image = images[0];
 
