@@ -10,10 +10,12 @@
 #include "ChiselSourceGenericLitPass.hlsl"
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/GBufferOutput.hlsl"
 
-GBufferFragOutput SourceGBufferFragment(SourceVaryings input)
+GBufferFragOutput SourceGBufferFragment(SourceVaryings input, FRONT_FACE_TYPE frontFace : FRONT_FACE_SEMANTIC)
 {
 	UNITY_SETUP_INSTANCE_ID(input);
 	UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+	// A two-sided material's back faces carry the front face's normal; see SourceFlipNormalForBackFace
+	SourceFlipNormalForBackFace(input, frontFace);
 
 	SourceSurface surface = SourceLitSurface(input);
 

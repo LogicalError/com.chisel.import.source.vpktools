@@ -13,7 +13,9 @@ namespace Chisel.Import.Source.VPKTools
 		/// built with (<see cref="Texture2DImporter.GeneratedVersion"/>), so a texture change rebuilds
 		/// the materials as well. See <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 14);
+		// 15: $rimlightexponent reaches the shader. Every material built before this carries the shader's default of
+		// 4 however wide its VMT asked to be, so they all have to be rebuilt rather than only the ones that set it.
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 15);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -884,6 +886,7 @@ namespace Chisel.Import.Source.VPKTools
 			var rimLight = DrawsRimLight(sourceMaterial);
 			unityMaterial.SetFloat("_RimLight", rimLight ? 1 : 0);
 			unityMaterial.SetFloat("_RimLightBoost", sourceMaterial.RimLightBoost ?? 1.0f);
+			unityMaterial.SetFloat("_RimLightExponent", RimLightExponentOf(sourceMaterial));
 			unityMaterial.SetFloat("_RimMask", (rimLight && sourceMaterial.RimMask == true &&
 												unityMaterial.IsKeywordEnabled("_PHONGEXPONENTMAP")) ? 1 : 0);
 
@@ -1248,6 +1251,22 @@ namespace Chisel.Import.Source.VPKTools
 		internal static float PhongExponentOf(VMT sourceMaterial)
 		{
 			return (sourceMaterial.PhongExponentValue > 0) ? sourceMaterial.PhongExponentValue.Value : -1.0f;
+		}
+
+		/// <summary>
+		/// $rimlightexponent: how wide the rim is, 4 when the key is absent as Source has it.
+		/// </summary>
+		/// <remarks>
+		/// The key was parsed all along and never reached the shader, which squared the edge term twice for a fixed
+		/// exponent of 4 - so a material asking for anything narrower got a rim twice as broad as it wanted. The term
+		/// is ADDITIVE emission of the ambient probe rather than a modulation of the surface, so too broad a rim does
+		/// not merely brighten an edge, it washes the albedo out across whole faces: a map's agave asks for 8 and
+		/// its upward-facing inner leaves came out flat pale grey while the outward-facing ones were correct.
+		/// Clamped at 1 because the exponent is a lobe width and a value below 1 broadens it past the whole surface.
+		/// </remarks>
+		internal static float RimLightExponentOf(VMT sourceMaterial)
+		{
+			return Mathf.Max(sourceMaterial?.RimLightExponent ?? 4.0f, 1.0f);
 		}
 
 		/// <summary>

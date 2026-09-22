@@ -97,6 +97,24 @@ SourceVaryings SourceLitVertex(SourceAttributes input)
 	return output;
 }
 
+// A two-sided material ($nocull, which foliage, fences and grates all use) draws its back faces with the FRONT
+// face's normal, so every back-facing pixel is shaded as a surface pointing AWAY from the viewer. Everything
+// downstream then reasons about a surface that isn't there: `1 - saturate(dot(N, V))` evaluates to exactly 1, so the
+// rim light and the environment fresnel fire at full strength on every back face whatever their exponent, and the
+// diffuse and phong terms light the wrong hemisphere. Flip it, as URP's own two-sided shaders do; the tangent's
+// handedness goes with it so the normal map's bitangent stays right-handed.
+//
+// Found on a map's agave: its inner leaves are the ones seen from behind, and they came out flat pale grey
+// because the rim term was adding the ambient probe over them at full strength.
+void SourceFlipNormalForBackFace(inout SourceVaryings input, FRONT_FACE_TYPE frontFace)
+{
+	half facing = IS_FRONT_VFACE(frontFace, 1.0h, -1.0h);
+	input.normalWS *= facing;
+#ifdef _NORMALMAP
+	input.tangentWS.w *= facing;
+#endif
+}
+
 SourceSurface SourceLitSurface(SourceVaryings input)
 {
 	SourceSurfaceInput surfaceInput;
@@ -266,6 +284,7 @@ half4 SourceLighting(InputData inputData, SourceSurface surface)
 
 void SourceForwardFragment(
 	SourceVaryings input
+	, FRONT_FACE_TYPE frontFace : FRONT_FACE_SEMANTIC
 	, out half4 outColor : SV_Target0
 #ifdef _WRITE_RENDERING_LAYERS
 	, out uint outRenderingLayers : SV_Target1
@@ -274,6 +293,7 @@ void SourceForwardFragment(
 {
 	UNITY_SETUP_INSTANCE_ID(input);
 	UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+	SourceFlipNormalForBackFace(input, frontFace);
 
 	SourceSurface surface = SourceLitSurface(input);
 

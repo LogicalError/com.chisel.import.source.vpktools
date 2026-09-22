@@ -42,6 +42,8 @@ Shader "Chisel/Source/VertexLitGeneric"
 		_PhongMaskFromBaseAlpha ("Phong mask is base alpha", Float) = 0
 		[Toggle] _RimLight ("$rimlight", Float) = 0
 		_RimLightBoost ("$rimlightboost", Float) = 1
+		// How wide the rim is. 4 is Source's value when the key is absent, and was hardcoded here.
+		_RimLightExponent ("$rimlightexponent", Float) = 4
 		[Toggle] _RimMask ("$rimmask", Float) = 0
 		_PhongMask ("Phong mask (the $bumpmap's alpha)", 2D) = "white" {}
 		_PhongExponentMap ("$phongexponenttexture", 2D) = "white" {}

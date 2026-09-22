@@ -48,6 +48,7 @@ CBUFFER_START(UnityPerMaterial)
 	half   _PhongMaskFromBaseAlpha;
 	half   _RimLight;
 	half   _RimLightBoost;
+	half   _RimLightExponent;
 	half   _RimMask;
 	half   _SelfIllumFromBaseAlpha;
 	// What URP's rendering debugger shows of the mip streaming

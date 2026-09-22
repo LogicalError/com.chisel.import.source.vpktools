@@ -143,9 +143,12 @@ void SourceSurfaceFunction(SourceSurfaceInput input, out SourceSurface surface)
 	// where the surface faces up (world Z in Source, Y here) and is seen edge-on, tinted like the highlight. The other part
 	// is a lobe per light that the game folds into the highlight with a max() over all lights, which a G-buffer has no
 	// room for.
+	// $rimlightexponent, which is how wide the rim is. It was hardcoded to 4 - Source's default when the key is
+	// absent - by squaring twice, so a material asking for anything else got a rim twice as broad as it wanted, and
+	// since the term is ADDITIVE emission of the ambient probe, a too-broad rim washes the albedo out across whole
+	// faces rather than edging them. agave.vmt asks for 8 and its upward-facing leaves turned pale grey.
 	half rimEdge = 1.0h - saturate(dot(surface.normalWS, input.viewDirWS));
-	rimEdge *= rimEdge;
-	rimEdge *= rimEdge;
+	rimEdge = pow(max(rimEdge, HALF_MIN), max(_RimLightExponent, 1.0h));
 	half rimWeight = saturate(lerp(1.0h, exponentMap.a, _RimMask) * rimEdge * surface.normalWS.y);
 	surface.emission += SampleSH(input.viewDirWS) * (_RimLight * _RimLightBoost * rimWeight) * tint;
 #endif
