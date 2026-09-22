@@ -70,7 +70,7 @@ Shader "Chisel/Source/VertexLitGeneric"
 		[HideInInspector] _SrcBlend ("__src", Float) = 1.0
 		[HideInInspector] _DstBlend ("__dst", Float) = 0.0
 		[HideInInspector] _ZWrite ("__zw", Float) = 1.0
-		[HideInInspector] _AlphaToMask ("__alphaToMask", Float) = 0.0
+		[ToggleUI] _AlphaToMask ("Alpha to coverage ($alphatest, resolved against the MSAA mask)", Float) = 0.0
 		[Enum(UnityEngine.Rendering.CullMode)] _Cull ("$nocull", Float) = 2
 	}
 
