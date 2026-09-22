@@ -24,6 +24,7 @@ Shader "Chisel/Source/UnlitGeneric"
 		[HideInInspector] _DstBlend ("__dst", Float) = 0.0
 		[HideInInspector] _ZWrite ("__zw", Float) = 1.0
 		[Enum(UnityEngine.Rendering.CullMode)] _Cull ("$nocull", Float) = 2
+		[ToggleUI] _AlphaToMask ("Alpha to coverage ($alphatest, resolved against the MSAA mask)", Float) = 0.0
 	}
 
 	SubShader
@@ -72,6 +73,13 @@ Shader "Chisel/Source/UnlitGeneric"
 			Name "Unlit"
 			// Forward even under Deferred+, which draws an opaque pass only when it is tagged G-buffer or forward-only
 			Tags { "LightMode" = "UniversalForwardOnly" }
+
+			// Only on the pass that draws the surface, as URP's own Lit does it and as the lit Source shaders
+			// do: the depth passes write no colour, and the G-buffer's targets are not multisampled. Set by
+			// MaterialImporter.ApplySourceBlendState from $alphatest, so declaring the property is the whole
+			// of the work - SetFloatIfPresent leaves a shader without it alone, which is why these two have
+			// been missing it since alpha to coverage landed for the lit pair.
+			AlphaToMask [_AlphaToMask]
 
 			HLSLPROGRAM
 			#pragma target 3.5
