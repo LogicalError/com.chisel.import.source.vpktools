@@ -164,10 +164,15 @@ half SourceOpacity(SourceBase base, half4 vertexColor)
 	return alpha * lerp(1.0h, vertexColor.a, _VertexAlpha);
 }
 
+// The alpha test, and the alpha the fragment must then EXPORT. URP's AlphaClip clips exactly as the line below it used
+// to, but when alpha-to-coverage is available - an opaque pass with MSAA, which URP signals through
+// _AlphaToMaskAvailable - it returns a coverage alpha instead: the cutoff remapped to the half-covered sample, one
+// screen-space derivative wide (SharpenAlphaStrict). Exporting that is the whole of the effect. Handing the hardware
+// the raw alpha would not antialias the cutout edge, it would fade the entire surface by its opacity.
 half SourceAlphaClip(half alpha)
 {
 #ifdef _ALPHATEST_ON
-	clip(alpha - _Cutoff);
+	alpha = AlphaClip(alpha, _Cutoff);
 #endif
 	return alpha;
 }

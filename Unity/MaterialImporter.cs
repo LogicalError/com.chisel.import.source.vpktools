@@ -15,7 +15,17 @@ namespace Chisel.Import.Source.VPKTools
 		/// </summary>
 		// 15: $rimlightexponent reaches the shader. Every material built before this carries the shader's default of
 		// 4 however wide its VMT asked to be, so they all have to be rebuilt rather than only the ones that set it.
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 15);
+		// 16: _AlphaToMask, so an alpha-tested edge resolves against the multisample coverage mask
+		// (DrawsWithAlphaToCoverage). The property defaults to 0, which is the state every material built before this
+		// one has, so they rebuild rather than silently keeping the hard edge.
+		// 17: _AlphaToMask and _NoFog reach the SOURCE shaders. Both were written in ApplyURPFallbackSurfaceState,
+		// which CreateMaterial only reaches when there is NO Source shader for the VMT - it returns at the
+		// CreateSourceShaderMaterial call well before it. So on the 1262 materials that use our own shaders, the two
+		// shaders that declare these properties, neither was ever set: $nofog did nothing at all, and v16 rebuilt
+		// every material without writing the mask it was bumped for. They are set in ApplySourceBlendState now,
+		// which is that path's surface state. A v16 stamp therefore means "rebuilt, but still wrong", which is why
+		// this is a bump and not a correction in place.
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 17);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -329,6 +339,12 @@ namespace Chisel.Import.Source.VPKTools
 				material.DisableKeyword("_ALPHATEST_ON");
 				material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
 			}
+
+			// This is the FALLBACK path - a VMT whose Source shader we have not ported, drawn by URP's own Lit or
+			// Unlit, which declare _AlphaToMask themselves. The materials that use our shaders never come through
+			// here: CreateMaterial returns at CreateSourceShaderMaterial, and ApplySourceBlendState is where their
+			// copy of this lives.
+			SetFloatIfPresent(material, "_AlphaToMask", DrawsWithAlphaToCoverage(sourceMaterial) ? 1.0f : 0.0f);
 		}
 
 		/// <summary>
@@ -1269,12 +1285,52 @@ namespace Chisel.Import.Source.VPKTools
 		/// would make it invisible. Source's own uses are opaque - the sky and debug wireframe (sky_dx9,
 		/// sky_hdr_dx9, wireframe_dx8/dx9 are the only things the public SDK sets the flag on) - so this covers what
 		/// the engine actually does with it, and refuses the case it cannot honour rather than half-doing it.
+		/// An alpha-tested material is refused for the same reason: with alpha to coverage
+		/// (<see cref="DrawsWithAlphaToCoverage"/>) its exported alpha is the coverage the hardware masks samples
+		/// with, so zeroing it would cut the surface away instead of leaving it unfogged.
 		/// </remarks>
 		internal static bool DrawsWithoutFog(VMT sourceMaterial)
 		{
 			if (sourceMaterial == null || sourceMaterial.NoFog != true)
 				return false;
-			return !sourceMaterial.HaveTranslucency && !sourceMaterial.HaveAdditiveBlending;
+			return !sourceMaterial.HaveTranslucency && !sourceMaterial.HaveAdditiveBlending && !sourceMaterial.HaveCutout;
+		}
+
+		/// <summary>
+		/// $alphatest: whether this material's cutout edge is resolved against the multisample coverage mask rather
+		/// than kept as the hard per-pixel test Source does.
+		/// </summary>
+		/// <remarks>
+		/// <para>
+		/// A DELIBERATE DEVIATION from Source, recorded here rather than left to be
+		/// discovered. Source gates alpha to coverage on its own key, $allowalphatocoverage, and only 142 of the 480
+		/// $alphatest materials in Black Mesa set it - not the chain-link fences whose stair-stepped edges are what
+		/// prompted the work. Following the key faithfully would therefore leave the complaint unanswered on the
+		/// materials it was made about, so every alpha-tested material gets it. Valve's key exists because the feature
+		/// cost something on 2004 hardware and was not always available; it is free and universal on ours.
+		/// </para>
+		/// <para>
+		/// It is a uniform rule and not a classification: nothing here decides what KIND of surface a material is, so
+		/// there is no judgement to be wrong about on another map. It also does nothing at all unless the camera is
+		/// multisampling - URP only turns the render state on through _AlphaToMaskAvailable when it is, and this
+		/// project multisamples at 4x since the move to Forward+.
+		/// </para>
+		/// <para>
+		/// URP gates it on the surface being OPAQUE as well as clipped, because a translucent surface's alpha is its
+		/// blend weight and handing that to the coverage mask would count it twice. Which surfaces those are is
+		/// decided by <see cref="ApplySourceBlendState"/>, and this is the condition of the branch that makes a
+		/// material an opaque cutout there: $alphatest beats $translucent and $additive, and loses to the two shaders
+		/// whose blend is intrinsic. DecalModulate multiplies the frame by the surface and Water blends by its own
+		/// alpha, so neither writes opacity in that channel and neither can hand it to the coverage mask.
+		/// </para>
+		/// </remarks>
+		internal static bool DrawsWithAlphaToCoverage(VMT sourceMaterial)
+		{
+			if (sourceMaterial == null || !sourceMaterial.HaveCutout)
+				return false;
+			var shader = SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName);
+			return !string.Equals(shader, "DecalModulate", System.StringComparison.OrdinalIgnoreCase)
+				&& !string.Equals(shader, "Water", System.StringComparison.OrdinalIgnoreCase);
 		}
 
 		/// <summary>
@@ -1405,6 +1461,14 @@ namespace Chisel.Import.Source.VPKTools
 
 			unityMaterial.SetFloat("_AlphaClip", sourceMaterial.HaveCutout ? 1.0f : 0.0f);
 
+			// Off unless the cutout branch below turns it on, so every other surface state clears it rather than
+			// inheriting whatever the last build left
+			SetFloatIfPresent(unityMaterial, "_AlphaToMask", 0.0f);
+
+			// $nofog belongs here, with the rest of what the surface writes: these shaders opt out of the fog by
+			// leaving 0 in the camera colour's alpha, which is a property of the blend state and not of the albedo.
+			SetFloatIfPresent(unityMaterial, "_NoFog", DrawsWithoutFog(sourceMaterial) ? 1.0f : 0.0f);
+
 			if (string.Equals(SourceShaderLookup.Canonical(sourceMaterial.MaterialTypeName), "DecalModulate",
 						  System.StringComparison.OrdinalIgnoreCase))
 			{
@@ -1423,7 +1487,9 @@ namespace Chisel.Import.Source.VPKTools
 				zWrite = 0;
 				renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
 			} else
-			if (sourceMaterial.HaveCutout)
+			// The predicate rather than HaveCutout, so that what decides the render state IS what
+			// DrawsWithAlphaToCoverage answers, and the two cannot drift apart
+			if (DrawsWithAlphaToCoverage(sourceMaterial))
 			{
 				// Alpha tested surfaces stay opaque: they write depth and are not sorted, the
 				// cutout is done with clip() in the shader.
@@ -1431,6 +1497,7 @@ namespace Chisel.Import.Source.VPKTools
 				if (sourceMaterial.AlphaTestReference.HasValue)
 					unityMaterial.SetFloat("_Cutoff", sourceMaterial.AlphaTestReference.Value);
 				renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
+				SetFloatIfPresent(unityMaterial, "_AlphaToMask", 1.0f);
 			} else
 			if (sourceMaterial.HaveAdditiveBlending)
 			{

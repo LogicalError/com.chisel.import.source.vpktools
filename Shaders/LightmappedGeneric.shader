@@ -70,6 +70,7 @@ Shader "Chisel/Source/LightmappedGeneric"
 		[HideInInspector] _SrcBlend ("__src", Float) = 1.0
 		[HideInInspector] _DstBlend ("__dst", Float) = 0.0
 		[HideInInspector] _ZWrite ("__zw", Float) = 1.0
+		[HideInInspector] _AlphaToMask ("__alphaToMask", Float) = 0.0
 		[Enum(UnityEngine.Rendering.CullMode)] _Cull ("$nocull", Float) = 2
 	}
 
@@ -97,6 +98,9 @@ Shader "Chisel/Source/LightmappedGeneric"
 			Blend [_SrcBlend] [_DstBlend]
 			ZWrite [_ZWrite]
 			Cull [_Cull]
+			// Only on the pass that draws the surface, as URP's own Lit does it: the shadow and depth passes write no
+			// colour, and the GBuffer's targets are not multisampled.
+			AlphaToMask [_AlphaToMask]
 
 			HLSLPROGRAM
 			#pragma target 4.5
