@@ -64,6 +64,7 @@ Shader "Chisel/Source/LightmappedGeneric"
 		[HideInInspector] _RimLight ("$rimlight", Float) = 0
 		[HideInInspector] _RimLightBoost ("$rimlightboost", Float) = 1
 		[HideInInspector] _RimLightExponent ("$rimlightexponent", Float) = 4
+		[HideInInspector] _NoFog ("$nofog", Float) = 0
 		[HideInInspector] _RimMask ("$rimmask", Float) = 0
 
 		[HideInInspector] _SrcBlend ("__src", Float) = 1.0

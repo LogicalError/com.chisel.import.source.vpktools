@@ -610,6 +610,11 @@ namespace Chisel.Import.Source.VPKTools
 
 			ApplyURPFallbackSurfaceState(unityMaterial, sourceMaterial);
 
+			// $nofog. Our fog is a screen-space pass, so a surface excludes itself from it the way sky faces already
+			// do: by leaving 0 in the camera colour's alpha, which SourceFogPass reads and then restores to 1.
+			if (unityMaterial.HasProperty("_NoFog"))
+				unityMaterial.SetFloat("_NoFog", DrawsWithoutFog(sourceMaterial) ? 1 : 0);
+
 			if (setNormalMapOn)
 			{
 				unityMaterial.EnableKeyword("_NORMALMAP");
@@ -1251,6 +1256,25 @@ namespace Chisel.Import.Source.VPKTools
 		internal static float PhongExponentOf(VMT sourceMaterial)
 		{
 			return (sourceMaterial.PhongExponentValue > 0) ? sourceMaterial.PhongExponentValue.Value : -1.0f;
+		}
+
+		/// <summary>
+		/// $nofog: whether this material draws unfogged. MATERIAL_VAR_NOFOG (imaterial.h, 1 &lt;&lt; 14).
+		/// </summary>
+		/// <remarks>
+		/// Our fog is a full-screen pass rather than something each shader mixes in, so a surface opts out by leaving
+		/// 0 in the camera colour's alpha - the mark sky faces already use, which SourceFogPass tests and then
+		/// restores to 1. That mark can only be carried by a material whose alpha is not also its blend weight, so a
+		/// translucent or additive material cannot ask for it: writing 0 there would not exclude it from the fog, it
+		/// would make it invisible. Source's own uses are opaque - the sky and debug wireframe (sky_dx9,
+		/// sky_hdr_dx9, wireframe_dx8/dx9 are the only things the public SDK sets the flag on) - so this covers what
+		/// the engine actually does with it, and refuses the case it cannot honour rather than half-doing it.
+		/// </remarks>
+		internal static bool DrawsWithoutFog(VMT sourceMaterial)
+		{
+			if (sourceMaterial == null || sourceMaterial.NoFog != true)
+				return false;
+			return !sourceMaterial.HaveTranslucency && !sourceMaterial.HaveAdditiveBlending;
 		}
 
 		/// <summary>

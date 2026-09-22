@@ -154,6 +154,10 @@ namespace Chisel.Import.Source.VPKTools
 		public bool?        Translucent;
 		public float?		Additive;		
 		public bool?        NoCull;
+		/// <summary>$nofog - the material is not fogged. MATERIAL_VAR_NOFOG (imaterial.h, 1 &lt;&lt; 14); the public
+		/// SDK sets it on the sky (sky_dx9, sky_hdr_dx9) and on debug wireframe, i.e. surfaces beyond the fog's reach
+		/// or not part of the world at all.</summary>
+		public bool?        NoFog;
 
 		public float?       AlphaTestReference;
 		public bool?		AlphaTest;
@@ -711,7 +715,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$nodecal":
 						case "$nodiffusebumplighting": // '1'.
 						case "$noenvmapmip": // '1'.
-						case "$nofog": // '0'. '1'.
 						case "$noise_alpha": // '0.0'.
 						case "$noise_enable": // '1'.
 						case "$noise_luminance_weight": // '0.2'.
@@ -1130,6 +1133,7 @@ namespace Chisel.Import.Source.VPKTools
 
 						//case "$nocull": // ''.expected boolean value.
 						case "$nocull": { TryParseBoolProperty(property, ref vmfMaterial.NoCull); break; }
+						case "$nofog": { TryParseBoolProperty(property, ref vmfMaterial.NoFog); break; }
 
 						case "$blendmodulatetexture": { vmfMaterial.BlendModulateTextureName = property.Value; break; }
 						case "$maskedblending": { TryParseBoolProperty(property, ref vmfMaterial.MaskedBlending); break; }

@@ -308,8 +308,11 @@ void SourceForwardFragment(
 
 	half4 color = SourceLighting(inputData, surface);
 	color.rgb = MixFog(color.rgb, inputData.fogCoord);
-	// The surface's own alpha, which is what the material's blend state expects
-	outColor = color;
+	// The surface's own alpha, which is what the material's blend state expects - except that $nofog asks not to be
+	// fogged, and our fog is a screen-space pass rather than something mixed in here. A surface opts out the way sky
+	// faces do, by leaving 0 in the alpha; SourceFogPass tests it and restores the alpha to 1. The importer only sets
+	// _NoFog where the alpha is not also the blend weight, so this cannot make a translucent surface vanish.
+	outColor = half4(color.rgb, _NoFog > 0.5h ? 0.0h : color.a);
 
 #ifdef _WRITE_RENDERING_LAYERS
 	outRenderingLayers = EncodeMeshRenderingLayer();
