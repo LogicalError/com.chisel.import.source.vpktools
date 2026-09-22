@@ -1,58 +1,60 @@
 using System;
 using System.IO;
+using UnityEditor;
 using UnityEditor.AssetImporters;
 using UnityEngine;
 
 namespace Chisel.Import.Source.VPKTools
 {
 	/// <summary>
-	/// Imports a VTF as Unity sees a texture, KEEPING VALVE'S OWN MIPMAPS.
+	/// Imports a Source texture's .png, building the mipmaps the way Source builds them
+	/// (<see cref="SourceMipmaps"/>) instead of letting Unity box-filter them.
 	/// </summary>
 	/// <remarks>
 	/// <para>
-	/// A VTF carries the mipmap chain vtex produced, and for an alpha-tested surface that chain is authored, not
-	/// filtered: the fraction of texels that pass the alpha test GROWS as the texture shrinks, so a chain-link fence
-	/// becomes more solid with distance instead of dissolving. Measured on models/props_c17/fence_alpha (512x512,
-	/// DXT5), fraction of texels at or above a 0.5 cutoff:
-	/// </para>
-	/// <code>
-	///   mip      0      1      2      3      4
-	///   Valve  0.137  0.168  0.221  0.284  0.414
-	///   box    0.137  0.114  0.121  0.060  0.001
-	/// </code>
-	/// <para>
-	/// The second row is what the texture pipeline produced before this importer: the .png it wrote could only carry
-	/// the top level, so Unity regenerated the rest with a box filter, and by mip 4 one texel in a thousand survived
-	/// the cutoff. That is the fence "becoming random pixels hanging in the air" at distance. Nothing in a shader can
-	/// undo it, because by then the information is gone; TextureImporter's mipMapsPreserveCoverage would have held the
-	/// line flat at 0.137, better but still not what the engine draws.
+	/// It claims no extension of its own. A .png is an ordinary Unity texture until something assigns this
+	/// importer to that one asset with <c>AssetDatabase.SetImporterOverride</c>, which
+	/// <see cref="Texture2DImporter.Import"/> does for the textures it writes out of VTFs. Overriding the
+	/// importer keeps the asset's path, so its GUID and every reference to it survive - which renaming the
+	/// file to .vtf would also have done, via MoveAsset, but this way the file stays a .png that anything
+	/// can open.
 	/// </para>
 	/// <para>
-	/// For a block-compressed format the data is handed to Unity UNTOUCHED - Valve's own DXT blocks, every level - so
-	/// what is drawn is bit-for-bit what vtex produced. Other formats are decoded per level.
+	/// The .png holds level 0 only. That is not a limitation worked around: Source regenerates every level
+	/// from level 0 anyway (see SourceMipmaps), so level 0 is the whole input, and keeping only it means a
+	/// hand-authored texture that never came from a VTF gets the same treatment.
 	/// </para>
 	/// <para>
-	/// Assign it to an asset with <c>AssetDatabase.SetImporterOverride&lt;SourceTextureImporter&gt;(path)</c>, which
-	/// keeps the asset's GUID, so everything already referencing the texture keeps referencing it.
+	/// NORMAL MAPS DO NOT COME THROUGH HERE. <see cref="Texture2DImporter.MarkAsNormalMap"/> clears the
+	/// override and lets Unity's own importer have them back, because Unity's NormalMap type re-encodes
+	/// the texture (DXT5nm puts X in alpha) and every shader in the project unpacks that convention. The
+	/// aliasing this exists to fix is an alpha-test problem, and a normal map has no alpha test, so the
+	/// bounded change is the one worth making first.
 	/// </para>
 	/// </remarks>
-	[ScriptedImporter(kVersion, "vtf")]
+	[ScriptedImporter(kVersion, null, new[] { "png" })]
 	public sealed class SourceTextureImporter : ScriptedImporter
 	{
-		/// <summary>Raise to re-import every VTF: Unity re-runs an importer whose version changed.</summary>
+		/// <summary>Raise to re-import every texture this importer owns: Unity re-runs a changed importer.</summary>
 		public const int kVersion = 1;
 
-		[Tooltip("The texels are gamma encoded. Decided by USE - a material claiming the texture for a colour slot - " +
-				 "because nothing in the file can say; see Texture2DImporter.MarkAsColor.")]
+		[Tooltip("The texels are gamma encoded. Decided by USE - a material claiming the texture for a colour " +
+				 "slot - because nothing in the file can say; see Texture2DImporter.MarkAsColor.")]
 		public bool sRGB;
 
-		[Tooltip("Treat as a normal map. A VTF's own NORMAL flag is set on many textures that are not one, so this " +
-				 "follows the VMT's slot rather than the file's flag.")]
-		public bool normalMap;
+		[Tooltip("Build the mip chain. Off for a texture the VTF flagged NOMIP.")]
+		public bool generateMipmaps = true;
 
-		public FilterMode      filterMode = FilterMode.Bilinear;
-		public TextureWrapMode wrapMode   = TextureWrapMode.Repeat;
+		[Tooltip("Compress to DXT once the levels are built. Off keeps RGBA32, which costs four times the memory.")]
+		public bool compress = true;
+
+		public FilterMode filterMode = FilterMode.Bilinear;
 		[Range(1, 16)] public int anisoLevel = 1;
+
+		// Per axis, because a VTF clamps S and T independently (TEXTUREFLAGS_CLAMPS/CLAMPT) and collapsing
+		// them to one mode would wrap a texture that was authored clamped, tiling its edge across a face.
+		public TextureWrapMode wrapU = TextureWrapMode.Repeat;
+		public TextureWrapMode wrapV = TextureWrapMode.Repeat;
 
 		public override void OnImportAsset(AssetImportContext ctx)
 		{
@@ -67,66 +69,70 @@ namespace Chisel.Import.Source.VPKTools
 				return;
 			}
 
-			if (!VtfLevels.TryRead(bytes, out var levels, out var error))
+			// LoadImage needs a texture to load into; its size and format are replaced by the file's.
+			var source = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false, linear: true);
+			if (!source.LoadImage(bytes, markNonReadable: false))
 			{
-				ctx.LogImportError($"{Path.GetFileName(ctx.assetPath)}: {error}");
+				UnityEngine.Object.DestroyImmediate(source);
+				ctx.LogImportError($"{Path.GetFileName(ctx.assetPath)} is not a readable image.");
 				return;
 			}
 
-			var texture = Build(levels, ctx);
-			if (texture == null)
+			int width = source.width, height = source.height;
+			var level0 = source.GetPixels32();
+			UnityEngine.Object.DestroyImmediate(source);
+
+			// Valve's resampler indexes the source with `& (width - 1)`, which is only a wrap on a power of
+			// two. Rather than produce quietly wrong texels, a texture that is not one keeps a single level.
+			bool powerOfTwo = width > 0 && height > 0 &&
+							  (width & (width - 1)) == 0 && (height & (height - 1)) == 0;
+			bool wantMips = generateMipmaps && powerOfTwo && width > 1 && height > 1;
+			if (generateMipmaps && !powerOfTwo)
+				ctx.LogImportWarning($"{width}x{height} is not a power of two, so Source's filter cannot wrap " +
+									 "over it; imported without mipmaps.");
+
+			Color32[][] levels;
+			try
+			{
+				levels = wantMips ? SourceMipmaps.Generate(level0, width, height, normalMap: false)
+								  : new[] { level0 };
+			}
+			catch (Exception exception)
+			{
+				ctx.LogImportError($"Could not build mipmaps for {Path.GetFileName(ctx.assetPath)}: {exception.Message}");
 				return;
+			}
+
+			var texture = new Texture2D(width, height, TextureFormat.RGBA32, levels.Length, linear: !sRGB);
+			for (int level = 0; level < levels.Length; level++)
+				texture.SetPixelData(levels[level], level);
+			texture.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+
+			if (compress)
+			{
+				// Alpha decides the format exactly as Unity's own importer would: a texture with no alpha
+				// spends half the memory in DXT1. Every level is compressed, not just level 0.
+				bool hasAlpha = false;
+				foreach (var texel in levels[0])
+				{
+					if (texel.a == 255)
+						continue;
+					hasAlpha = true;
+					break;
+				}
+				EditorUtility.CompressTexture(texture, hasAlpha ? TextureFormat.DXT5 : TextureFormat.DXT1,
+											  TextureCompressionQuality.Normal);
+			}
 
 			texture.name       = Path.GetFileNameWithoutExtension(ctx.assetPath);
 			texture.filterMode = filterMode;
-			texture.wrapMode   = wrapMode;
 			texture.anisoLevel = anisoLevel;
+			texture.wrapModeU  = wrapU;
+			texture.wrapModeV  = wrapV;
 			texture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
 
 			ctx.AddObjectToAsset("texture", texture);
 			ctx.SetMainObject(texture);
-		}
-
-		Texture2D Build(VtfLevels levels, AssetImportContext ctx)
-		{
-			// Unity stores mip 0 first and each level after it; a VTF stores the SMALLEST first and the largest last.
-			// Getting that backwards produces a texture that is sharp close up and wrong at distance, or vice versa,
-			// and looks like a filtering bug rather than an ordering one - which is why VtfLevels returns them in
-			// Unity's order and a test pins it.
-			if (levels.IsBlockCompressed)
-			{
-				var format = levels.BlockFormat;
-				if (!SystemInfo.SupportsTextureFormat(format))
-				{
-					ctx.LogImportWarning($"{format} is not supported here; decoding instead.");
-					return BuildDecoded(levels);
-				}
-
-				var texture = new Texture2D(levels.Width, levels.Height, format, levels.Count, linear: !sRGB);
-				var raw = levels.RawLargestFirst();
-				var data = texture.GetRawTextureData<byte>();
-				if (data.Length != raw.Length)
-				{
-					// Unity's own idea of how big the chain should be disagreeing with the file's is the one failure
-					// that would silently corrupt every texture, so it refuses rather than uploading a guess.
-					ctx.LogImportError($"mip chain is {raw.Length} bytes, Unity expects {data.Length} " +
-									   $"({levels.Width}x{levels.Height}, {levels.Count} levels, {format}). Not uploading.");
-					UnityEngine.Object.DestroyImmediate(texture);
-					return null;
-				}
-				data.CopyFrom(raw);
-				return texture;
-			}
-
-			return BuildDecoded(levels);
-		}
-
-		Texture2D BuildDecoded(VtfLevels levels)
-		{
-			var texture = new Texture2D(levels.Width, levels.Height, TextureFormat.RGBA32, levels.Count, linear: !sRGB);
-			for (int level = 0; level < levels.Count; level++)
-				texture.SetPixelData(levels.DecodeLevel(level), level);
-			return texture;
 		}
 	}
 }

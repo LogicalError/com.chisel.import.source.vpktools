@@ -19,7 +19,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
 		// 2: I8, A8 and IA88 textures read as Direct3D 9 samples them (they were (I, 1, 1) and (I, A, 1))
-		public static readonly (string generator, int version) GeneratedVersion = ("texture", 2);
+		public static readonly (string generator, int version) GeneratedVersion = ("texture", 3);
 
 		static bool IsCurrent(Texture texture)
 		{
@@ -61,6 +61,11 @@ namespace Chisel.Import.Source.VPKTools
 				// Import png file as an asset
 				var assetPath = UnityAssets.GetAssetPath(frameNames[i]);
 				AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUncompressedImport);
+
+				// Hand the asset over to our own importer, which rebuilds the mip chain the way Source
+				// does (see SourceMipmaps) instead of letting Unity box-filter it. The asset keeps its
+				// path, so its GUID and every reference to it survive; only the importer changes.
+				AssetDatabase.SetImporterOverride<SourceTextureImporter>(assetPath);
 
 				// Configure the importer (can only be done after importing once) and re-import
 				ConfigureTextureImporter(sourceTexture, assetPath);
@@ -491,6 +496,15 @@ namespace Chisel.Import.Source.VPKTools
 			if (string.IsNullOrEmpty(assetPath))
 				return;
 
+			// Textures written out of a VTF are owned by SourceTextureImporter, not by Unity's, so the
+			// claim has to be set on whichever one has the asset. Reaching only TextureImporter here would
+			// not fail - it would return quietly, and every Source texture would stay linear.
+			if (AssetImporter.GetAtPath(assetPath) is SourceTextureImporter)
+			{
+				SetSourceImporterSRGB(assetPath);
+				return;
+			}
+
 			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter textureImporter)
 				return;
 
@@ -523,6 +537,14 @@ namespace Chisel.Import.Source.VPKTools
 			var assetPath = AssetDatabase.GetAssetPath(texture);
 			if (string.IsNullOrEmpty(assetPath))
 				return;
+
+			// A normal map goes back to Unity's own importer. SourceTextureImporter deliberately does not
+			// handle one: Unity's NormalMap type re-encodes the texture (DXT5nm keeps X in alpha) and every
+			// shader in the project unpacks that convention, so reproducing it would be a second encoder to
+			// keep in step for no gain - the mip filtering this is all for is an alpha-test problem, and a
+			// normal map has no alpha test.
+			if (AssetImporter.GetAtPath(assetPath) is SourceTextureImporter)
+				AssetDatabase.ClearImporterOverride(assetPath);
 
 			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter textureImporter)
 				return;
@@ -614,6 +636,63 @@ namespace Chisel.Import.Source.VPKTools
 			}
 		}
 
+		/// <summary>
+		/// The same flags <see cref="ConfigureTextureImporter"/> reads, applied to our own importer.
+		/// </summary>
+		/// <remarks>
+		/// Written through SerializedObject rather than by assigning the fields. A ScriptedImporter instance
+		/// is recreated around an import, so a plain field assignment can be dropped without saying so;
+		/// SerializedObject writes the .meta, which is what the next import actually reads.
+		/// </remarks>
+		static void ConfigureSourceImporter(VTF sourceTexture, string assetPath)
+		{
+			if (AssetImporter.GetAtPath(assetPath) is not SourceTextureImporter importer)
+				return;
+
+			var filterMode = FilterMode.Bilinear;
+			int aniso = 1;
+			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_POINTSAMPLE) != (VTFImageFlag)0) filterMode = FilterMode.Point;
+			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_TRILINEAR) != (VTFImageFlag)0) filterMode = FilterMode.Trilinear;
+			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ANISOTROPIC) != (VTFImageFlag)0)
+			{
+				filterMode = FilterMode.Trilinear;
+				aniso = 2;
+			}
+
+			var serialized = new SerializedObject(importer);
+			serialized.FindProperty("generateMipmaps").boolValue =
+				(sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_NOMIP) == (VTFImageFlag)0;
+			serialized.FindProperty("filterMode").enumValueIndex = (int)filterMode;
+			serialized.FindProperty("anisoLevel").intValue = aniso;
+			serialized.FindProperty("wrapU").enumValueIndex =
+				(int)(((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_CLAMPS) != (VTFImageFlag)0)
+					  ? TextureWrapMode.Clamp : TextureWrapMode.Repeat);
+			serialized.FindProperty("wrapV").enumValueIndex =
+				(int)(((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_CLAMPT) != (VTFImageFlag)0)
+					  ? TextureWrapMode.Clamp : TextureWrapMode.Repeat);
+			serialized.ApplyModifiedPropertiesWithoutUndo();
+
+			// Only ever called for pixels Import has just written from the VTF.
+			importer.userData = UserDataForRewrittenPixels(importer.userData);
+			importer.SaveAndReimport();
+		}
+
+		/// <summary>Sets the colour claim on our importer; see <see cref="MarkAsColor"/>.</summary>
+		static void SetSourceImporterSRGB(string assetPath)
+		{
+			if (AssetImporter.GetAtPath(assetPath) is not SourceTextureImporter importer)
+				return;
+
+			var serialized = new SerializedObject(importer);
+			var sRGB = serialized.FindProperty("sRGB");
+			if (sRGB == null || sRGB.boolValue)
+				return;                                     // idempotent: every material using it claims it
+
+			sRGB.boolValue = true;
+			serialized.ApplyModifiedPropertiesWithoutUndo();
+			importer.SaveAndReimport();
+		}
+
 		public static void ConfigureTextureImporter(VTF sourceTexture, string destinationPath)
 		{
 			var assetPath = Path.Combine("Assets", Path.GetRelativePath(Application.dataPath, destinationPath));
@@ -624,6 +703,12 @@ namespace Chisel.Import.Source.VPKTools
 
 
 			//Debug.Log($"assetpath: {assetPath}");
+			if (AssetImporter.GetAtPath(assetPath) is SourceTextureImporter)
+			{
+				ConfigureSourceImporter(sourceTexture, assetPath);
+				return;
+			}
+
 			TextureImporter textureImporter = TextureImporter.GetAtPath(assetPath) as TextureImporter;
 			if (textureImporter == null)
 				return;
