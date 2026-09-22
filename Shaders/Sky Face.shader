@@ -3,10 +3,18 @@
 // draws one (_SourceSky3D), the 2D sky's cubemap otherwise.
 //
 // It is a BACKDROP: it draws only where nothing else has, and never hides what is behind it. Its depth goes to the far
-// plane and it writes none, so every other surface wins - the 3D skybox miniature above all, which sits behind these
-// faces in the level and used to be sliced up by them. Source has the same effect for a different reason: it draws the
-// sky view first over the whole frame and then skips sky faces entirely while drawing the world, so whatever the sky
-// left behind stays. The properties are the 2D sky's (Skybox/Cubemap Skybox).
+// plane, so every other surface wins - the 3D skybox miniature above all, which sits behind these faces in the level
+// and used to be sliced up by them. Source has the same effect for a different reason: it draws the sky view first over
+// the whole frame and then skips sky faces entirely while drawing the world, so whatever the sky left behind stays. The
+// properties are the 2D sky's (Skybox/Cubemap Skybox).
+//
+// EXCEPT WHEN THE SKY VIEW ITSELF IS DRAWING (_SourceSkyIsSkyView), where a sky face is an ordinary opaque surface that
+// writes its own depth. A 3D skybox is built in a room sealed off by sky faces, and Source's sky view never sees past
+// them because it submits that room's area and no other (CSkyboxView sets the area bits to the skybox's alone,
+// viewrender.cpp:4742-4745, from engine->GetArea of sky_camera's origin, SkyCamera.cpp:106). We cannot reproduce that
+// without vbsp's areas, but we do not have to: the room is sealed, so every ray out of the sky camera meets one of its
+// walls, and a wall that writes depth hides what is beyond it exactly as the area restriction would. Making these faces
+// a backdrop for every view is what let the level show up in the vista.
 Shader "Chisel/Source/Sky Face"
 {
     Properties
@@ -40,7 +48,9 @@ Shader "Chisel/Source/Sky Face"
         {
             Name "SkyFace"
             Tags { "LightMode"="UniversalForwardOnly" }
-            ZWrite Off
+            // On, so the sky view's walls can seal. In every other view the depth written is the far plane, which is
+            // behind everything and hides nothing - the backdrop behaves as it did when this pass wrote no depth.
+            ZWrite On
             ZTest LEqual
             Cull Back
 
@@ -52,6 +62,7 @@ Shader "Chisel/Source/Sky Face"
             TEXTURECUBE(_Tex); SAMPLER(sampler_Tex);
             TEXTURE2D(_SourceSky3D); SAMPLER(sampler_SourceSky3D);
             float _SourceSky3DEnabled;
+            float _SourceSkyIsSkyView;
 
             struct Varyings
             {
@@ -64,12 +75,17 @@ Shader "Chisel/Source/Sky Face"
                 Varyings output;
                 output.positionWS = TransformObjectToWorld(input.positionOS.xyz);
                 output.positionCS = TransformWorldToHClip(output.positionWS);
-                // Just inside the far plane: it passes against a cleared depth buffer and loses to everything drawn
-                #if UNITY_REVERSED_Z
-                    output.positionCS.z = 1e-6f * output.positionCS.w;
-                #else
-                    output.positionCS.z = output.positionCS.w * (1.0f - 1e-6f);
-                #endif
+                // The sky view keeps the face where it is, so the sealed room's own walls hide the level beyond them.
+                // Every other view pushes it just inside the far plane, where it passes against a cleared depth buffer
+                // and loses to everything drawn.
+                if (_SourceSkyIsSkyView < 0.5)
+                {
+                    #if UNITY_REVERSED_Z
+                        output.positionCS.z = 1e-6f * output.positionCS.w;
+                    #else
+                        output.positionCS.z = output.positionCS.w * (1.0f - 1e-6f);
+                    #endif
+                }
                 return output;
             }
 
@@ -104,15 +120,21 @@ Shader "Chisel/Source/Sky Face"
             #pragma vertex Vert
             #pragma fragment Frag
 
+            float _SourceSkyIsSkyView;
+
             float4 Vert(Attributes input) : SV_POSITION
             {
-                // A backdrop contributes no depth of its own, here as in the pass above
+                // ZWrite is off here, so this pass never seals anything by itself; the depth still follows the pass
+                // above so that anything reading the camera's depth sees a sky face where that pass put it.
                 float4 positionCS = TransformObjectToHClip(input.positionOS.xyz);
-                #if UNITY_REVERSED_Z
-                    positionCS.z = 1e-6f * positionCS.w;
-                #else
-                    positionCS.z = positionCS.w * (1.0f - 1e-6f);
-                #endif
+                if (_SourceSkyIsSkyView < 0.5)
+                {
+                    #if UNITY_REVERSED_Z
+                        positionCS.z = 1e-6f * positionCS.w;
+                    #else
+                        positionCS.z = positionCS.w * (1.0f - 1e-6f);
+                    #endif
+                }
                 return positionCS;
             }
 
