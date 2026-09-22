@@ -1,20 +1,27 @@
 // A Source sky face: a face of the level textured with the sky (toolsskybox). The game draws nothing there, so the sky
 // shows through. Here the face draws what the sky shows at that pixel - the 3D skybox's view when a SourceSkyCamera
-// draws one (_SourceSky3D), the 2D sky's cubemap otherwise.
+// drew one (_SourceSky3D), the 2D sky's cubemap otherwise. The properties are the 2D sky's (Skybox/Cubemap Skybox).
 //
-// It is a BACKDROP: it draws only where nothing else has, and never hides what is behind it. Its depth goes to the far
-// plane, so every other surface wins - the 3D skybox miniature above all, which sits behind these faces in the level
-// and used to be sliced up by them. Source has the same effect for a different reason: it draws the sky view first over
-// the whole frame and then skips sky faces entirely while drawing the world, so whatever the sky left behind stays. The
-// properties are the 2D sky's (Skybox/Cubemap Skybox).
+// IT IS AN ORDINARY OPAQUE SURFACE. It writes its depth and hides what is behind it, in every view. That is not a
+// detail: a Source map is sealed, and a sky face is one of the solids that seals it, so everything beyond one is
+// something the player is never meant to see. Source keeps it out by visibility instead - it draws the sky view over
+// the whole frame first, then skips sky faces while drawing the world, and its areas and PVS keep the rest of the map
+// out of the sky view (CSkyboxView submits the sky camera's area alone, viewrender.cpp, from engine->GetArea of
+// sky_camera's origin, SkyCamera.cpp). We have no vbsp areas, but we do not need them: the rooms are sealed, so a wall
+// that writes depth hides what is beyond it exactly as the area restriction would.
 //
-// EXCEPT WHEN THE SKY VIEW ITSELF IS DRAWING (_SourceSkyIsSkyView), where a sky face is an ordinary opaque surface that
-// writes its own depth. A 3D skybox is built in a room sealed off by sky faces, and Source's sky view never sees past
-// them because it submits that room's area and no other (CSkyboxView sets the area bits to the skybox's alone,
-// viewrender.cpp:4742-4745, from engine->GetArea of sky_camera's origin, SkyCamera.cpp:106). We cannot reproduce that
-// without vbsp's areas, but we do not have to: the room is sealed, so every ray out of the sky camera meets one of its
-// walls, and a wall that writes depth hides what is beyond it exactly as the area restriction would. Making these faces
-// a backdrop for every view is what let the level show up in the vista.
+// It was a backdrop once - depth at the far plane, hiding nothing - so that the 3D skybox miniature, which is real
+// geometry in the level, would not be sliced up by the sky faces standing in front of it. That was the wrong fix for
+// it. Sealing removes the slicing too, because a sealed play area never sees the miniature directly at all; it sees it
+// through these faces, which is what the game shows. And a backdrop breaks the miniature from the inside: a map's
+// 3D skybox is a box of toolsskybox brushes around its sky_camera, and the backdrops it paints inside it are
+// vista/surfacetension_skyline_0*, UnlitGeneric with "$translucent" "1" - which can never occlude anything. A
+// translucent card in front of a wall that also refuses to occlude shows the level two kilometres away through both.
+//
+// ALPHA 0 MARKS THE PIXEL AS SKY, for Chisel/Source/Fog, which never fogs the sky - Source's world fog is for the
+// world, and the 3D skybox carries its own (CSkyboxView::Enable3dSkyboxFog). The fog cannot read that off the depth
+// any more: a sky face now writes the depth of a wall a few metres away, and fogging it by that distance would paint
+// the level's haze over the vista. The marker has to be written here, where the surface knows what it is.
 Shader "Chisel/Source/Sky Face"
 {
     Properties
@@ -48,8 +55,6 @@ Shader "Chisel/Source/Sky Face"
         {
             Name "SkyFace"
             Tags { "LightMode"="UniversalForwardOnly" }
-            // On, so the sky view's walls can seal. In every other view the depth written is the far plane, which is
-            // behind everything and hides nothing - the backdrop behaves as it did when this pass wrote no depth.
             ZWrite On
             ZTest LEqual
             Cull Back
@@ -62,7 +67,6 @@ Shader "Chisel/Source/Sky Face"
             TEXTURECUBE(_Tex); SAMPLER(sampler_Tex);
             TEXTURE2D(_SourceSky3D); SAMPLER(sampler_SourceSky3D);
             float _SourceSky3DEnabled;
-            float _SourceSkyIsSkyView;
 
             struct Varyings
             {
@@ -75,17 +79,6 @@ Shader "Chisel/Source/Sky Face"
                 Varyings output;
                 output.positionWS = TransformObjectToWorld(input.positionOS.xyz);
                 output.positionCS = TransformWorldToHClip(output.positionWS);
-                // The sky view keeps the face where it is, so the sealed room's own walls hide the level beyond them.
-                // Every other view pushes it just inside the far plane, where it passes against a cleared depth buffer
-                // and loses to everything drawn.
-                if (_SourceSkyIsSkyView < 0.5)
-                {
-                    #if UNITY_REVERSED_Z
-                        output.positionCS.z = 1e-6f * output.positionCS.w;
-                    #else
-                        output.positionCS.z = output.positionCS.w * (1.0f - 1e-6f);
-                    #endif
-                }
                 return output;
             }
 
@@ -93,7 +86,7 @@ Shader "Chisel/Source/Sky Face"
             {
                 UNITY_BRANCH
                 if (_SourceSky3DEnabled > 0.5)
-                    return SAMPLE_TEXTURE2D(_SourceSky3D, sampler_SourceSky3D, GetNormalizedScreenSpaceUV(input.positionCS));
+                    return half4(SAMPLE_TEXTURE2D(_SourceSky3D, sampler_SourceSky3D, GetNormalizedScreenSpaceUV(input.positionCS)).rgb, 0);
 
                 // The 2D sky along the view, as Skybox/Cubemap Skybox draws it
                 float3 direction = normalize(input.positionWS - GetCameraPositionWS());
@@ -102,7 +95,7 @@ Shader "Chisel/Source/Sky Face"
                 direction = float3(direction.x * cosAngle - direction.z * sinAngle, direction.y, direction.x * sinAngle + direction.z * cosAngle);
                 half4 color = SAMPLE_TEXTURECUBE(_Tex, sampler_Tex, direction);
                 color.rgb *= _Tint.rgb * _Exposure;
-                return half4(color.rgb, 1);
+                return half4(color.rgb, 0);
             }
             ENDHLSL
         }
@@ -111,7 +104,7 @@ Shader "Chisel/Source/Sky Face"
         {
             Name "DepthOnly"
             Tags { "LightMode"="DepthOnly" }
-            ZWrite Off
+            ZWrite On
             ColorMask R
             Cull Back
 
@@ -120,27 +113,67 @@ Shader "Chisel/Source/Sky Face"
             #pragma vertex Vert
             #pragma fragment Frag
 
-            float _SourceSkyIsSkyView;
-
             float4 Vert(Attributes input) : SV_POSITION
             {
-                // ZWrite is off here, so this pass never seals anything by itself; the depth still follows the pass
-                // above so that anything reading the camera's depth sees a sky face where that pass put it.
-                float4 positionCS = TransformObjectToHClip(input.positionOS.xyz);
-                if (_SourceSkyIsSkyView < 0.5)
-                {
-                    #if UNITY_REVERSED_Z
-                        positionCS.z = 1e-6f * positionCS.w;
-                    #else
-                        positionCS.z = positionCS.w * (1.0f - 1e-6f);
-                    #endif
-                }
-                return positionCS;
+                return TransformObjectToHClip(input.positionOS.xyz);
             }
 
             half Frag() : SV_Target
             {
                 return 0;
+            }
+            ENDHLSL
+        }
+
+        // Without this pass a sky face is missing from the camera's depth texture whenever URP runs a depth-NORMALS
+        // prepass rather than a plain depth one, which the Decal renderer feature is enough to bring about. A sky face
+        // then seals the frame while writing nothing any depth reader can see, and everything drawn over it - a
+        // translucent backdrop card in the 3D skybox, say - is measured against whatever lies beyond the face instead
+        // of against the face. Measured: 2.27% of the sky view came back as far-plane depth in a room that is sealed.
+        Pass
+        {
+            Name "DepthNormalsOnly"
+            Tags { "LightMode"="DepthNormalsOnly" }
+            ZWrite On
+            Cull Back
+
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex Vert
+            #pragma fragment Frag
+            #pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
+
+            struct NormalAttributes
+            {
+                float4 positionOS : POSITION;
+                float3 normalOS   : NORMAL;
+            };
+
+            struct NormalVaryings
+            {
+                float4 positionCS : SV_POSITION;
+                float3 normalWS   : TEXCOORD0;
+            };
+
+            NormalVaryings Vert(NormalAttributes input)
+            {
+                NormalVaryings output;
+                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                output.normalWS   = TransformObjectToWorldNormal(input.normalOS);
+                return output;
+            }
+
+            // Encoded the way URP's own depth-normals passes encode it, as ChiselSourceUnlitPasses.hlsl does
+            half4 Frag(NormalVaryings input) : SV_Target
+            {
+            #if defined(_GBUFFER_NORMALS_OCT)
+                float3 normalWS = normalize(input.normalWS);
+                float2 octNormalWS = PackNormalOctQuadEncode(normalWS);
+                float2 remappedOctNormalWS = saturate(octNormalWS * 0.5 + 0.5);
+                return half4(half3(PackFloat2To888(remappedOctNormalWS)), 0.0);
+            #else
+                return half4(NormalizeNormalPerPixel(input.normalWS), 0.0);
+            #endif
             }
             ENDHLSL
         }
