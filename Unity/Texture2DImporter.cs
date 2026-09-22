@@ -507,6 +507,19 @@ namespace Chisel.Import.Source.VPKTools
 			if (string.IsNullOrEmpty(assetPath))
 				return;
 
+			// A frame SET is one texture, so the whole set is claimed, not the frame a material happened
+			// to name. An animated VTF is written out as name[0].png, name[1].png ... and a material binds
+			// frame 0 only, so promoting by reference left the rest linear - one texture living in two
+			// colour spaces. Measured on this project: of the 87 imported textures no material references,
+			// 59 are monitor_screensaver frames 1..N whose frame 0 IS claimed as colour.
+			//
+			// It is invisible today only because the sole animated path implemented is the normal-map one,
+			// where linear is correct. The moment $basetexture takes an AnimatedTexture proxy - what Source
+			// uses for monitor screens - those frames render far too bright, and it would present as a
+			// flicker as the animation cycles rather than as a colour-space fault, so it would be hunted in
+			// the wrong place entirely.
+			MarkFrameSiblingsAsColor(assetPath);
+
 			// Textures written out of a VTF are owned by SourceTextureImporter, not by Unity's, so the
 			// claim has to be set on whichever one has the asset. Reaching only TextureImporter here would
 			// not fail - it would return quietly, and every Source texture would stay linear.
@@ -726,6 +739,39 @@ namespace Chisel.Import.Source.VPKTools
 			property.floatValue = reference;
 			serialized.ApplyModifiedPropertiesWithoutUndo();
 			importer.SaveAndReimport();
+		}
+
+		/// <summary>Claims every OTHER frame of an animated texture's set as colour; see <see cref="MarkAsColor"/>.</summary>
+		static void MarkFrameSiblingsAsColor(string assetPath)
+		{
+			// name[3].png -> name, 3. Anything else is not a frame set and has no siblings.
+			var fileName = Path.GetFileNameWithoutExtension(assetPath);
+			int open = fileName.LastIndexOf('[');
+			if (open <= 0 || !fileName.EndsWith("]"))
+				return;
+			var stem = fileName.Substring(0, open);
+			var directory = Path.GetDirectoryName(assetPath);
+			if (string.IsNullOrEmpty(directory))
+				return;
+
+			// Walk outward until a frame is missing, which is how Import itself finds the set.
+			for (int frame = 0; ; frame++)
+			{
+				var sibling = Path.Combine(directory, stem + "[" + frame + "].png").Replace(Path.DirectorySeparatorChar, '/');
+				if (sibling == assetPath)
+					continue;                       // the caller is already doing this one
+				if (AssetDatabase.LoadAssetAtPath<Texture2D>(sibling) == null)
+					break;
+				if (AssetImporter.GetAtPath(sibling) is SourceTextureImporter)
+					SetSourceImporterSRGB(sibling);
+				else if (AssetImporter.GetAtPath(sibling) is TextureImporter siblingImporter &&
+						 !siblingImporter.sRGBTexture &&
+						 siblingImporter.textureType != TextureImporterType.NormalMap)
+				{
+					siblingImporter.sRGBTexture = true;
+					siblingImporter.SaveAndReimport();
+				}
+			}
 		}
 
 		/// <summary>Sets the colour claim on our importer; see <see cref="MarkAsColor"/>.</summary>
