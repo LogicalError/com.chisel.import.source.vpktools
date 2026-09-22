@@ -25,7 +25,10 @@ namespace Chisel.Import.Source.VPKTools
 		// every material without writing the mask it was bumped for. They are set in ApplySourceBlendState now,
 		// which is that path's surface state. A v16 stamp therefore means "rebuilt, but still wrong", which is why
 		// this is a bump and not a correction in place.
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 17);
+		// 18: _OpaqueAlpha, so a plain opaque surface writes 1 into the frame's alpha instead of whatever mask its
+		// base texture carries. Every material built before this exports that mask, and ~2200 of them hold values
+		// low enough to read as "do not fog me".
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 18);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -679,6 +682,30 @@ namespace Chisel.Import.Source.VPKTools
 			// coverage or the shape thins away with distance (Texture2DImporter.MarkAsAlphaTested).
 			if (mainTexture != null && sourceMaterial.HaveCutout)
 				Texture2DImporter.MarkAsAlphaTested(mainTexture, sourceMaterial.AlphaTestReference ?? 0.5f);
+
+			// EyeRefract. An eye material names no $basetexture at all - $iris carries the iris, the pupil
+			// AND the sclera - so the line above found nothing and, before Chisel/Source/EyeRefract
+			// existed, every eye in the game fell through to a base-texture shader and drew pure white.
+			if (unityMaterial.HasProperty("_Iris"))
+			{
+				SetMaterialTexture(gameResources, unityMaterial, "_Iris", sourceMaterial.IrisTextureName);
+				SetMaterialTexture(gameResources, unityMaterial, "_CorneaTexture", sourceMaterial.CorneaTextureName, warnIfMissing: false);
+				SetMaterialTexture(gameResources, unityMaterial, "_AmbientOcclTexture", sourceMaterial.AmbientOcclusionTextureName, warnIfMissing: false);
+				// $ambientocclcolor tints the occluded side of the eye; Source's own default is 0.33 grey.
+				if (sourceMaterial.AmbientOcclusionColor != null)
+					unityMaterial.SetColor("_AmbientOcclColor", ShaderColor(new Color(
+						sourceMaterial.AmbientOcclusionColor.r,
+						sourceMaterial.AmbientOcclusionColor.g,
+						sourceMaterial.AmbientOcclusionColor.b, 1)));
+				if (sourceMaterial.EyeballRadius.HasValue)
+					SetFloatIfPresent(unityMaterial, "_EyeballRadius", sourceMaterial.EyeballRadius.Value);
+				if (sourceMaterial.Dilation.HasValue)
+					SetFloatIfPresent(unityMaterial, "_Dilation", sourceMaterial.Dilation.Value);
+				if (sourceMaterial.CorneaBumpStrength.HasValue)
+					SetFloatIfPresent(unityMaterial, "_CorneaBumpStrength", sourceMaterial.CorneaBumpStrength.Value);
+				if (sourceMaterial.ParallaxStrength.HasValue)
+					SetFloatIfPresent(unityMaterial, "_ParallaxStrength", sourceMaterial.ParallaxStrength.Value);
+			}
 			SetMaterialColor(unityMaterial, ShaderColor(ModulationColorOf(sourceMaterial)));
 
 			// UnlitTwoTexture: $texture2 is multiplied over the base texture, with a transform of its own.
@@ -1466,9 +1493,10 @@ namespace Chisel.Import.Source.VPKTools
 
 			unityMaterial.SetFloat("_AlphaClip", sourceMaterial.HaveCutout ? 1.0f : 0.0f);
 
-			// Off unless the cutout branch below turns it on, so every other surface state clears it rather than
+			// Off unless the branches below turn them on, so every other surface state clears them rather than
 			// inheriting whatever the last build left
 			SetFloatIfPresent(unityMaterial, "_AlphaToMask", 0.0f);
+			SetFloatIfPresent(unityMaterial, "_OpaqueAlpha", 0.0f);
 
 			// $nofog belongs here, with the rest of what the surface writes: these shaders opt out of the fog by
 			// leaving 0 in the camera colour's alpha, which is a property of the blend state and not of the albedo.
@@ -1517,6 +1545,23 @@ namespace Chisel.Import.Source.VPKTools
 				blendTo = UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha;
 				zWrite = 0;
 				renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+			}
+			else
+			{
+				// A PLAIN OPAQUE SURFACE WRITES ALPHA 1, whatever its base texture's alpha channel holds.
+				//
+				// In Source that channel is never opacity on a material that is neither $translucent nor $alphatest -
+				// it is a mask for whatever feature claims it ($selfillum, $basealphaenvmapmask,
+				// $basemapalphaphongmask, $detail) or it is unused. Source never noticed, because its fog is mixed in
+				// per pixel by each shader. Ours is a screen-space pass that READS the camera colour's alpha, so
+				// exporting a mask there quietly excluded those surfaces from the fog.
+				//
+				// A census of both VPKs: of 11070 opaque VMTs, 2673 have a base texture with an alpha
+				// channel and NOT ONE of them claims that alpha as opacity. Sampling 60 of them, 85% have texels
+				// below 0.5. The worst are worldspawn walls - concrete_wall_c2a2_deeptnl_01a has a mean alpha of
+				// 25/255, with 98.5% of its texels below 0.5 and 34.7% below even the fog's 0.05 threshold, so
+				// tightening that threshold could never have closed this.
+				SetFloatIfPresent(unityMaterial, "_OpaqueAlpha", 1.0f);
 			}
 
 			unityMaterial.SetFloat("_SrcBlend", (int)blend);

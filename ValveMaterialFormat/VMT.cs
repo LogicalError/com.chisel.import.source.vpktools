@@ -78,6 +78,18 @@ namespace Chisel.Import.Source.VPKTools
 		public RGBColor		SelfIlluminationColor;
 		public float?       SelfIlluminationAlphaEnvMapMask;
 
+		// EyeRefract. An eye material has NO $basetexture: $iris carries the iris, pupil AND sclera, which
+		// is why one falls through to a base-texture shader as pure white.
+		public string		IrisTextureName;
+		public string		CorneaTextureName;
+		public string		AmbientOcclusionTextureName;
+		public RGBColor		AmbientOcclusionColor;
+		public float?		EyeballRadius;
+		public float?		Dilation;
+		public float?		Glossiness;
+		public float?		CorneaBumpStrength;
+		public float?		ParallaxStrength;
+
 		public bool?		Phong;
 		public string       PhongWarpTextureName;
 		public string		PhongExponentTextureName;	
@@ -201,6 +213,9 @@ namespace Chisel.Import.Source.VPKTools
 			if (SelfIlluminationMask != null) outputTextureNames.Add(SelfIlluminationMask);
 			if (SelfIlluminationTexture != null) outputTextureNames.Add(SelfIlluminationTexture);
 			if (PhongWarpTextureName != null) outputTextureNames.Add(PhongWarpTextureName);
+			if (IrisTextureName != null) outputTextureNames.Add(IrisTextureName);
+			if (CorneaTextureName != null) outputTextureNames.Add(CorneaTextureName);
+			if (AmbientOcclusionTextureName != null) outputTextureNames.Add(AmbientOcclusionTextureName);
 			if (PhongExponentTextureName != null) outputTextureNames.Add(PhongExponentTextureName);
 			if (DetailTextureName != null) outputTextureNames.Add(DetailTextureName);
 			if (BlendModulateTextureName != null) outputTextureNames.Add(BlendModulateTextureName);
@@ -365,8 +380,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$addoverblend": // '1'.
 						case "$addself": // '1.5'.
 						case "$albedo": // ''.
-						case "$ambientocclcolor": // '[0.33 0.33 0.33]'.
-						case "$ambientoccltexture": // 'models/humans/eye-extra'.
 						case "$ambientocclusion": // '1'.
 						case "$ambientocclusiontexture": // 'models/alyx/alyx_occlusion'.
 						case "$ambientonly": // '0'. '1'.
@@ -467,8 +480,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$corecolortexture": // 'models/props_lambda/superportal/eg_superportal_warpcolor_inverted'. 'models/props_lambda/superportal/superportal_warpcolor'.
 						case "$coreglow1": // '.2'.
 						case "$coreglow2": // '0'.
-						case "$corneabumpstrength": // '0.75'. '1.0'.
-						case "$corneatexture": // 'models/eli/eye-cornea'. 'models/humans/eye-cornea'. 'models/kleiner/eye-cornea'.
 						case "$crackmaterial":
 						case "$csmdepthatlassampler": // '_rt_csmshadowdepth'.
 						case "$cstrike": // '1'.
@@ -493,7 +504,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$detailtexturetransform": // 'center .5 .5 scale 1 1 rotate 90 translate 0 0'.
 						case "$detailtint": // '[0.5 0.5 0.5]'.
 						case "$diameter": // '100'.
-						case "$dilation": // '0.5'. '0.7'.
 						case "$dirttexture": // 'dev\xbow_lens_dirt.vtf'.
 						case "$disable_color_writes": // '1'.
 						case "$disperserate": // '0'.
@@ -551,7 +561,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$exp2": // '1'.
 						case "$exposure": // '0'.
 						case "$exposure_texture": // '_rt_teenyfb0'.
-						case "$eyeballradius": // '0.5'. '1.25'. '1.9'. '3.25'.
 						case "$eyeorigin": // '[ 0.000000 0.000000 0.000000 ]'.
 						case "$eyeup": // '[ 0.000000 0.000000 0.000000 ]'.
 						case "$fade_distance": // '768.0'. '7680.0'.
@@ -633,7 +642,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$inner_ring_alpha_start": // '1.0'.
 						case "$inner_ring_min_lerp_delta": // '0.2'.
 						case "$intro": // '0'.
-						case "$iris": // 'models/alyx/pupil_l'. 'models/gman/eye-iris-greenright'. 'models/vortigaunt/new_vort_eye'. 'models/vortigaunt/pupil'.
 						case "$irisframe": // '0'.
 						case "$irisu": // '[ 0.000000 0.000000 0.000000 0.000000 ]'.
 						case "$irisv": // '[ 0.000000 0.000000 0.000000 0.000000 ]'.
@@ -750,7 +758,6 @@ namespace Chisel.Import.Source.VPKTools
 						case "$overbrightfactor": // '0.5'. '3.5'. '4'. '5'.
 						case "$parallaxmap": // 'brick/brickwall048a_height'.
 						case "$parallaxmapscale": // '.005'. '.0125'. '.354'.
-						case "$parallaxstrength": // '0.25'. '0.5'.
 						case "$perparticleoutline": // '0'. '1'.
 						case "$phongdisablehalflambert": // '1'.
 														 //case "$pixshader": // 'appchooser360movie_ps20b'.
@@ -1236,6 +1243,16 @@ namespace Chisel.Import.Source.VPKTools
 						case "$selfillum_envmapmask_alpha": { TryParseFloatProperty(property, ref vmfMaterial.SelfIlluminationAlphaEnvMapMask); break; }
 
 						case "$phong": { TryParseBoolProperty(property, ref vmfMaterial.Phong); break; }
+						// EyeRefract (eye_refract.cpp). $iris is the eye's whole colour, not a detail layer.
+						case "$iris": { vmfMaterial.IrisTextureName = property.Value; break; }
+						case "$corneatexture": { vmfMaterial.CorneaTextureName = property.Value; break; }
+						case "$ambientoccltexture": { vmfMaterial.AmbientOcclusionTextureName = property.Value; break; }
+						case "$ambientocclcolor": { vmfMaterial.AmbientOcclusionColor = TextParser.ParseColor(property.Value); break; }
+						case "$eyeballradius": { TryParseFloatProperty(property, ref vmfMaterial.EyeballRadius); break; }
+						case "$dilation": { TryParseFloatProperty(property, ref vmfMaterial.Dilation); break; }
+						case "$corneabumpstrength": { TryParseFloatProperty(property, ref vmfMaterial.CorneaBumpStrength); break; }
+						case "$parallaxstrength": { TryParseFloatProperty(property, ref vmfMaterial.ParallaxStrength); break; }
+
 						case "$phongwarptexture": { vmfMaterial.PhongWarpTextureName = property.Value; break; }
 						case "$phongalbedotint": { TryParseBoolProperty(property, ref vmfMaterial.PhongAlbedoTint); break; }
 						case "$basemapalphaphongmask": { TryParseBoolProperty(property, ref vmfMaterial.BaseMapAlphaPhongMask); break; }
