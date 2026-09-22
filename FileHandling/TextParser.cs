@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -506,7 +507,82 @@ namespace Chisel.Import.Source.VPKTools
 				lines[i] = line;
 			}
 			
-			return Parse(lines);
+			return SplitMultiKeyLines(lines);
+		}
+
+		/// <summary>
+		/// Splits a line that holds more than one key/value pair, so each pair becomes its own line.
+		/// </summary>
+		/// <remarks>
+		/// <para>
+		/// Source's own KeyValues reader is token based and does not care about newlines, so a VMT may
+		/// legally write <c>$model 1 "$basetexture" "tools/toolsblack"</c> on one line. This parser is line
+		/// based, and ParseProperty joins everything after the first token into one value - so that line
+		/// became <c>$model = "1 $basetexture tools/toolsblack"</c> and the base texture silently vanished.
+		/// models/props_powerup/toolsblack rendered white because of it.
+		/// </para>
+		/// <para>
+		/// A key is only recognised here when it was QUOTED in the source. That is what separates the two
+		/// cases, and the difference matters: <c>"$animatedtexturevar" "$basetexture"</c> and
+		/// <c>"$baseTextureTransform" "center -0.5 -0.5 scale 1 1 $angle $translate"</c> both hold a $ token
+		/// as a VALUE, and splitting on those would break them. Being inside one quoted token, they never
+		/// look like a key. An unquoted vector - <c>$color2 .25 .25 .25</c> - is untouched for the same
+		/// reason. Of 14011 VMTs in this game, 8 put two keys on a line and this splits only those.
+		/// </para>
+		/// </remarks>
+		static TextParser SplitMultiKeyLines(string[] lines)
+		{
+			List<string> rewritten = null;
+			for (var i = 0; i < lines.Length; i++)
+			{
+				var split = SplitLineOnSecondKey(lines[i]);
+				if (split == null)
+				{
+					rewritten?.Add(lines[i]);
+					continue;
+				}
+				rewritten ??= new List<string>(lines.Take(i));
+				rewritten.AddRange(split);
+			}
+			return Parse(rewritten?.ToArray() ?? lines);
+		}
+
+		/// <summary>The line broken into one pair per entry, or null when it holds at most one.</summary>
+		static string[] SplitLineOnSecondKey(string line)
+		{
+			if (string.IsNullOrEmpty(line) || line.IndexOf('"') < 0)
+				return null;
+
+			var pieces = new List<string>();
+			var current = new StringBuilder();
+			int tokenCount = 0;
+			var offset = 0;
+			while (offset < line.Length)
+			{
+				if (char.IsWhiteSpace(line[offset])) { offset++; continue; }
+
+				bool quoted = line[offset] == '"';
+				int start = quoted ? offset + 1 : offset;
+				int end = start;
+				if (quoted) while (end < line.Length && line[end] != '"') end++;
+				else while (end < line.Length && !char.IsWhiteSpace(line[end]) && line[end] != '"') end++;
+				var token = line.Substring(start, end - start);
+				offset = quoted ? end + 1 : end;
+
+				// A quoted key after a complete pair starts a new one. Two tokens must already have been
+				// seen, or this is just the line's own key.
+				if (quoted && tokenCount >= 2 && token.Length > 0 && (token[0] == '$' || token[0] == '%'))
+				{
+					pieces.Add(current.ToString().Trim());
+					current.Clear();
+					tokenCount = 0;
+				}
+				if (current.Length > 0) current.Append(' ');
+				current.Append('"').Append(token).Append('"');
+				tokenCount++;
+			}
+			if (current.Length > 0) pieces.Add(current.ToString().Trim());
+			return pieces.Count > 1 ? pieces.ToArray() : null;
 		}
 
 		public static TextParser LoadTextFile(string path)
