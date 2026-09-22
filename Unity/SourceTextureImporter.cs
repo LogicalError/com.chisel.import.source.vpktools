@@ -42,8 +42,13 @@ namespace Chisel.Import.Source.VPKTools
 				 "slot - because nothing in the file can say; see Texture2DImporter.MarkAsColor.")]
 		public bool sRGB;
 
-		[Tooltip("Build the mip chain. Off for a texture the VTF flagged NOMIP.")]
+		[Tooltip("Build the mip chain. Off only for a texture whose VTF really holds a single level.")]
 		public bool generateMipmaps = true;
+
+		[Tooltip("Above zero, this texture's alpha is a cut-out silhouette tested at this value, and every " +
+				 "mip level is scaled to keep the same coverage. Set by a material claiming it; see " +
+				 "Texture2DImporter.MarkAsAlphaTested.")]
+		[Range(0.0f, 1.0f)] public float alphaTestReference;
 
 		[Tooltip("Compress to DXT once the levels are built. Off keeps RGBA32, which costs four times the memory.")]
 		public bool compress = true;
@@ -94,7 +99,8 @@ namespace Chisel.Import.Source.VPKTools
 			Color32[][] levels;
 			try
 			{
-				levels = wantMips ? SourceMipmaps.Generate(level0, width, height, normalMap: false)
+				levels = wantMips ? SourceMipmaps.Generate(level0, width, height, normalMap: false,
+														   alphaTestReference: alphaTestReference)
 								  : new[] { level0 };
 			}
 			catch (Exception exception)

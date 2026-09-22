@@ -19,7 +19,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
 		// 2: I8, A8 and IA88 textures read as Direct3D 9 samples them (they were (I, 1, 1) and (I, A, 1))
-		public static readonly (string generator, int version) GeneratedVersion = ("texture", 3);
+		public static readonly (string generator, int version) GeneratedVersion = ("texture", 4);
 
 		static bool IsCurrent(Texture texture)
 		{
@@ -65,7 +65,13 @@ namespace Chisel.Import.Source.VPKTools
 				// Hand the asset over to our own importer, which rebuilds the mip chain the way Source
 				// does (see SourceMipmaps) instead of letting Unity box-filter it. The asset keeps its
 				// path, so its GUID and every reference to it survive; only the importer changes.
-				AssetDatabase.SetImporterOverride<SourceTextureImporter>(assetPath);
+				// Only convert an asset that is not already ours. Unity rewrites the .meta from a
+				// TextureImporter into a ScriptedImporter to do it, and complains about the version of the
+				// block it replaces while doing so - once per texture, which is tolerable, but re-asserting
+				// an override that is already set repeats that complaint and forces another import for
+				// nothing.
+				if (AssetImporter.GetAtPath(assetPath) is not SourceTextureImporter)
+					AssetDatabase.SetImporterOverride<SourceTextureImporter>(assetPath);
 
 				// Configure the importer (can only be done after importing once) and re-import
 				ConfigureTextureImporter(sourceTexture, assetPath);
@@ -660,8 +666,8 @@ namespace Chisel.Import.Source.VPKTools
 			}
 
 			var serialized = new SerializedObject(importer);
-			serialized.FindProperty("generateMipmaps").boolValue =
-				(sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_NOMIP) == (VTFImageFlag)0;
+			// Whether the file HAS mips, not whether it carries TEXTUREFLAGS_NOMIP - see VTF.MipmapCount.
+			serialized.FindProperty("generateMipmaps").boolValue = sourceTexture.MipmapCount > 1;
 			serialized.FindProperty("filterMode").enumValueIndex = (int)filterMode;
 			serialized.FindProperty("anisoLevel").intValue = aniso;
 			serialized.FindProperty("wrapU").enumValueIndex =
@@ -674,6 +680,38 @@ namespace Chisel.Import.Source.VPKTools
 
 			// Only ever called for pixels Import has just written from the VTF.
 			importer.userData = UserDataForRewrittenPixels(importer.userData);
+			importer.SaveAndReimport();
+		}
+
+		/// <summary>
+		/// Re-imports a texture as a cut-out, so its mip chain keeps the alpha test's coverage.
+		/// </summary>
+		/// <remarks>
+		/// Claimed by USE, like colour and normal maps, and for the same reason: nothing in a texture file
+		/// says whether its alpha is a silhouette or one of the masks Source also keeps there. Only the VMT
+		/// knows, by setting $alphatest - and 2673 opaque materials in this game put a $selfillum,
+		/// $basealphaenvmapmask, $basemapalphaphongmask or $detail mask in that same channel, every one of
+		/// which would be corrupted by scaling it. $allowalphatocoverage would be the wrong gate: not one
+		/// of the four fence materials sets it.
+		/// </remarks>
+		public static void MarkAsAlphaTested(Texture texture, float reference)
+		{
+			if (texture == null || !(reference > 0.0f))
+				return;
+
+			var assetPath = AssetDatabase.GetAssetPath(texture);
+			if (string.IsNullOrEmpty(assetPath))
+				return;
+			if (AssetImporter.GetAtPath(assetPath) is not SourceTextureImporter importer)
+				return;                     // a normal map, or a texture Unity's own importer still owns
+
+			var serialized = new SerializedObject(importer);
+			var property = serialized.FindProperty("alphaTestReference");
+			if (property == null || Mathf.Approximately(property.floatValue, reference))
+				return;                     // idempotent: every material using it claims it
+
+			property.floatValue = reference;
+			serialized.ApplyModifiedPropertiesWithoutUndo();
 			importer.SaveAndReimport();
 		}
 
@@ -743,8 +781,9 @@ namespace Chisel.Import.Source.VPKTools
 			// knows, and by the time one is read the texture is already imported. So: never.
 			settings.alphaIsTransparency = false;
 
-			settings.mipmapEnabled = true;
-			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_NOMIP) != (VTFImageFlag)0) settings.mipmapEnabled = false;
+			// The file's own level count, not TEXTUREFLAGS_NOMIP, which vtex sets while still writing a
+			// full chain (see VTF.MipmapCount).
+			settings.mipmapEnabled = sourceTexture.MipmapCount > 1;
 
 			settings.borderMipmap = false;
 			if ((sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_BORDER) != (VTFImageFlag)0) settings.borderMipmap = true;

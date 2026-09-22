@@ -15,6 +15,14 @@ namespace Chisel.Import.Source.VPKTools
         public  int Height          { get; private set; }
 		public VTFImageFlag Flags   { get; private set; }
 		public bool HasAlpha        { get; private set; }
+		/// <summary>
+		/// How many mip levels the file actually holds. NOT the same question as TEXTUREFLAGS_NOMIP: vtex
+		/// sets that flag from a `nomip` line in the texture's .txt compile config and writes the full
+		/// chain anyway, so 1028 of the 1309 textures carrying it in this game ship every level. Whether a
+		/// texture HAS mips is this number; the flag is a hint to the engine's binding, and reading it as
+		/// "no mipmaps" left chain-link fences sampling level 0 at every distance.
+		/// </summary>
+		public int MipmapCount      { get; private set; }
 		/// <summary>The texels are linear floats, which may run past 1 - how Source stores HDR.</summary>
 		public bool IsHDR           { get; private set; }
 
@@ -33,7 +41,7 @@ namespace Chisel.Import.Source.VPKTools
 
         public static VTF Read( Stream stream )
         {
-			var frames = LoadVTFFile(stream, out int width, out int height, out var flags, out var hasAlpha, out var isHDR);
+			var frames = LoadVTFFile(stream, out int width, out int height, out var flags, out var hasAlpha, out var isHDR, out var mipmapCount);
 			return new VTF
 			{
 				Frames   = frames,
@@ -41,6 +49,7 @@ namespace Chisel.Import.Source.VPKTools
 				Height   = height,
 				Flags    = flags,
 				HasAlpha = hasAlpha,
+				MipmapCount = mipmapCount,
 				IsHDR    = isHDR
 			};
         }
@@ -134,13 +143,14 @@ namespace Chisel.Import.Source.VPKTools
         }
 #endif
 
-        public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha, out bool isHDR)
+        public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha, out bool isHDR, out int mipmapCount)
 		{
 			width = 0;
 			height = 0;
 			flags = (VTFImageFlag)0;
             hasAlpha = false;
             isHDR = false;
+			mipmapCount = 1;
 			Frame[] frames = null;
 			if ( stream != null )
             {
@@ -163,6 +173,7 @@ namespace Chisel.Import.Source.VPKTools
 					vtfHeader.bumpmapScale       = DataParser.ReadFloat( stream );
                     vtfHeader.highResImageFormat = (VTFImageFormat) DataParser.ReadUInt( stream );
                     vtfHeader.mipmapCount        = DataParser.ReadByte( stream );
+                    mipmapCount = vtfHeader.mipmapCount < 1 ? 1 : vtfHeader.mipmapCount;
                     vtfHeader.lowResImageFormat  = (VTFImageFormat) DataParser.ReadUInt( stream );
                     vtfHeader.lowResImageWidth   = DataParser.ReadByte( stream );
                     vtfHeader.lowResImageHeight  = DataParser.ReadByte( stream );

@@ -1,5 +1,8 @@
 using System;
-using System.Threading.Tasks;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Jobs;
+using Unity.Mathematics;
 using UnityEngine;
 
 namespace Chisel.Import.Source.VPKTools
@@ -29,32 +32,14 @@ namespace Chisel.Import.Source.VPKTools
 	/// </item>
 	/// </list>
 	/// <para>
-	/// Why it is worth doing at all: Unity generates mips with a box filter, and a box filter destroys thin
-	/// high-contrast detail - which is exactly what a cut-out texture is made of. Alpha coverage at the 0.5
-	/// cutoff, measured on the chain-link fence that started this, per level:
-	/// </para>
-	/// <code>
-	///   mip       0      1      2      3      4
-	///   Valve  0.137  0.111  0.161  0.191  0.067
-	///   box    0.137  0.113  0.121  0.060  0.001
-	/// </code>
-	/// <para>
-	/// By mip 4 the box filter has one texel in a thousand left above the cutoff, which is the fence
-	/// dissolving into "random pixels hanging in the air" at distance. Valve's filter keeps two orders of
-	/// magnitude more of it. Nothing in a shader can undo the box filter's loss, because by then the
-	/// information is gone.
-	/// </para>
-	/// <para>
-	/// Validated against textures Valve's own vtex compiled, by predicting each stored level from level 0
-	/// and comparing: 96-100% of texels land on the same side of the alpha test on metalcombinegrate001a
-	/// and trashdecal01a, and the best-fit threshold comes out at 0.50 on its own - i.e. the stored alpha
-	/// simply IS this filter's output, with no alpha-test step after it.
+	/// Verified against textures Valve's own vtex compiled by predicting each stored level from level 0:
+	/// 14 levels across two stock HL2 textures, none below 90% agreement on the alpha test, most above 98%.
 	/// </para>
 	/// <para>
 	/// NOTE: Black Mesa's own textures are NOT built this way. Their chains are two-valued at every level
-	/// with alpha coverage that GROWS with distance (fence_alpha: 0.137 -> 0.414), which is a deliberate
-	/// alpha-test dilation Valve's resampler does not do. Black Mesa is a mod team and used other tooling.
-	/// So this reproduces Source, not every VTF that ships with the game.
+	/// with alpha coverage that GROWS with distance (fence_alpha: 0.137 -&gt; 0.414), a deliberate alpha-test
+	/// dilation Valve's resampler does not do. So this reproduces Source, not every VTF shipping with the
+	/// game - which is why <see cref="PreserveAlphaCoverage"/> exists as a separate, opt-in step.
 	/// </para>
 	/// </remarks>
 	public static class SourceMipmaps
@@ -68,19 +53,13 @@ namespace Chisel.Import.Source.VPKTools
 		static readonly float[] kGammaToLinear = BuildGammaTable(kSourceGamma);
 
 		// ConstructFloatGammaTable( table, srcGamma, 1.0f ): 255 * (i/255)^gamma, kept in 0..255 rather
-		// than normalised, because the inverse below undoes exactly that.
+		// than normalised, because the inverse in the job undoes exactly that.
 		static float[] BuildGammaTable(float gamma)
 		{
 			var table = new float[256];
 			for (int i = 0; i < 256; i++)
 				table[i] = 255.0f * Mathf.Pow(i / 255.0f, gamma);
 			return table;
-		}
-
-		static byte Clamp(float value)
-		{
-			int rounded = (int)(value + 0.5f);
-			return (byte)(rounded < 0 ? 0 : rounded > 255 ? 255 : rounded);
 		}
 
 		/// <summary>How many levels a chain of this size has, down to 1x1.</summary>
@@ -103,7 +82,12 @@ namespace Chisel.Import.Source.VPKTools
 		/// Skip the gamma conversion. A normal map's channels are a direction, not a brightness, so putting
 		/// them through a gamma curve bends the vector.
 		/// </param>
-		public static Color32[][] Generate(Color32[] level0, int width, int height, bool normalMap)
+		/// <param name="alphaTestReference">
+		/// Above zero, run <see cref="PreserveAlphaCoverage"/> at this cutoff afterwards. Zero leaves alpha
+		/// exactly as Source's filter produced it.
+		/// </param>
+		public static Color32[][] Generate(Color32[] level0, int width, int height, bool normalMap,
+										   float alphaTestReference = 0.0f)
 		{
 			if (level0 == null || level0.Length != width * height)
 				throw new ArgumentException($"level 0 is {level0?.Length ?? 0} texels, expected {width * height}");
@@ -111,136 +95,296 @@ namespace Chisel.Import.Source.VPKTools
 			int levelCount = LevelCount(width, height);
 			var levels = new Color32[levelCount][];
 			levels[0] = level0;
-			for (int level = 1; level < levelCount; level++)
+			if (levelCount == 1)
+				return levels;
+
+			// Every level reads level 0 and writes its own buffer, so they are independent and all of them
+			// are scheduled at once. That matters more than it looks: the deepest levels have only a handful
+			// of destination texels, so parallelising WITHIN a level leaves most of the machine idle on them
+			// while each still costs a full pass over the source. Across levels there is always work.
+			var source = new NativeArray<Color32>(level0, Allocator.TempJob);
+			var gamma = new NativeArray<float>(kGammaToLinear, Allocator.TempJob);
+			var destinations = new NativeArray<Color32>[levelCount];
+			var kernels = new NativeArray<float>[levelCount];
+			var kernelTotals = new NativeArray<float>[levelCount];
+			var handles = new NativeArray<JobHandle>(levelCount - 1, Allocator.Temp);
+
+			try
 			{
-				int levelWidth = Mathf.Max(1, width >> level);
-				int levelHeight = Mathf.Max(1, height >> level);
-				levels[level] = Resample(level0, width, height, levelWidth, levelHeight, normalMap);
+				for (int level = 1; level < levelCount; level++)
+				{
+					int levelWidth = Mathf.Max(1, width >> level);
+					int levelHeight = Mathf.Max(1, height >> level);
+					int widthRatio = width / levelWidth;
+					int heightRatio = height / levelHeight;
+
+					// Valve's kernel is six DESTINATION pixels across, so at high reduction ratios it spans
+					// more source texels than the image holds and wraps over itself. Below six destination
+					// pixels it is narrowed to the destination instead: at 1x1 that is one tap per source
+					// texel, the average of the whole image, which is the only answer a 1x1 level has. It
+					// also bounds the work at kKernelDiameter^2 * width * height per level.
+					int diameter = Mathf.Min(kKernelDiameter, Mathf.Min(levelWidth, levelHeight));
+					int kernelWidth = diameter * widthRatio;
+					int kernelHeight = diameter * heightRatio;
+
+					kernels[level] = new NativeArray<float>(kernelWidth * kernelHeight, Allocator.TempJob,
+														   NativeArrayOptions.UninitializedMemory);
+					kernelTotals[level] = new NativeArray<float>(1, Allocator.TempJob);
+					destinations[level] = new NativeArray<Color32>(levelWidth * levelHeight, Allocator.TempJob,
+																   NativeArrayOptions.UninitializedMemory);
+
+					var kernelHandle = new NiceKernelJob
+					{
+						kernel = kernels[level],
+						kernelWidth = kernelWidth,
+						diameter = diameter,
+						dx = 1.0f / widthRatio,
+						dy = 1.0f / heightRatio,
+					}.Schedule(kernels[level].Length, 256);
+
+					var totalHandle = new KernelTotalJob
+					{
+						kernel = kernels[level],
+						total = kernelTotals[level],
+					}.Schedule(kernelHandle);
+
+					handles[level - 1] = new ResampleJob
+					{
+						source = source,
+						gammaToLinear = gamma,
+						kernel = kernels[level],
+						kernelTotal = kernelTotals[level],
+						destination = destinations[level],
+						sourceWidth = width,
+						destinationWidth = levelWidth,
+						widthRatio = widthRatio,
+						heightRatio = heightRatio,
+						kernelWidth = kernelWidth,
+						kernelHeight = kernelHeight,
+						baseX = (widthRatio >> 1) - ((widthRatio * diameter) >> 1),
+						baseY = (heightRatio >> 1) - ((heightRatio * diameter) >> 1),
+						maskX = width - 1,
+						maskY = height - 1,
+						normalMap = normalMap,
+						inverseGamma = 1.0f / kSourceGamma,
+					}.Schedule(destinations[level].Length, 16, totalHandle);
+				}
+
+				JobHandle.CombineDependencies(handles).Complete();
+
+				for (int level = 1; level < levelCount; level++)
+					levels[level] = destinations[level].ToArray();
 			}
+			finally
+			{
+				handles.Dispose();
+				if (source.IsCreated) source.Dispose();
+				if (gamma.IsCreated) gamma.Dispose();
+				for (int level = 1; level < levelCount; level++)
+				{
+					if (destinations[level].IsCreated) destinations[level].Dispose();
+					if (kernels[level].IsCreated) kernels[level].Dispose();
+					if (kernelTotals[level].IsCreated) kernelTotals[level].Dispose();
+				}
+			}
+
+			if (alphaTestReference > 0.0f)
+				PreserveAlphaCoverage(levels, alphaTestReference);
 			return levels;
 		}
 
 		/// <summary>
-		/// Valve's nice filter: sinc(pi d) * 3 sin(pi d / 3) / (pi d) over the radius, zero past the
-		/// diameter, normalised to sum to one.
+		/// Scales each level's alpha so the same fraction of texels passes the alpha test as at level 0
+		/// (Ignacio Castano, "Computing Alpha Mipmaps").
 		/// </summary>
 		/// <remarks>
-		/// The sample points sit half a source texel off centre, so d is never exactly zero and the
-		/// sinc never divides by it. That is load-bearing, not incidental - centring the taps on the
-		/// texels instead would put a 0/0 in the middle of the kernel.
+		/// <para>
+		/// Filtering alpha correctly still shrinks a cut-out with distance: a wire thinner than a texel
+		/// averages down below the cutoff and stops being drawn at all, so a fence dissolves into loose
+		/// pixels. Coverage is the fraction of texels at or above the cutoff; this bisects a multiplier for
+		/// each level until its coverage matches level 0's, then applies it.
+		/// </para>
+		/// <para>
+		/// This is NOT what Source does - Valve's resampler has no alpha-test step, and that was verified
+		/// against vtex's own output rather than assumed. It is applied only where a material has claimed
+		/// the texture as a cut-out, because Source keeps masks in base alpha far more often than opacity
+		/// ($selfillum, $basealphaenvmapmask, $basemapalphaphongmask, $detail - 2673 opaque materials in
+		/// this game's VMTs), and scaling one of those would corrupt it.
+		/// </para>
 		/// </remarks>
-		internal static float[] NiceKernel(int wratio, int hratio, int diameter)
+		public static void PreserveAlphaCoverage(Color32[][] levels, float reference)
 		{
-			int kernelWidth = diameter * wratio;
-			int kernelHeight = diameter * hratio;
-			var kernel = new float[kernelWidth * kernelHeight];
+			if (levels == null || levels.Length < 2)
+				return;
 
-			float dx = 1.0f / wratio;
-			float dy = 1.0f / hratio;
-			float total = 0.0f;
-			float y = -(diameter - dy) * 0.5f;
-			for (int row = 0; row < kernelHeight; row++, y += dy)
+			byte cutoff = (byte)Mathf.Clamp(Mathf.RoundToInt(reference * 255.0f), 0, 255);
+			float target = CoverageOf(levels[0], cutoff, 1.0f);
+			if (target <= 0.0f)
+				return;                     // nothing passes at level 0; there is no coverage to preserve
+
+			for (int level = 1; level < levels.Length; level++)
 			{
-				float x = -(diameter - dx) * 0.5f;
-				for (int column = 0; column < kernelWidth; column++, x += dx)
+				// Coverage rises monotonically with the scale, so bisection converges. The upper bound is
+				// generous rather than tuned: a wire one sixteenth of a texel wide needs a large multiplier
+				// to survive, and a bound that is too small fails silently by clamping.
+				float low = 0.0f, high = 32.0f, scale = 1.0f;
+				for (int step = 0; step < 16; step++)
 				{
-					float d = Mathf.Sqrt((x * x) + (y * y));
-					if (d > diameter * 0.5f)
-						continue;
-					float t = Mathf.PI * d;
-					float weight = (Mathf.Sin(t) / t) * (3.0f * Mathf.Sin(t / 3.0f) / t);
-					kernel[(row * kernelWidth) + column] = weight;
-					total += weight;
+					scale = 0.5f * (low + high);
+					if (CoverageOf(levels[level], cutoff, scale) < target)
+						low = scale;
+					else
+						high = scale;
+				}
+
+				if (Mathf.Abs(scale - 1.0f) < 0.01f)
+					continue;
+				var texels = levels[level];
+				for (int i = 0; i < texels.Length; i++)
+					texels[i].a = (byte)Mathf.Clamp(Mathf.RoundToInt(texels[i].a * scale), 0, 255);
+			}
+		}
+
+		static float CoverageOf(Color32[] texels, byte cutoff, float scale)
+		{
+			if (texels == null || texels.Length == 0)
+				return 0.0f;
+			int passed = 0;
+			for (int i = 0; i < texels.Length; i++)
+			{
+				if (texels[i].a * scale >= cutoff)
+					passed++;
+			}
+			return (float)passed / texels.Length;
+		}
+
+		/// <summary>
+		/// GenerateNiceFilter, imageloader.cpp: sinc(pi d) * 3 sin(pi d / 3) / (pi d) over the radius, zero
+		/// past the diameter. Left UNNORMALISED - <see cref="ResampleJob"/> divides by the total instead,
+		/// which is the same result and needs no second pass over the kernel.
+		/// </summary>
+		/// <remarks>
+		/// The sample points sit half a source texel off centre, so d is never exactly zero and the sinc
+		/// never divides by it. That is load-bearing, not incidental - centring the taps on the texels
+		/// instead would put a 0/0 in the middle of the kernel.
+		/// </remarks>
+		[BurstCompile]
+		struct NiceKernelJob : IJobParallelFor
+		{
+			[WriteOnly] public NativeArray<float> kernel;
+			public int kernelWidth;
+			public int diameter;
+			public float dx, dy;
+
+			public void Execute(int index)
+			{
+				int row = index / kernelWidth;
+				int column = index - (row * kernelWidth);
+				float y = -((diameter - dy) * 0.5f) + (dy * row);
+				float x = -((diameter - dx) * 0.5f) + (dx * column);
+				float d = math.sqrt((x * x) + (y * y));
+				if (d > diameter * 0.5f)
+				{
+					kernel[index] = 0.0f;
+					return;
+				}
+				float t = math.PI * d;
+				kernel[index] = (math.sin(t) / t) * (3.0f * math.sin(t / 3.0f) / t);
+			}
+		}
+
+		[BurstCompile]
+		struct KernelTotalJob : IJob
+		{
+			[ReadOnly] public NativeArray<float> kernel;
+			[WriteOnly] public NativeArray<float> total;
+
+			public void Execute()
+			{
+				float sum = 0.0f;
+				for (int i = 0; i < kernel.Length; i++)
+					sum += kernel[i];
+				total[0] = sum == 0.0f ? 1.0f : sum;
+			}
+		}
+
+		[BurstCompile]
+		struct ResampleJob : IJobParallelFor
+		{
+			[ReadOnly] public NativeArray<Color32> source;
+			[ReadOnly] public NativeArray<float> gammaToLinear;
+			[ReadOnly] public NativeArray<float> kernel;
+			[ReadOnly] public NativeArray<float> kernelTotal;
+			[WriteOnly] public NativeArray<Color32> destination;
+
+			public int sourceWidth, destinationWidth;
+			public int widthRatio, heightRatio;
+			public int kernelWidth, kernelHeight;
+			public int baseX, baseY;
+			public int maskX, maskY;
+			public bool normalMap;
+			public float inverseGamma;
+
+			public void Execute(int index)
+			{
+				int row = index / destinationWidth;
+				int column = index - (row * destinationWidth);
+
+				float red = 0.0f, green = 0.0f, blue = 0.0f, alpha = 0.0f;
+				int sourceY = (heightRatio * row) + baseY;
+				for (int k = 0; k < kernelHeight; k++, sourceY++)
+				{
+					// Source coordinates WRAP, as `srcY & (srcHeight - 1)`, which is why Valve requires
+					// powers of two; the caller guarantees the size.
+					int rowOffset = (sourceY & maskY) * sourceWidth;
+					int kernelRow = k * kernelWidth;
+					int sourceX = (widthRatio * column) + baseX;
+					for (int l = 0; l < kernelWidth; l++, sourceX++)
+					{
+						float weight = kernel[kernelRow + l];
+						if (weight == 0.0f)
+							continue;
+						var texel = source[rowOffset + (sourceX & maskX)];
+						if (normalMap)
+						{
+							red += weight * texel.r;
+							green += weight * texel.g;
+							blue += weight * texel.b;
+						}
+						else
+						{
+							red += weight * gammaToLinear[texel.r];
+							green += weight * gammaToLinear[texel.g];
+							blue += weight * gammaToLinear[texel.b];
+						}
+						alpha += weight * texel.a;
+					}
+				}
+
+				float normalise = 1.0f / kernelTotal[0];
+				red *= normalise; green *= normalise; blue *= normalise; alpha *= normalise;
+
+				if (normalMap)
+				{
+					destination[index] = new Color32(Clamp(red), Clamp(green), Clamp(blue), Clamp(alpha));
+				}
+				else
+				{
+					// A Lanczos kernel has negative lobes, so a hard edge can push the total below zero;
+					// pow() of a negative is NaN, which would reach the texture as garbage.
+					destination[index] = new Color32(
+						Clamp(255.0f * math.pow(math.max(0.0f, red) / 255.0f, inverseGamma)),
+						Clamp(255.0f * math.pow(math.max(0.0f, green) / 255.0f, inverseGamma)),
+						Clamp(255.0f * math.pow(math.max(0.0f, blue) / 255.0f, inverseGamma)),
+						Clamp(alpha));
 				}
 			}
 
-			for (int i = 0; i < kernel.Length; i++)
-				kernel[i] /= total;
-			return kernel;
-		}
-
-		static Color32[] Resample(Color32[] src, int srcWidth, int srcHeight,
-								  int dstWidth, int dstHeight, bool normalMap)
-		{
-			int wratio = srcWidth / dstWidth;
-			int hratio = srcHeight / dstHeight;
-
-			// Valve's kernel is six DESTINATION pixels across, so at high reduction ratios it spans more
-			// source texels than the image has and wraps over itself repeatedly. Below six destination
-			// pixels the kernel is narrowed to the destination instead: at 1x1 that is one tap per source
-			// texel, the average of the whole image, which is the only answer a 1x1 level can have anyway.
-			// It also bounds the work at kKernelDiameter^2 * srcWidth * srcHeight per level rather than
-			// letting it grow without limit.
-			int diameter = Mathf.Min(kKernelDiameter, Mathf.Min(dstWidth, dstHeight));
-			var kernel = NiceKernel(wratio, hratio, diameter);
-			int kernelWidth = diameter * wratio;
-			int kernelHeight = diameter * hratio;
-
-			int baseY = (hratio >> 1) - ((hratio * diameter) >> 1);
-			int baseX = (wratio >> 1) - ((wratio * diameter) >> 1);
-
-			// Source coordinates wrap rather than clamp, as `srcX & (srcWidth - 1)`, which is why Valve
-			// requires powers of two. A non-power-of-two texture would silently index outside the image,
-			// so it is masked here the same way and the caller is responsible for the size.
-			int maskX = srcWidth - 1;
-			int maskY = srcHeight - 1;
-
-			var dst = new Color32[dstWidth * dstHeight];
-			var gamma = kGammaToLinear;
-			float inverseGamma = 1.0f / kSourceGamma;
-
-			Parallel.For(0, dstHeight, row =>
+			static byte Clamp(float value)
 			{
-				for (int column = 0; column < dstWidth; column++)
-				{
-					float red = 0.0f, green = 0.0f, blue = 0.0f, alpha = 0.0f;
-					int srcY = (hratio * row) + baseY;
-					for (int k = 0; k < kernelHeight; k++, srcY++)
-					{
-						int sy = srcY & maskY;
-						int kernelRow = k * kernelWidth;
-						int srcRow = sy * srcWidth;
-						int srcX = (wratio * column) + baseX;
-						for (int l = 0; l < kernelWidth; l++, srcX++)
-						{
-							float weight = kernel[kernelRow + l];
-							if (weight == 0.0f)
-								continue;
-							var texel = src[srcRow + (srcX & maskX)];
-							if (normalMap)
-							{
-								red += weight * texel.r;
-								green += weight * texel.g;
-								blue += weight * texel.b;
-							}
-							else
-							{
-								red += weight * gamma[texel.r];
-								green += weight * gamma[texel.g];
-								blue += weight * gamma[texel.b];
-							}
-							alpha += weight * texel.a;
-						}
-					}
-
-					// A Lanczos kernel has negative lobes, so the total can land outside 0..255 on a hard
-					// edge; pow() of a negative number is NaN, which would reach the texture as garbage.
-					if (normalMap)
-					{
-						dst[(row * dstWidth) + column] = new Color32(Clamp(red), Clamp(green), Clamp(blue),
-																	 Clamp(alpha));
-					}
-					else
-					{
-						dst[(row * dstWidth) + column] = new Color32(
-							Clamp(255.0f * Mathf.Pow(Mathf.Max(0.0f, red) / 255.0f, inverseGamma)),
-							Clamp(255.0f * Mathf.Pow(Mathf.Max(0.0f, green) / 255.0f, inverseGamma)),
-							Clamp(255.0f * Mathf.Pow(Mathf.Max(0.0f, blue) / 255.0f, inverseGamma)),
-							Clamp(alpha));
-					}
-				}
-			});
-			return dst;
+				int rounded = (int)(value + 0.5f);
+				return (byte)(rounded < 0 ? 0 : rounded > 255 ? 255 : rounded);
+			}
 		}
 	}
 }

@@ -674,6 +674,11 @@ namespace Chisel.Import.Source.VPKTools
 			};
 
 			var mainTexture = SetMaterialTexture(gameResources, unityMaterial, "_BaseMap", sourceMaterial.BaseTextureName);
+
+			// A cut-out's base alpha IS its silhouette, so its mip chain has to keep the alpha test's
+			// coverage or the shape thins away with distance (Texture2DImporter.MarkAsAlphaTested).
+			if (mainTexture != null && sourceMaterial.HaveCutout)
+				Texture2DImporter.MarkAsAlphaTested(mainTexture, sourceMaterial.AlphaTestReference ?? 0.5f);
 			SetMaterialColor(unityMaterial, ShaderColor(ModulationColorOf(sourceMaterial)));
 
 			// UnlitTwoTexture: $texture2 is multiplied over the base texture, with a transform of its own.
