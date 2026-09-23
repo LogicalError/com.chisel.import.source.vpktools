@@ -41,7 +41,17 @@ Shader "Chisel/Source/EyeRefract"
 		Pass
 		{
 			Name "ForwardLit"
-			Tags { "LightMode" = "UniversalForward" }
+			// UniversalForwardOnly, not UniversalForward. Under Deferred or Deferred+ an OPAQUE object is drawn
+			// through the GBuffer, and URP simply skips a UniversalForward pass for it - no error, no warning,
+			// nothing drawn. This shader has no GBuffer pass and should not have one: it lights the eye itself,
+			// unlit iris plus cornea glints, and a GBuffer would hand it to URP's deferred lighting and lose
+			// exactly what the port is for. UniversalForwardOnly is the tag for that case, and it is drawn in
+			// every rendering mode - URP's forward pass takes SRPDefaultUnlit, UniversalForward AND
+			// UniversalForwardOnly.
+			//
+			// This is why the eyes vanished when the renderer moved to Deferred+ (m_RenderingMode 3) while every
+			// other Source shader kept working: the other opaque ones carry a GBuffer pass.
+			Tags { "LightMode" = "UniversalForwardOnly" }
 
 			ZWrite On
 			Cull [_Cull]

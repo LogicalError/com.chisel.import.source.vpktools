@@ -312,7 +312,9 @@ namespace Chisel.Import.Source.VPKTools
 		// 6: eyeball meshes carry an iris uv in uv2 (EyeProjection), and mstudiomodel_t is stepped by its real 148
 		// bytes rather than 124 - which made every bodypart after its first model readable, so the loop now says
 		// out loud that it takes model 0. Every model with eyes has to be written again to gain the uv.
-		internal static readonly (string generator, int version) ModelVersion     = ("model", 6);
+		// 7: that uv spans the eyeball's IRIS SIZE rather than its radius, which is a different number per model
+		// and was drawing every iris too small.
+		internal static readonly (string generator, int version) ModelVersion     = ("model", 7);
 		static readonly (string generator, int version) AnimationVersion = ("animation", 1);
 
 		/// <summary>
@@ -546,14 +548,14 @@ namespace Chisel.Import.Source.VPKTools
 			readonly Vector3 origin;
 			readonly Vector3 uAxis;
 			readonly Vector3 vAxis;
-			readonly float   diameter;
+			readonly float   span;      // how much of the eye the iris texture covers, in the model's units
 
-			EyeProjection(Vector3 origin, Vector3 uAxis, Vector3 vAxis, float diameter)
+			EyeProjection(Vector3 origin, Vector3 uAxis, Vector3 vAxis, float span)
 			{
-				this.origin   = origin;
-				this.uAxis    = uAxis;
-				this.vAxis    = vAxis;
-				this.diameter = diameter;
+				this.origin = origin;
+				this.uAxis  = uAxis;
+				this.vAxis  = vAxis;
+				this.span   = span;
 			}
 
 			/// <summary>The bind pose of one bone, in the model's space: its own transform and every parent's.</summary>
@@ -588,7 +590,21 @@ namespace Chisel.Import.Source.VPKTools
 				var left = Vector3.Cross(up, forward);
 				if (left.sqrMagnitude < 1e-12f)
 					left = Vector3.Cross(up, Vector3.forward);      // degenerate up/forward: keep a usable pair
-				return new EyeProjection(origin, left.normalized, up, Mathf.Max(eyeball.Radius, 1e-4f) * 2.0f);
+
+				// What the texture spans is the IRIS, not the eyeball. IrisScale is 1 / the iris size at the end
+				// of the QC's eyeball command, and it is an independent number: across the 40 models in the game
+				// with eyes, a radius of 0.5 appears with iris sizes of 0.63, 0.73, 0.83, 1.0 and 1.5, and the
+				// ichthyosaur pairs radius 3.575 with 6.0. Spanning 2 * radius instead drew every iris too small
+				// by a different factor per model - 1.26x on a scientist, 1.68x on the ichthyosaur, 2x on an
+				// alien grunt.
+				//
+				// Twice the iris size, because this is Source's SPHERE uv: the cornea's uv spans the iris size
+				// itself and vSphereUv = vCorneaUv * 0.5 + 0.25 (eye_refract_ps2x.fxc:205). That puts the iris
+				// disc - uv radius 0.2, by Valve's own note - at half the eyeball's width on a scientist, which
+				// is about where a human iris is.
+				var span = (eyeball.IrisScale > 1e-6f) ? 2.0f / eyeball.IrisScale
+													   : 2.0f * Mathf.Max(eyeball.Radius, 1e-4f);
+				return new EyeProjection(origin, left.normalized, up, span);
 			}
 
 			/// <summary>
@@ -603,8 +619,8 @@ namespace Chisel.Import.Source.VPKTools
 				// v is negated for the reason VmfFixTexcoord negates an authored one: a Source texture starts at its
 				// top row and a Unity one at its bottom, so a uv built to Source's convention has to be flipped to
 				// land on the same texel here.
-				return new Vector2( Vector3.Dot(offset, uAxis) / diameter + 0.5f,
-								   -Vector3.Dot(offset, vAxis) / diameter + 0.5f);
+				return new Vector2( Vector3.Dot(offset, uAxis) / span + 0.5f,
+								   -Vector3.Dot(offset, vAxis) / span + 0.5f);
 			}
 		}
 
