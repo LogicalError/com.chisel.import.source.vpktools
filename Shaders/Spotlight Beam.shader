@@ -27,9 +27,12 @@ Shader "Chisel/Import/SpotlightBeam"
 			Name "SpotlightBeam"
 
 			HLSLPROGRAM
-			#pragma target 3.5
+			#pragma target 4.5
 			#pragma vertex vert
 			#pragma fragment frag
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Fog.hlsl"
 
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -47,6 +50,7 @@ Shader "Chisel/Import/SpotlightBeam"
 			{
 				// x in [-0.5, 0.5] across the beam, z in [0, 1] from the lamp to the far end.
 				float4 positionOS : POSITION;
+				UNITY_VERTEX_INPUT_INSTANCE_ID
 			};
 
 			struct Varyings
@@ -60,6 +64,7 @@ Shader "Chisel/Import/SpotlightBeam"
 
 			Varyings vert(Attributes input)
 			{
+				UNITY_SETUP_INSTANCE_ID(input);
 				Varyings output = (Varyings)0;
 				float4x4 objectToWorld = GetObjectToWorldMatrix();
 				float3 lamp = TransformObjectToWorld(float3(0, 0, 0));

@@ -56,10 +56,13 @@ Shader "Chisel/Source/Water"
             ZTest LEqual
 
             HLSLPROGRAM
-            #pragma target 3.5
+            #pragma target 4.5
             #pragma require cubearray
             #pragma vertex Vert
             #pragma fragment Frag
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
             #pragma multi_compile_fog
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
@@ -107,6 +110,7 @@ Shader "Chisel/Source/Water"
                 float3 normalOS   : NORMAL;
                 float4 tangentOS  : TANGENT;
                 float2 uv         : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             struct Varyings
@@ -121,6 +125,7 @@ Shader "Chisel/Source/Water"
 
             Varyings Vert(Attributes input)
             {
+                UNITY_SETUP_INSTANCE_ID(input);
                 Varyings output;
                 VertexPositionInputs position = GetVertexPositionInputs(input.positionOS.xyz);
                 VertexNormalInputs normal = GetVertexNormalInputs(input.normalOS, input.tangentOS);

@@ -57,6 +57,190 @@ CBUFFER_START(UnityPerMaterial)
 	UNITY_TEXTURE_STREAMING_DEBUG_VARS;
 CBUFFER_END
 
+// Under a BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - UnityPerMaterial is not per
+// draw, so a whole batch would shade with one material's values unless these come from the instance data. A
+// pass with no DOTS_INSTANCING_ON variant is refused outright, at draw submission rather than at compile,
+// which is why the symptom is silence and nothing drawn.
+//
+// The cached statics are URP's own shape (LitInput.hlsl): reading each property once instead of at every use
+// stops the compiler regenerating the load, which URP measured at about 10% of GPU time on a Quest 2. The _ST
+// and _TexelSize members are left out for the same reason URP leaves _BaseMap_ST out - a texture's tiling is
+// not a per-instance value, and a batch only mixes materials that share the texture.
+//
+// NOTE: hlslc.py cannot check these variants. URP's own Lit.shader fails in it identically, on
+// unity_SpecCube0_HDR, because the offline compiler does not provide Unity's instancing constants. Verify
+// DOTS variants with Shader_GetErrors in the editor.
+#ifdef UNITY_DOTS_INSTANCING_ENABLED
+UNITY_DOTS_INSTANCING_START(MaterialPropertyMetadata)
+	UNITY_DOTS_INSTANCED_PROP(float4, _Color)
+	UNITY_DOTS_INSTANCED_PROP(float4, _SpecColorTint)
+	UNITY_DOTS_INSTANCED_PROP(float4, _EnvMapTint)
+	UNITY_DOTS_INSTANCED_PROP(float4, _EnvMapContrast)
+	UNITY_DOTS_INSTANCED_PROP(float4, _EnvMapSaturation)
+	UNITY_DOTS_INSTANCED_PROP(float4, _EnvMapMaskWeights)
+	UNITY_DOTS_INSTANCED_PROP(float4, _SelfIllumTint)
+	UNITY_DOTS_INSTANCED_PROP(float4, _PhongFresnelRanges)
+	UNITY_DOTS_INSTANCED_PROP(float4, _BlendMaskTransformU)
+	UNITY_DOTS_INSTANCED_PROP(float4, _BlendMaskTransformV)
+	UNITY_DOTS_INSTANCED_PROP(float , _Cutoff)
+	UNITY_DOTS_INSTANCED_PROP(float , _Smoothness)
+	UNITY_DOTS_INSTANCED_PROP(float , _SpecularScale)
+	UNITY_DOTS_INSTANCED_PROP(float , _BumpScale)
+	UNITY_DOTS_INSTANCED_PROP(float , _DetailBlendFactor)
+	UNITY_DOTS_INSTANCED_PROP(float , _DetailBlendMode)
+	UNITY_DOTS_INSTANCED_PROP(float , _VertexColor)
+	UNITY_DOTS_INSTANCED_PROP(float , _VertexAlpha)
+	UNITY_DOTS_INSTANCED_PROP(float , _BlendBase2)
+	UNITY_DOTS_INSTANCED_PROP(float , _BlendBump2)
+	UNITY_DOTS_INSTANCED_PROP(float , _BlendModulate)
+	UNITY_DOTS_INSTANCED_PROP(float , _MaskedBlending)
+	UNITY_DOTS_INSTANCED_PROP(float , _EnvMapFromProbes)
+	UNITY_DOTS_INSTANCED_PROP(float , _FresnelReflection)
+	UNITY_DOTS_INSTANCED_PROP(float , _EnvMapPhongFresnel)
+	UNITY_DOTS_INSTANCED_PROP(float , _EnvMapInvertMask)
+	UNITY_DOTS_INSTANCED_PROP(float , _EnvMapMaskTexture)
+	UNITY_DOTS_INSTANCED_PROP(float , _PhongBoost)
+	UNITY_DOTS_INSTANCED_PROP(float , _PhongExponent)
+	UNITY_DOTS_INSTANCED_PROP(float , _PhongExponentFactor)
+	UNITY_DOTS_INSTANCED_PROP(float , _PhongAlbedoTint)
+	UNITY_DOTS_INSTANCED_PROP(float , _PhongMaskFromBaseAlpha)
+	UNITY_DOTS_INSTANCED_PROP(float , _RimLight)
+	UNITY_DOTS_INSTANCED_PROP(float , _RimLightBoost)
+	UNITY_DOTS_INSTANCED_PROP(float , _RimLightExponent)
+	UNITY_DOTS_INSTANCED_PROP(float , _RimMask)
+	UNITY_DOTS_INSTANCED_PROP(float , _NoFog)
+	UNITY_DOTS_INSTANCED_PROP(float , _OpaqueAlpha)
+	UNITY_DOTS_INSTANCED_PROP(float , _SelfIllumFromBaseAlpha)
+UNITY_DOTS_INSTANCING_END(MaterialPropertyMetadata)
+
+static float4 unity_DOTS_Sampled_Color;
+static float4 unity_DOTS_Sampled_SpecColorTint;
+static float4 unity_DOTS_Sampled_EnvMapTint;
+static float4 unity_DOTS_Sampled_EnvMapContrast;
+static float4 unity_DOTS_Sampled_EnvMapSaturation;
+static float4 unity_DOTS_Sampled_EnvMapMaskWeights;
+static float4 unity_DOTS_Sampled_SelfIllumTint;
+static float4 unity_DOTS_Sampled_PhongFresnelRanges;
+static float4 unity_DOTS_Sampled_BlendMaskTransformU;
+static float4 unity_DOTS_Sampled_BlendMaskTransformV;
+static float  unity_DOTS_Sampled_Cutoff;
+static float  unity_DOTS_Sampled_Smoothness;
+static float  unity_DOTS_Sampled_SpecularScale;
+static float  unity_DOTS_Sampled_BumpScale;
+static float  unity_DOTS_Sampled_DetailBlendFactor;
+static float  unity_DOTS_Sampled_DetailBlendMode;
+static float  unity_DOTS_Sampled_VertexColor;
+static float  unity_DOTS_Sampled_VertexAlpha;
+static float  unity_DOTS_Sampled_BlendBase2;
+static float  unity_DOTS_Sampled_BlendBump2;
+static float  unity_DOTS_Sampled_BlendModulate;
+static float  unity_DOTS_Sampled_MaskedBlending;
+static float  unity_DOTS_Sampled_EnvMapFromProbes;
+static float  unity_DOTS_Sampled_FresnelReflection;
+static float  unity_DOTS_Sampled_EnvMapPhongFresnel;
+static float  unity_DOTS_Sampled_EnvMapInvertMask;
+static float  unity_DOTS_Sampled_EnvMapMaskTexture;
+static float  unity_DOTS_Sampled_PhongBoost;
+static float  unity_DOTS_Sampled_PhongExponent;
+static float  unity_DOTS_Sampled_PhongExponentFactor;
+static float  unity_DOTS_Sampled_PhongAlbedoTint;
+static float  unity_DOTS_Sampled_PhongMaskFromBaseAlpha;
+static float  unity_DOTS_Sampled_RimLight;
+static float  unity_DOTS_Sampled_RimLightBoost;
+static float  unity_DOTS_Sampled_RimLightExponent;
+static float  unity_DOTS_Sampled_RimMask;
+static float  unity_DOTS_Sampled_NoFog;
+static float  unity_DOTS_Sampled_OpaqueAlpha;
+static float  unity_DOTS_Sampled_SelfIllumFromBaseAlpha;
+
+void SetupDOTSSourceGenericMaterialPropertyCaches()
+{
+	unity_DOTS_Sampled_Color                  = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _Color);
+	unity_DOTS_Sampled_SpecColorTint          = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _SpecColorTint);
+	unity_DOTS_Sampled_EnvMapTint             = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _EnvMapTint);
+	unity_DOTS_Sampled_EnvMapContrast         = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _EnvMapContrast);
+	unity_DOTS_Sampled_EnvMapSaturation       = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _EnvMapSaturation);
+	unity_DOTS_Sampled_EnvMapMaskWeights      = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _EnvMapMaskWeights);
+	unity_DOTS_Sampled_SelfIllumTint          = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _SelfIllumTint);
+	unity_DOTS_Sampled_PhongFresnelRanges     = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _PhongFresnelRanges);
+	unity_DOTS_Sampled_BlendMaskTransformU    = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _BlendMaskTransformU);
+	unity_DOTS_Sampled_BlendMaskTransformV    = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _BlendMaskTransformV);
+	unity_DOTS_Sampled_Cutoff                 = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _Cutoff);
+	unity_DOTS_Sampled_Smoothness             = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _Smoothness);
+	unity_DOTS_Sampled_SpecularScale          = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _SpecularScale);
+	unity_DOTS_Sampled_BumpScale              = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _BumpScale);
+	unity_DOTS_Sampled_DetailBlendFactor      = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _DetailBlendFactor);
+	unity_DOTS_Sampled_DetailBlendMode        = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _DetailBlendMode);
+	unity_DOTS_Sampled_VertexColor            = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _VertexColor);
+	unity_DOTS_Sampled_VertexAlpha            = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _VertexAlpha);
+	unity_DOTS_Sampled_BlendBase2             = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _BlendBase2);
+	unity_DOTS_Sampled_BlendBump2             = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _BlendBump2);
+	unity_DOTS_Sampled_BlendModulate          = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _BlendModulate);
+	unity_DOTS_Sampled_MaskedBlending         = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _MaskedBlending);
+	unity_DOTS_Sampled_EnvMapFromProbes       = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _EnvMapFromProbes);
+	unity_DOTS_Sampled_FresnelReflection      = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _FresnelReflection);
+	unity_DOTS_Sampled_EnvMapPhongFresnel     = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _EnvMapPhongFresnel);
+	unity_DOTS_Sampled_EnvMapInvertMask       = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _EnvMapInvertMask);
+	unity_DOTS_Sampled_EnvMapMaskTexture      = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _EnvMapMaskTexture);
+	unity_DOTS_Sampled_PhongBoost             = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _PhongBoost);
+	unity_DOTS_Sampled_PhongExponent          = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _PhongExponent);
+	unity_DOTS_Sampled_PhongExponentFactor    = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _PhongExponentFactor);
+	unity_DOTS_Sampled_PhongAlbedoTint        = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _PhongAlbedoTint);
+	unity_DOTS_Sampled_PhongMaskFromBaseAlpha = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _PhongMaskFromBaseAlpha);
+	unity_DOTS_Sampled_RimLight               = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _RimLight);
+	unity_DOTS_Sampled_RimLightBoost          = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _RimLightBoost);
+	unity_DOTS_Sampled_RimLightExponent       = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _RimLightExponent);
+	unity_DOTS_Sampled_RimMask                = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _RimMask);
+	unity_DOTS_Sampled_NoFog                  = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _NoFog);
+	unity_DOTS_Sampled_OpaqueAlpha            = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _OpaqueAlpha);
+	unity_DOTS_Sampled_SelfIllumFromBaseAlpha = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _SelfIllumFromBaseAlpha);
+}
+
+#undef UNITY_SETUP_DOTS_MATERIAL_PROPERTY_CACHES
+#define UNITY_SETUP_DOTS_MATERIAL_PROPERTY_CACHES() SetupDOTSSourceGenericMaterialPropertyCaches()
+
+#define _Color                  unity_DOTS_Sampled_Color
+#define _SpecColorTint          unity_DOTS_Sampled_SpecColorTint
+#define _EnvMapTint             unity_DOTS_Sampled_EnvMapTint
+#define _EnvMapContrast         unity_DOTS_Sampled_EnvMapContrast
+#define _EnvMapSaturation       unity_DOTS_Sampled_EnvMapSaturation
+#define _EnvMapMaskWeights      unity_DOTS_Sampled_EnvMapMaskWeights
+#define _SelfIllumTint          unity_DOTS_Sampled_SelfIllumTint
+#define _PhongFresnelRanges     unity_DOTS_Sampled_PhongFresnelRanges
+#define _BlendMaskTransformU    unity_DOTS_Sampled_BlendMaskTransformU
+#define _BlendMaskTransformV    unity_DOTS_Sampled_BlendMaskTransformV
+#define _Cutoff                 unity_DOTS_Sampled_Cutoff
+#define _Smoothness             unity_DOTS_Sampled_Smoothness
+#define _SpecularScale          unity_DOTS_Sampled_SpecularScale
+#define _BumpScale              unity_DOTS_Sampled_BumpScale
+#define _DetailBlendFactor      unity_DOTS_Sampled_DetailBlendFactor
+#define _DetailBlendMode        unity_DOTS_Sampled_DetailBlendMode
+#define _VertexColor            unity_DOTS_Sampled_VertexColor
+#define _VertexAlpha            unity_DOTS_Sampled_VertexAlpha
+#define _BlendBase2             unity_DOTS_Sampled_BlendBase2
+#define _BlendBump2             unity_DOTS_Sampled_BlendBump2
+#define _BlendModulate          unity_DOTS_Sampled_BlendModulate
+#define _MaskedBlending         unity_DOTS_Sampled_MaskedBlending
+#define _EnvMapFromProbes       unity_DOTS_Sampled_EnvMapFromProbes
+#define _FresnelReflection      unity_DOTS_Sampled_FresnelReflection
+#define _EnvMapPhongFresnel     unity_DOTS_Sampled_EnvMapPhongFresnel
+#define _EnvMapInvertMask       unity_DOTS_Sampled_EnvMapInvertMask
+#define _EnvMapMaskTexture      unity_DOTS_Sampled_EnvMapMaskTexture
+#define _PhongBoost             unity_DOTS_Sampled_PhongBoost
+#define _PhongExponent          unity_DOTS_Sampled_PhongExponent
+#define _PhongExponentFactor    unity_DOTS_Sampled_PhongExponentFactor
+#define _PhongAlbedoTint        unity_DOTS_Sampled_PhongAlbedoTint
+#define _PhongMaskFromBaseAlpha unity_DOTS_Sampled_PhongMaskFromBaseAlpha
+#define _RimLight               unity_DOTS_Sampled_RimLight
+#define _RimLightBoost          unity_DOTS_Sampled_RimLightBoost
+#define _RimLightExponent       unity_DOTS_Sampled_RimLightExponent
+#define _RimMask                unity_DOTS_Sampled_RimMask
+#define _NoFog                  unity_DOTS_Sampled_NoFog
+#define _OpaqueAlpha            unity_DOTS_Sampled_OpaqueAlpha
+#define _SelfIllumFromBaseAlpha unity_DOTS_Sampled_SelfIllumFromBaseAlpha
+#endif
+
+
 // What the material's parameters mean:
 //  _VertexColor             1: the vertex colour multiplies the base colour ($vertexcolor, LightmappedGeneric only)
 //  _VertexAlpha             1: the vertex alpha multiplies opacity

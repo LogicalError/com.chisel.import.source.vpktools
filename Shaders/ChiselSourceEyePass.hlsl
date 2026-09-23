@@ -50,6 +50,51 @@ CBUFFER_START(UnityPerMaterial)
 	half   _ParallaxStrength;
 CBUFFER_END
 
+// Under a BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - UnityPerMaterial is not per draw,
+// so a whole batch would shade with one material's values unless these are read from the instance data instead.
+// The cached statics are URP's own shape (LitInput.hlsl): reading each property once rather than at every use
+// stops the compiler regenerating the load, which URP measured at about 10% of GPU time on a Quest 2.
+//
+// _Iris_ST is left out deliberately, as URP leaves its own _BaseMap_ST out: a texture's tiling is not per
+// instance, and a batch only ever mixes materials that share the texture.
+#ifdef UNITY_DOTS_INSTANCING_ENABLED
+UNITY_DOTS_INSTANCING_START(MaterialPropertyMetadata)
+	UNITY_DOTS_INSTANCED_PROP(float4, _AmbientOcclColor)
+	UNITY_DOTS_INSTANCED_PROP(float , _EyeballRadius)
+	UNITY_DOTS_INSTANCED_PROP(float , _Dilation)
+	UNITY_DOTS_INSTANCED_PROP(float , _Glossiness)
+	UNITY_DOTS_INSTANCED_PROP(float , _CorneaBumpStrength)
+	UNITY_DOTS_INSTANCED_PROP(float , _ParallaxStrength)
+UNITY_DOTS_INSTANCING_END(MaterialPropertyMetadata)
+
+static float4 unity_DOTS_Sampled_AmbientOcclColor;
+static float  unity_DOTS_Sampled_EyeballRadius;
+static float  unity_DOTS_Sampled_Dilation;
+static float  unity_DOTS_Sampled_Glossiness;
+static float  unity_DOTS_Sampled_CorneaBumpStrength;
+static float  unity_DOTS_Sampled_ParallaxStrength;
+
+void SetupDOTSEyeMaterialPropertyCaches()
+{
+	unity_DOTS_Sampled_AmbientOcclColor   = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _AmbientOcclColor);
+	unity_DOTS_Sampled_EyeballRadius      = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _EyeballRadius);
+	unity_DOTS_Sampled_Dilation           = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _Dilation);
+	unity_DOTS_Sampled_Glossiness         = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _Glossiness);
+	unity_DOTS_Sampled_CorneaBumpStrength = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _CorneaBumpStrength);
+	unity_DOTS_Sampled_ParallaxStrength   = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _ParallaxStrength);
+}
+
+#undef UNITY_SETUP_DOTS_MATERIAL_PROPERTY_CACHES
+#define UNITY_SETUP_DOTS_MATERIAL_PROPERTY_CACHES() SetupDOTSEyeMaterialPropertyCaches()
+
+#define _AmbientOcclColor   unity_DOTS_Sampled_AmbientOcclColor
+#define _EyeballRadius      unity_DOTS_Sampled_EyeballRadius
+#define _Dilation           unity_DOTS_Sampled_Dilation
+#define _Glossiness         unity_DOTS_Sampled_Glossiness
+#define _CorneaBumpStrength unity_DOTS_Sampled_CorneaBumpStrength
+#define _ParallaxStrength   unity_DOTS_Sampled_ParallaxStrength
+#endif
+
 struct Attributes
 {
 	float4 positionOS : POSITION;

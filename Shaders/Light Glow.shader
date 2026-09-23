@@ -39,9 +39,12 @@ Shader "Chisel/Import/LightGlow"
 			Name "LightGlow"
 
 			HLSLPROGRAM
-			#pragma target 3.5
+			#pragma target 4.5
 			#pragma vertex vert
 			#pragma fragment frag
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
@@ -62,6 +65,7 @@ Shader "Chisel/Import/LightGlow"
 			{
 				float4 positionOS : POSITION;
 				float2 uv         : TEXCOORD0;
+				UNITY_VERTEX_INPUT_INSTANCE_ID
 			};
 
 			struct Varyings
@@ -122,6 +126,7 @@ Shader "Chisel/Import/LightGlow"
 
 			Varyings vert(Attributes input)
 			{
+				UNITY_SETUP_INSTANCE_ID(input);
 				Varyings output = (Varyings)0;
 				float4x4 objectToWorld = GetObjectToWorldMatrix();
 				float3 originWorld = TransformObjectToWorld(float3(0, 0, 0));

@@ -26,9 +26,12 @@ Shader "Chisel/Import/DustMotes"
 			Name "DustMotes"
 
 			HLSLPROGRAM
-			#pragma target 3.5
+			#pragma target 4.5
 			#pragma vertex SourceDustVertex
 			#pragma fragment SourceDustFragment
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 			#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
@@ -48,6 +51,7 @@ Shader "Chisel/Import/DustMotes"
 				float4 texcoord0 : TEXCOORD0;  // xy: the corner's UV; z: the size; w: the age, 0 to 1
 				float4 custom1   : TEXCOORD1;  // x: DistMax (meters); y: frozen; z: size follows the distance
 				float3 center    : TEXCOORD2;  // the particle, in world space
+				UNITY_VERTEX_INPUT_INSTANCE_ID
 			};
 
 			struct Varyings
@@ -59,6 +63,7 @@ Shader "Chisel/Import/DustMotes"
 
 			Varyings SourceDustVertex(Attributes input)
 			{
+				UNITY_SETUP_INSTANCE_ID(input);
 				Varyings output = (Varyings)0;
 				// Nothing to draw leaves the quad a point, which is never rasterized
 				output.positionCS = float4(0, 0, 0, 1);

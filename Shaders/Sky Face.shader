@@ -48,6 +48,7 @@ Shader "Chisel/Source/Sky Face"
         struct Attributes
         {
             float4 positionOS : POSITION;
+            UNITY_VERTEX_INPUT_INSTANCE_ID
         };
         ENDHLSL
 
@@ -60,9 +61,12 @@ Shader "Chisel/Source/Sky Face"
             Cull Back
 
             HLSLPROGRAM
-            #pragma target 3.5
+            #pragma target 4.5
             #pragma vertex Vert
             #pragma fragment Frag
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
             TEXTURECUBE(_Tex); SAMPLER(sampler_Tex);
             TEXTURE2D(_SourceSky3D); SAMPLER(sampler_SourceSky3D);
@@ -76,6 +80,7 @@ Shader "Chisel/Source/Sky Face"
 
             Varyings Vert(Attributes input)
             {
+                UNITY_SETUP_INSTANCE_ID(input);
                 Varyings output;
                 output.positionWS = TransformObjectToWorld(input.positionOS.xyz);
                 output.positionCS = TransformWorldToHClip(output.positionWS);
@@ -109,12 +114,16 @@ Shader "Chisel/Source/Sky Face"
             Cull Back
 
             HLSLPROGRAM
-            #pragma target 3.5
+            #pragma target 4.5
             #pragma vertex Vert
             #pragma fragment Frag
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
             float4 Vert(Attributes input) : SV_POSITION
             {
+                UNITY_SETUP_INSTANCE_ID(input);
                 return TransformObjectToHClip(input.positionOS.xyz);
             }
 
@@ -138,15 +147,19 @@ Shader "Chisel/Source/Sky Face"
             Cull Back
 
             HLSLPROGRAM
-            #pragma target 3.5
+            #pragma target 4.5
             #pragma vertex Vert
             #pragma fragment Frag
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
             #pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
 
             struct NormalAttributes
             {
                 float4 positionOS : POSITION;
                 float3 normalOS   : NORMAL;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             struct NormalVaryings
@@ -157,6 +170,7 @@ Shader "Chisel/Source/Sky Face"
 
             NormalVaryings Vert(NormalAttributes input)
             {
+                UNITY_SETUP_INSTANCE_ID(input);
                 NormalVaryings output;
                 output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
                 output.normalWS   = TransformObjectToWorldNormal(input.normalOS);

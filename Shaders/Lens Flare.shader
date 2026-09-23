@@ -28,9 +28,12 @@ Shader "Chisel/Import/LensFlare"
 			Name "LensFlare"
 
 			HLSLPROGRAM
-			#pragma target 3.5
+			#pragma target 4.5
 			#pragma vertex SourceLensFlareVertex
 			#pragma fragment SourceLensFlareFragment
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
@@ -59,6 +62,7 @@ Shader "Chisel/Import/LensFlare"
 				float4 ramp   : TEXCOORD2;    // x: DISKH's offset, or DISK's 1 to turn it; yzw: flareNN_intensity
 				float4 sizes  : TEXCOORD3;    // xyz: flareNN_sizes; w: 32 units, in meters
 				float4 flare  : TEXCOORD4;    // FlareAttenuation (meters, 0 for none), GlowProxySize (meters), FlareStyle, FlareType
+				UNITY_VERTEX_INPUT_INSTANCE_ID
 			};
 
 			struct Varyings
@@ -106,6 +110,7 @@ Shader "Chisel/Import/LensFlare"
 
 			Varyings SourceLensFlareVertex(Attributes input)
 			{
+				UNITY_SETUP_INSTANCE_ID(input);
 				Varyings output = (Varyings)0;
 				// Nothing to draw leaves the quad a point, which is never rasterized
 				output.positionCS = float4(0, 0, 0, 1);

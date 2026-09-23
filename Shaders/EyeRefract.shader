@@ -69,6 +69,10 @@ Shader "Chisel/Source/EyeRefract"
 			#pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
 			#pragma multi_compile _ _CLUSTER_LIGHT_LOOP
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup refuses any pass with no DOTS_INSTANCING_ON variant, at draw submission and
+			// not at compile - so the symptom is silence and nothing drawn. See ChiselSourceEyePass.hlsl for
+			// which of this material's properties are read per instance.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
 			#include "ChiselSourceEyePass.hlsl"
 			ENDHLSL
@@ -90,6 +94,10 @@ Shader "Chisel/Source/EyeRefract"
 			#pragma fragment ShadowFragment
 			#pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup refuses any pass with no DOTS_INSTANCING_ON variant, at draw submission and
+			// not at compile - so the symptom is silence and nothing drawn. See ChiselSourceEyePass.hlsl for
+			// which of this material's properties are read per instance.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
@@ -143,6 +151,10 @@ Shader "Chisel/Source/EyeRefract"
 			#pragma fragment DepthNormalsFragment
 			#pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup refuses any pass with no DOTS_INSTANCING_ON variant, at draw submission and
+			// not at compile - so the symptom is silence and nothing drawn. See ChiselSourceEyePass.hlsl for
+			// which of this material's properties are read per instance.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/UnityGBuffer.hlsl"

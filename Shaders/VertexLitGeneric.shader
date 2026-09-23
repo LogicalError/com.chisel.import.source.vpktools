@@ -151,6 +151,9 @@ Shader "Chisel/Source/VertexLitGeneric"
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
 
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#pragma instancing_options renderinglayer
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
 
@@ -206,6 +209,9 @@ Shader "Chisel/Source/VertexLitGeneric"
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
 
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#pragma instancing_options renderinglayer
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
 
@@ -225,7 +231,7 @@ Shader "Chisel/Source/VertexLitGeneric"
 			Cull [_Cull]
 
 			HLSLPROGRAM
-			#pragma target 2.0
+			#pragma target 4.5
 			#pragma vertex SourceShadowVertex
 			#pragma fragment SourceShadowFragment
 
@@ -234,6 +240,9 @@ Shader "Chisel/Source/VertexLitGeneric"
 			#pragma shader_feature_local _ALPHATEST_ON
 
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
 			#pragma multi_compile _ LOD_FADE_CROSSFADE
 			// Directional and punctual lights bias their shadows differently
@@ -253,7 +262,7 @@ Shader "Chisel/Source/VertexLitGeneric"
 			Cull [_Cull]
 
 			HLSLPROGRAM
-			#pragma target 2.0
+			#pragma target 4.5
 			#pragma vertex SourceDepthVertex
 			#pragma fragment SourceDepthOnlyFragment
 
@@ -264,6 +273,9 @@ Shader "Chisel/Source/VertexLitGeneric"
 			#pragma multi_compile _ LOD_FADE_CROSSFADE
 
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
 
 			#include "ChiselSourceGenericDepthPasses.hlsl"
@@ -279,7 +291,7 @@ Shader "Chisel/Source/VertexLitGeneric"
 			Cull [_Cull]
 
 			HLSLPROGRAM
-			#pragma target 2.0
+			#pragma target 4.5
 			#pragma vertex SourceDepthVertex
 			#pragma fragment SourceDepthNormalsFragment
 
@@ -293,6 +305,9 @@ Shader "Chisel/Source/VertexLitGeneric"
 			#pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
 
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
 
 			#define SOURCE_DEPTH_NORMALS 1
@@ -309,9 +324,12 @@ Shader "Chisel/Source/VertexLitGeneric"
 			Cull Off
 
 			HLSLPROGRAM
-			#pragma target 2.0
+			#pragma target 4.5
 			#pragma vertex SourceMetaVertex
 			#pragma fragment SourceMetaFragment
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
 			#pragma shader_feature_local_fragment _DETAIL
 			#pragma shader_feature_local_fragment _ENVMAP

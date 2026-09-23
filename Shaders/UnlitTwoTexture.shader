@@ -77,11 +77,14 @@ Shader "Chisel/Source/UnlitTwoTexture"
 			AlphaToMask [_AlphaToMask]
 
 			HLSLPROGRAM
-			#pragma target 3.5
+			#pragma target 4.5
 			#pragma vertex vert
 			#pragma fragment frag
 			#pragma shader_feature_local _ALPHATEST_ON
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Fog.hlsl"
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
 
@@ -164,6 +167,9 @@ Shader "Chisel/Source/UnlitTwoTexture"
 			#pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
 			#pragma multi_compile_fragment _ SHADOWS_SHADOWMASK
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
 
 			#define SOURCE_UNLIT_GBUFFER_PASS
@@ -181,11 +187,14 @@ Shader "Chisel/Source/UnlitTwoTexture"
 			ColorMask R
 
 			HLSLPROGRAM
-			#pragma target 3.5
+			#pragma target 4.5
 			#pragma vertex SourceUnlitVertex
 			#pragma fragment SourceUnlitDepthOnlyFragment
 			#pragma shader_feature_local _ALPHATEST_ON
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 
 			#define SOURCE_UNLIT_DEPTH_ONLY_PASS
 			#include "ChiselSourceUnlitPasses.hlsl"
@@ -200,12 +209,15 @@ Shader "Chisel/Source/UnlitTwoTexture"
 			ZWrite On
 
 			HLSLPROGRAM
-			#pragma target 3.5
+			#pragma target 4.5
 			#pragma vertex SourceUnlitVertex
 			#pragma fragment SourceUnlitDepthNormalsFragment
 			#pragma shader_feature_local _ALPHATEST_ON
 			#pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
 
 			#define SOURCE_UNLIT_DEPTH_NORMALS_PASS
@@ -223,11 +235,14 @@ Shader "Chisel/Source/UnlitTwoTexture"
 			ColorMask 0
 
 			HLSLPROGRAM
-			#pragma target 3.5
+			#pragma target 4.5
 			#pragma vertex SourceUnlitVertex
 			#pragma fragment SourceUnlitShadowFragment
 			#pragma shader_feature_local _ALPHATEST_ON
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
 
 			#define SOURCE_UNLIT_SHADOW_CASTER_PASS

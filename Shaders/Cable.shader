@@ -140,7 +140,7 @@ Shader "Chisel/Source/Cable"
 			Cull [_Cull]
 
 			HLSLPROGRAM
-			#pragma target 2.0
+			#pragma target 4.5
 			#pragma vertex SourceCableVertex
 			#pragma fragment SourceCableFragment
 
@@ -166,6 +166,9 @@ Shader "Chisel/Source/Cable"
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
 
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#pragma instancing_options renderinglayer
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
 
@@ -299,13 +302,16 @@ Shader "Chisel/Source/Cable"
 			Cull [_Cull]
 
 			HLSLPROGRAM
-			#pragma target 2.0
+			#pragma target 4.5
 			#pragma vertex SourceCableDepthVertex
 			#pragma fragment SourceCableDepthFragment
 
 			#pragma shader_feature_local_fragment _ALPHATEST_ON
 
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
 
 			struct SourceCableDepthAttributes
@@ -359,7 +365,7 @@ Shader "Chisel/Source/Cable"
 			Cull [_Cull]
 
 			HLSLPROGRAM
-			#pragma target 2.0
+			#pragma target 4.5
 			#pragma vertex SourceCableNormalsVertex
 			#pragma fragment SourceCableNormalsFragment
 
@@ -369,6 +375,9 @@ Shader "Chisel/Source/Cable"
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
 
 			#pragma multi_compile_instancing
+			// A BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - refuses a pass with no
+			// DOTS_INSTANCING_ON variant, at draw submission rather than at compile, so the symptom is silence.
+			#pragma multi_compile _ DOTS_INSTANCING_ON
 			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
 
 			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
