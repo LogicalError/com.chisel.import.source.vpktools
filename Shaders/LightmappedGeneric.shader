@@ -19,14 +19,17 @@ Shader "Chisel/Source/LightmappedGeneric"
 		_BaseTexture2 ("$basetexture2", 2D) = "white" {}
 		[Normal] _BumpMap2 ("$bumpmap2", 2D) = "bump" {}
 		_BlendModulateTexture ("$blendmodulatetexture", 2D) = "white" {}
-		[Toggle] _BlendBase2 ("Blend $basetexture2", Float) = 0
-		[Toggle] _BlendBump2 ("Blend $bumpmap2", Float) = 0
-		[Toggle] _BlendModulate ("Modulate the blend", Float) = 0
-		[Toggle] _MaskedBlending ("$maskedblending", Float) = 0
+		// ToggleUI rather than Toggle, here and below: these are read as float uniforms and branched on, while
+		// [Toggle] would also enable a keyword named after the property that no pass declares, leaving it in the
+		// material's m_InvalidKeywords doing nothing.
+		[ToggleUI] _BlendBase2 ("Blend $basetexture2", Float) = 0
+		[ToggleUI] _BlendBump2 ("Blend $bumpmap2", Float) = 0
+		[ToggleUI] _BlendModulate ("Modulate the blend", Float) = 0
+		[ToggleUI] _MaskedBlending ("$maskedblending", Float) = 0
 		_BlendMaskTransformU ("$blendmasktransform u row", Vector) = (1,0,0,0)
 		_BlendMaskTransformV ("$blendmasktransform v row", Vector) = (0,1,0,0)
-		[Toggle] _VertexColor ("$vertexcolor", Float) = 0
-		[Toggle] _VertexAlpha ("Vertex alpha is opacity", Float) = 0
+		[ToggleUI] _VertexColor ("$vertexcolor", Float) = 0
+		[ToggleUI] _VertexAlpha ("Vertex alpha is opacity", Float) = 0
 
 		_DetailTex ("$detail", 2D) = "grey" {}
 		_DetailBlendFactor ("$detailblendfactor", Range(0,1)) = 1.0
@@ -34,15 +37,15 @@ Shader "Chisel/Source/LightmappedGeneric"
 
 		_EnvMapMask ("$envmapmask", 2D) = "white" {}
 		[NoScaleOffset] _EnvMap ("$envmap (a named cubemap)", Cube) = "black" {}
-		[Toggle] _EnvMapFromProbes ("$envmap is env_cubemap: the nearest probe", Float) = 1
+		[ToggleUI] _EnvMapFromProbes ("$envmap is env_cubemap: the nearest probe", Float) = 1
 		_EnvMapTint ("$envmaptint", Color) = (1,1,1,1)
 		_EnvMapContrast ("$envmapcontrast", Vector) = (0,0,0,0)
 		_EnvMapSaturation ("$envmapsaturation", Vector) = (1,1,1,0)
 		_FresnelReflection ("$fresnelreflection", Float) = 1
 		_EnvMapPhongFresnel ("$envmapfresnel", Float) = 0
 		_EnvMapMaskWeights ("Envmap mask: normal alpha, base alpha, 1 - base alpha, phong mask", Vector) = (0,0,0,0)
-		[Toggle] _EnvMapInvertMask ("$invertphongmask", Float) = 0
-		[Toggle] _EnvMapMaskTexture ("Envmap masked by $envmapmask", Float) = 0
+		[ToggleUI] _EnvMapInvertMask ("$invertphongmask", Float) = 0
+		[ToggleUI] _EnvMapMaskTexture ("Envmap masked by $envmapmask", Float) = 0
 
 		_PhongBoost ("$phongboost", Float) = 1.0
 		_PhongExponent ("$phongexponent", Float) = -1.0

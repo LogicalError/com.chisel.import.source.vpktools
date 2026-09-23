@@ -8,17 +8,20 @@ Shader "Chisel/Source/UnlitGeneric"
 		[MainColor] _Color ("$color", Color) = (1,1,1,1)
 		[MainTexture] _BaseMap ("$basetexture", 2D) = "white" {}
 		_Cutoff ("$alphatestreference", Range(0,1)) = 0.5
-		[Toggle] _VertexColor ("$vertexcolor", Float) = 0
-		[Toggle] _VertexAlpha ("$vertexalpha", Float) = 0
+		// ToggleUI rather than Toggle, here and below: these are read as float uniforms and branched on, while
+		// [Toggle] would also enable a keyword named after the property that no pass declares, leaving it in the
+		// material's m_InvalidKeywords doing nothing.
+		[ToggleUI] _VertexColor ("$vertexcolor", Float) = 0
+		[ToggleUI] _VertexAlpha ("$vertexalpha", Float) = 0
 
 		_EnvMapMask ("$envmapmask", 2D) = "white" {}
 		[NoScaleOffset] _EnvMap ("$envmap (a named cubemap)", Cube) = "black" {}
-		[Toggle] _EnvMapFromProbes ("$envmap is env_cubemap: the nearest probe", Float) = 1
+		[ToggleUI] _EnvMapFromProbes ("$envmap is env_cubemap: the nearest probe", Float) = 1
 		_EnvMapTint ("$envmaptint", Color) = (1,1,1,1)
 		_EnvMapContrast ("$envmapcontrast", Vector) = (0,0,0,0)
 		_EnvMapSaturation ("$envmapsaturation", Vector) = (1,1,1,0)
 		_EnvMapMaskWeights ("Envmap mask: -, base alpha, 1 - base alpha, -", Vector) = (0,0,0,0)
-		[Toggle] _EnvMapMaskTexture ("Envmap masked by $envmapmask", Float) = 0
+		[ToggleUI] _EnvMapMaskTexture ("Envmap masked by $envmapmask", Float) = 0
 
 		[HideInInspector] _SrcBlend ("__src", Float) = 1.0
 		[HideInInspector] _DstBlend ("__dst", Float) = 0.0

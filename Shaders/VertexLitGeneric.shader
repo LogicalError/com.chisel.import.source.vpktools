@@ -24,15 +24,20 @@ Shader "Chisel/Source/VertexLitGeneric"
 
 		_EnvMapMask ("$envmapmask", 2D) = "white" {}
 		[NoScaleOffset] _EnvMap ("$envmap (a named cubemap)", Cube) = "black" {}
-		[Toggle] _EnvMapFromProbes ("$envmap is env_cubemap: the nearest probe", Float) = 1
+		// ToggleUI rather than Toggle, here and everywhere else in this file: these are read as float uniforms
+		// and branched on, while [Toggle] ALSO enables a keyword named after the property - _ENVMAPFROMPROBES_ON
+		// and the rest - that no pass declares, so it lands in the material's m_InvalidKeywords doing nothing.
+		// This was the one that showed, only because it is the single toggle defaulting to on, so every material
+		// the importer built carried it.
+		[ToggleUI] _EnvMapFromProbes ("$envmap is env_cubemap: the nearest probe", Float) = 1
 		_EnvMapTint ("$envmaptint", Color) = (1,1,1,1)
 		_EnvMapContrast ("$envmapcontrast", Vector) = (0,0,0,0)
 		_EnvMapSaturation ("$envmapsaturation", Vector) = (1,1,1,0)
 		_FresnelReflection ("$fresnelreflection", Float) = 1
 		_EnvMapPhongFresnel ("$envmapfresnel", Float) = 0
 		_EnvMapMaskWeights ("Envmap mask: normal alpha, base alpha, 1 - base alpha, phong mask", Vector) = (0,0,0,0)
-		[Toggle] _EnvMapInvertMask ("$invertphongmask", Float) = 0
-		[Toggle] _EnvMapMaskTexture ("Envmap masked by $envmapmask", Float) = 0
+		[ToggleUI] _EnvMapInvertMask ("$invertphongmask", Float) = 0
+		[ToggleUI] _EnvMapMaskTexture ("Envmap masked by $envmapmask", Float) = 0
 
 		_PhongBoost ("$phongboost", Float) = 1.0
 		// Negative hands the exponent to _PhongExponentMap, which is Source's own default.
@@ -40,13 +45,13 @@ Shader "Chisel/Source/VertexLitGeneric"
 		_PhongExponentFactor ("$phongexponentfactor", Float) = 0
 		_PhongFresnelRanges ("$phongfresnelranges", Vector) = (1,1,1,0)
 		_PhongMaskFromBaseAlpha ("Phong mask is base alpha", Float) = 0
-		[Toggle] _RimLight ("$rimlight", Float) = 0
+		[ToggleUI] _RimLight ("$rimlight", Float) = 0
 		_RimLightBoost ("$rimlightboost", Float) = 1
 		// How wide the rim is. 4 is Source's value when the key is absent, and was hardcoded here.
 		_RimLightExponent ("$rimlightexponent", Float) = 4
 		_NoFog ("$nofog", Float) = 0
 		[HideInInspector] _OpaqueAlpha ("Opaque: write alpha 1, not the base texture's", Float) = 0
-		[Toggle] _RimMask ("$rimmask", Float) = 0
+		[ToggleUI] _RimMask ("$rimmask", Float) = 0
 		_PhongMask ("Phong mask (the $bumpmap's alpha)", 2D) = "white" {}
 		_PhongExponentMap ("$phongexponenttexture", 2D) = "white" {}
 		_PhongAlbedoTint ("$phongalbedotint", Float) = 0
