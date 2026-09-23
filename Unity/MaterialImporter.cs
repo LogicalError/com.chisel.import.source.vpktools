@@ -28,7 +28,19 @@ namespace Chisel.Import.Source.VPKTools
 		// 18: _OpaqueAlpha, so a plain opaque surface writes 1 into the frame's alpha instead of whatever mask its
 		// base texture carries. Every material built before this exports that mask, and ~2200 of them hold values
 		// low enough to read as "do not fog me".
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 18);
+		// 19: EyeRefract exists, and the VMT parser no longer loses a key. Neither is a change to what a
+		// material is BUILT from, which is why this was missed: Chisel/Source/EyeRefract is found by name at
+		// build time, so a material built before the shader existed keeps the URP/Lit fallback it resolved to
+		// then and draws every eye white; and a material whose VMT put two key/value pairs on one line lost
+		// the second one to TextParser until 0d291af, so it kept the empty slot it was built with. A reimport
+		// changed neither, because both were stamped current at 18 - the generator changed underneath a stamp
+		// that did not. Any new SHADER is a material version bump for exactly this reason.
+		// 20: $bumpmap slots are filled again. 329 of the 624 materials whose VMT names one had _BumpMap bound
+		// to nothing, with the converted .png sitting on disk - see Texture2DImporter.MarkAsNormalMap for the
+		// cubemap shape behind it. Every one of those materials has to be rebuilt to pick the texture up, and
+		// to enable _NORMALMAP with it: the keyword is set from the texture, so a null one left the whole bump
+		// path compiled out of the variant, and assigning the texture by hand afterwards did nothing.
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 20);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -1700,7 +1712,12 @@ namespace Chisel.Import.Source.VPKTools
 
 			if (isNormalMap)
 			{
-				Texture2DImporter.MarkAsNormalMap(image, selfShadowed);
+				// Take the texture back: marking it re-imports the asset, which destroys the object loaded
+				// above, and a destroyed object assigned below serialises as a null reference rather than
+				// failing - a $bumpmap slot that silently reads as empty.
+				image = Texture2DImporter.MarkAsNormalMap(image, selfShadowed);
+				if (image == null)
+					return null;
 			}
 			else if (IsColorSlot(material, materialPropertyName))
 			{

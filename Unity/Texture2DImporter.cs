@@ -553,14 +553,19 @@ namespace Chisel.Import.Source.VPKTools
 		/// map slot unconverted produces nonsense. Only the VMT key can say: the filename convention
 		/// disagrees with it on 62 of 253 materials, and the VTF's own SSBUMP flag is never set.
 		/// </param>
-		public static void MarkAsNormalMap(Texture2D texture, bool selfShadowed = false)
+		/// <returns>
+		/// The texture as it is AFTER any re-import this did, which is not the object that was passed in:
+		/// clearing the override and re-writing the .png both destroy it, and assigning a destroyed object to
+		/// a material serialises as a null reference. Callers that go on to use the texture must use this.
+		/// </returns>
+		public static Texture2D MarkAsNormalMap(Texture2D texture, bool selfShadowed = false)
 		{
 			if (texture == null)
-				return;
+				return null;
 
 			var assetPath = AssetDatabase.GetAssetPath(texture);
 			if (string.IsNullOrEmpty(assetPath))
-				return;
+				return texture;
 
 			// A normal map goes back to Unity's own importer. SourceTextureImporter deliberately does not
 			// handle one: Unity's NormalMap type re-encodes the texture (DXT5nm keeps X in alpha) and every
@@ -571,20 +576,35 @@ namespace Chisel.Import.Source.VPKTools
 				AssetDatabase.ClearImporterOverride(assetPath);
 
 			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter textureImporter)
-				return;
+				return texture;
 
 			// Idempotent: the same texture is claimed by every material that uses it, and a re-import
 			// is expensive.
 			if (textureImporter.userData != null && textureImporter.userData.Contains(kNormalMapStamp))
-				return;
+				return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
 
 			if (ConvertSourceNormalMapFile(assetPath, selfShadowed))
-				textureImporter.userData = string.IsNullOrEmpty(textureImporter.userData)
-										 ? kNormalMapStamp
-										 : textureImporter.userData + ";" + kNormalMapStamp;
+				textureImporter.userData = GeneratedAssetVersion.Stamp(textureImporter.userData, GeneratedVersion)
+										 + ";" + kNormalMapStamp;
 
 			textureImporter.textureType = TextureImporterType.NormalMap;
+
+			// Say what the shape IS rather than inheriting it. Clearing the override above replaces the
+			// ScriptedImporter's block with a fresh TextureImporter one, and what that block carries for
+			// the settings nobody has written is not Texture2D: 217 of this project's 416 normal maps came
+			// out as CUBEMAPS, which is 217 of the 219 cubemaps in the whole project. A cube asset's main
+			// object is a Cubemap, so LoadAssetAtPath<Texture2D> on it returns null and the material's
+			// $bumpmap slot serialises as a null reference - 329 of the 624 materials whose VMT names a
+			// $bumpmap had no normal map because of this, with the converted .png sitting right there on
+			// disk. Nothing else in this importer writes a shape, so an inherited wrong one survives every
+			// re-import forever.
+			TextureImporterSettings settings = new();
+			textureImporter.ReadTextureSettings(settings);
+			settings.textureShape = TextureImporterShape.Texture2D;
+			textureImporter.SetTextureSettings(settings);
+
 			textureImporter.SaveAndReimport();
+			return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
 		}
 
 		/// <summary>
