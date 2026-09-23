@@ -48,6 +48,7 @@ CBUFFER_START(UnityPerMaterial)
 	half   _Glossiness;
 	half   _CorneaBumpStrength;
 	half   _ParallaxStrength;
+	half   _HalfLambert;
 CBUFFER_END
 
 // Under a BatchRendererGroup - the GPU Resident Drawer, or Entities Graphics - UnityPerMaterial is not per draw,
@@ -65,6 +66,7 @@ UNITY_DOTS_INSTANCING_START(MaterialPropertyMetadata)
 	UNITY_DOTS_INSTANCED_PROP(float , _Glossiness)
 	UNITY_DOTS_INSTANCED_PROP(float , _CorneaBumpStrength)
 	UNITY_DOTS_INSTANCED_PROP(float , _ParallaxStrength)
+	UNITY_DOTS_INSTANCED_PROP(float , _HalfLambert)
 UNITY_DOTS_INSTANCING_END(MaterialPropertyMetadata)
 
 static float4 unity_DOTS_Sampled_AmbientOcclColor;
@@ -73,6 +75,7 @@ static float  unity_DOTS_Sampled_Dilation;
 static float  unity_DOTS_Sampled_Glossiness;
 static float  unity_DOTS_Sampled_CorneaBumpStrength;
 static float  unity_DOTS_Sampled_ParallaxStrength;
+static float  unity_DOTS_Sampled_HalfLambert;
 
 void SetupDOTSEyeMaterialPropertyCaches()
 {
@@ -82,6 +85,7 @@ void SetupDOTSEyeMaterialPropertyCaches()
 	unity_DOTS_Sampled_Glossiness         = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _Glossiness);
 	unity_DOTS_Sampled_CorneaBumpStrength = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _CorneaBumpStrength);
 	unity_DOTS_Sampled_ParallaxStrength   = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _ParallaxStrength);
+	unity_DOTS_Sampled_HalfLambert        = UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float , _HalfLambert);
 }
 
 #undef UNITY_SETUP_DOTS_MATERIAL_PROPERTY_CACHES
@@ -93,6 +97,7 @@ void SetupDOTSEyeMaterialPropertyCaches()
 #define _Glossiness         unity_DOTS_Sampled_Glossiness
 #define _CorneaBumpStrength unity_DOTS_Sampled_CorneaBumpStrength
 #define _ParallaxStrength   unity_DOTS_Sampled_ParallaxStrength
+#define _HalfLambert        unity_DOTS_Sampled_HalfLambert
 #endif
 
 struct Attributes
@@ -141,106 +146,177 @@ Varyings SourceEyeVertex(Attributes input)
 	return output;
 }
 
+// Source's eye takes its ambient from the model's lighting state, the ambient cube of its leaf
+// (DoLightingUnrolled). Here that is the same probes every other surface reads: APV when the renderer has it -
+// plain SampleSH would read the object's light probes, which APV does not fill - and the probes otherwise.
+half3 SourceEyeAmbient(float3 positionWS, float3 normalWS, float3 viewDirWS, float2 positionSS)
+{
+#if defined(PROBE_VOLUMES_L1) || defined(PROBE_VOLUMES_L2)
+	return SampleProbeVolumePixel(half3(0, 0, 0), GetAbsolutePositionWS(positionWS), normalWS, viewDirWS, positionSS);
+#else
+	return SampleSH(normalWS);
+#endif
+}
+
+// What one light contributes, all three ways Source's eye takes it: diffuse into the "vertex light" on the bent
+// normal (eye_refract_vs20.fxc:157), the iris caustic (eye_refract_ps2x.fxc:332-372) and the cornea glint
+// (:408-424). The iris caustic and the glint take the light's falloff WITHOUT its cosine term, as Valve's do
+// (vLightFalloffCosine.x/.y are attenuation only).
+struct SourceEyeLight
+{
+	half3 vertexLight;
+	half3 irisLighting;
+	half3 glints;
+};
+
+void AccumulateSourceEyeLight(Light light, float3 bentNormal, float3 irisTangentNormal, float3 corneaReflection,
+							  float3 T, float3 B, float3 N, half highlightMask, inout SourceEyeLight sum)
+{
+	half3 radiance = light.color * (light.distanceAttenuation * light.shadowAttenuation);
+	float3 L = light.direction;          // toward the light, as PixelShaderGetLightVector's is
+
+	// CosineTermInternal: half-Lambert when the material asks for it, which every eye in the game does
+	float nDotL = dot(bentNormal, L);
+	half cosine = (_HalfLambert > 0.5h) ? (nDotL * 0.5 + 0.5) * (nDotL * 0.5 + 0.5) : saturate(nDotL);
+	sum.vertexLight += radiance * cosine;
+
+	// The iris caustic, line for line
+	float3 tangentLight = float3(dot(L, T), dot(L, B), dot(L, N));
+	float3 flattened = -tangentLight;
+	flattened.xy *= -0.5;                // "Flatten tangent view"
+	flattened.z = max(flattened.z, 0.5); // "Clamp z of tangent view to help maintain highlight"
+	flattened = normalize(flattened);
+	float irisFacing = pow(abs(dot(irisTangentNormal, flattened)), 6.0) * 0.5;       // "6.0 and 0.5 are magic numbers"
+	float coneOfDarkness = pow(1.0 - saturate((-tangentLight.z - 0.25) / 0.75), 4.0); // light behind the eyeball
+	sum.irisLighting += irisFacing * highlightMask * coneOfDarkness * radiance;
+
+	// The glint. Not masked by the highlight mask: only the iris caustic is (:337 against :413).
+	sum.glints += pow(saturate(dot(corneaReflection, L)), 128.0) * radiance;
+}
+
 half4 SourceEyeFragment(Varyings input) : SV_Target
 {
 	UNITY_SETUP_INSTANCE_ID(input);
 	UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
-	// Iris projection. $IrisU/$IrisV default to [0 1 0 0] and [0 0 1 0]: u from the eye's LEFT axis, v from
-	// its UP axis, with the eye facing FORWARD, the axis the projection drops. Those names are the point -
-	// the numbers spell them in Source's frame (x forward, y left, z up), and a mesh here is in Unity's,
-	// so the three have to be named again rather than copied across. This reads u from x and v from y with
-	// the eye facing z. Copying the literal yz is what put the eye on its side in the material preview.
-	// The importer measures this per vertex from the model's own eyeball - its centre, its left and up vectors and
-	// its radius, all from mstudioeyeball_t - and writes it into uv2 (ModelImporter.EyeProjection), because these
-	// meshes are skinned and a skinned vertex arrives here already posed: object space is no longer the eyeball's.
-	// A mesh that carries none hands zero, and the default below stands in - which is the case for a material
-	// preview's own primitive, where a mesh centred on the origin and one unit across makes it right.
-	float radius = max(_EyeballRadius, 1e-4h);
-	float2 sphereUv = any(input.eyeUv) ? input.eyeUv
-									   : ((input.positionOS.xy / (2.0 * radius)) + 0.5);
+	// Source's SPHERE uv. The importer measures it per vertex from the model's own eyeball - centre, axes and
+	// iris size, from mstudioeyeball_t - into uv2 (ModelImporter.EyeProjection). A mesh that carries none hands
+	// zero, and a projection about the mesh's own origin stands in, spanning a unit primitive: right for a
+	// material preview's sphere and for nothing else. It does not read _EyeballRadius, which in Source is the
+	// ray-traced sphere's world radius and has nothing to do with the projection.
+	float2 sphereUv = any(input.eyeUv) ? input.eyeUv : (input.positionOS.xy + 0.5);
 
-	// The cornea texture is a CROPPED version of the iris texture, and Source relates the two by
-	// vSphereUv = vCorneaUv * 0.5 + 0.25 (eye_refract_ps2x.fxc:205). The projection above spans the whole
-	// eyeball across [0,1], which is Source's SPHERE uv, so the cornea's is that relation inverted. Sampling
-	// the cornea at the sphere's uv stretched a texture that covers only the middle of the eye over all of
-	// it, dome normal, highlight and all.
+	// The cornea texture is a CROPPED version of the iris texture: vSphereUv = vCorneaUv * 0.5 + 0.25 (:205).
 	float2 corneaUv = (sphereUv - 0.25) * 2.0;
 
-	// Dilate the pupil, exactly as the original does it (eye_refract_ps2x.fxc:307-312). 0.2 is the iris's
-	// uv radius and is Valve's constant, not a tuned one. It moves the IRIS sample alone: the cornea's uv is
-	// the projection itself, which does not dilate.
-	float2 irisUv = sphereUv - 0.5;
+	// Valve's tangent frame (eye_refract_vs20.fxc:126, :139-142): N out from the eye's centre, T across the iris,
+	// B = N x T. The importer bakes N (EyeProjection.SphereNormal). T is the direction the iris uv's u increases
+	// in, which a pixel reads off its own derivatives: the uv is linear in position, so its surface gradient IS
+	// the projection's axis, projected onto the tangent plane - exactly what Valve's cross products do to it.
+	float3 N = normalize(input.normalWS);
+	float3 dpdx = ddx(input.positionWS);
+	float3 dpdy = ddy(input.positionWS);
+	float3 r1 = cross(dpdy, N);
+	float3 r2 = cross(N, dpdx);
+	float  inverseDeterminant = 1.0 / (abs(dot(dpdx, r1)) > 1e-30 ? dot(dpdx, r1) : 1e-30);
+	float3 gradientU = (r1 * ddx(sphereUv.x) + r2 * ddy(sphereUv.x)) * inverseDeterminant;
+	float3 gradientV = (r1 * ddx(sphereUv.y) + r2 * ddy(sphereUv.y)) * inverseDeterminant;
+	float3 T = gradientU - dot(gradientU, N) * N;
+	T = (dot(T, T) > 1e-20) ? normalize(T) : normalize(cross(float3(0, 1, 0), N) + float3(1e-5, 0, 0));
+	// B is orthonormal as Valve's is, but runs along INCREASING v - the axis the cornea texture's G is drawn in.
+	// That is read off the texture, not assumed: across eye-cornea R rises toward larger u (25 at the left, 230 at
+	// the right) and G toward the file's top row (24 at the bottom, 232 at the top) - a convex dome in the
+	// texture's own axes. Valve's cross(N, T) runs the other way on this projection and decoded the dome concave.
+	float3 B = cross(N, T);
+	B *= (dot(B, gradientV) < 0.0) ? -1.0 : 1.0;
+
+	// The view vector runs from the camera TO the surface, as Valve's does (vs20:145)
+	float3 viewVector = normalize(input.positionWS - GetCameraPositionWS());
+	float3 tangentView = float3(dot(viewVector, T), dot(viewVector, B), dot(viewVector, N));
+
+	half4 cornea = SAMPLE_TEXTURE2D(_CorneaTexture, sampler_CorneaTexture, corneaUv);
+	half  highlightMask = cornea.a;
+
+	// Hacked parallax mapping on the iris (:214-229): the cornea's B holds how deep the iris sits under it (255 at
+	// the centre, ~16 at the edge). Valve's formula, WITHOUT its "Need to flip x...not sure why" - that flip
+	// squared their result with a frame whose T ran against u; in a frame drawn from the texture's own axes, as
+	// this one is, the unflipped formula pulls the iris sample toward the centre on BOTH axes, which is what
+	// looking through a convex cornea does: it magnifies. With the flip it pushed outward, and on an eyeball band
+	// far wider than it is tall that squashed the pupil into a vertical slit.
+	float2 parallax = (tangentView.xy * cornea.b * _ParallaxStrength) / (1.0 - tangentView.z);
+	float2 irisUv = sphereUv - parallax;
+	half   corneaNoise = SAMPLE_TEXTURE2D(_Iris, sampler_Iris, sphereUv + parallax * 0.5).a;
+
+	// Dilate the pupil (:307-312). 0.2 is the iris's uv radius - Valve's constant, not a tuned one.
+	irisUv -= 0.5;
 	half pupilCentreToBorder = saturate(length(irisUv) / 0.2h);
 	irisUv *= lerp(1.0h, pupilCentreToBorder, saturate(_Dilation) * 2.5h - 1.25h);
 	irisUv += 0.5;
-
 	half4 iris = SAMPLE_TEXTURE2D(_Iris, sampler_Iris, irisUv);
 
-	// The cornea holds a 2D normal in RG, the iris's parallax height in B and the highlight mask in A.
-	// Valve takes rg - 0.5 rather than the usual rg * 2 - 1 and says why: "Note: This scales the bump to
-	// 50% strength" (eye_refract_ps2x.fxc:236-237). The cornea NOISE is not in this texture at all - it is
-	// the IRIS texture's alpha (:229), which is what B was standing in for here.
-	half4 cornea = SAMPLE_TEXTURE2D(_CorneaTexture, sampler_CorneaTexture, corneaUv);
-	half3 corneaTangentNormal = half3((cornea.rg - 0.5h) * _CorneaBumpStrength, 1.0h);
-	// Valve offsets this by half the parallax vector; with no parallax that is the sphere uv, which is
-	// exactly what the ps_2_0 path does (:222, :228) - the same path _ParallaxStrength is unused on here.
-	half  corneaNoise = SAMPLE_TEXTURE2D(_Iris, sampler_Iris, sphereUv).a;
-	half  highlightMask = cornea.a;
+	// The cornea normal (:236-251). rg - 0.5, not rg * 2 - 1: "This scales the bump to 50% strength". The noise
+	// goes into the NORMAL here as well as into the colour below.
+	float3 corneaTangentNormal = float3((cornea.rg - 0.5) * _CorneaBumpStrength, 1.0);
+	corneaTangentNormal.xy += corneaNoise * 0.1;
+	corneaTangentNormal = normalize(corneaTangentNormal);
+	float3 corneaNormalWS = normalize(T * corneaTangentNormal.x + B * corneaTangentNormal.y + N * corneaTangentNormal.z);
+	float3 corneaReflection = reflect(viewVector, corneaNormalWS);
 
-	half3 normalWS = normalize(input.normalWS);
-	// The cornea's bump perturbs the sphere normal. Building a full tangent frame for an eyeball is not
-	// worth it - the surface IS a sphere - so the 2D normal is applied across the view plane.
-	float3 viewWS = normalize(GetWorldSpaceViewDir(input.positionWS));
-	float3 right  = normalize(cross(float3(0, 1, 0), normalWS) + float3(1e-5, 0, 0));
-	float3 up     = cross(normalWS, right);
-	half3 corneaNormalWS = normalize(normalWS + right * corneaTangentNormal.x + up * corneaTangentNormal.y);
+	// "I'm not normalizing on purpose" (:330)
+	float3 irisTangentNormal = corneaTangentNormal;
+	irisTangentNormal.xy *= -2.5;
 
-	// Ambient occlusion, sampled with the mesh's own uvs and tinted by $AmbientOcclColor
-	// (eye_refract_ps2x.fxc:386-387).
-	half3 occlusionTexture = SAMPLE_TEXTURE2D(_AmbientOcclTexture, sampler_AmbientOcclTexture, input.uv).rgb;
-	half3 occlusion = lerp(_AmbientOcclColor.rgb, half3(1, 1, 1), occlusionTexture);
+	// The diffuse light takes a BENT normal: "make the eyeball less rounded left to right to help vertex lighting
+	// quality" (vs20:152-153). Half of N's component along the iris's horizontal axis is taken out, which does
+	// not care which way that axis points.
+	float3 bentNormal = normalize(N - 0.5 * dot(N, T) * T);
 
-	// Diffuse light, plus the glints Source adds per light off the cornea's reflection vector.
-	half3 reflectWS = reflect(-viewWS, corneaNormalWS);
-	Light mainLight = GetMainLight(input.shadowCoord);
-	half3 diffuse = mainLight.color * (mainLight.distanceAttenuation * mainLight.shadowAttenuation)
-				  * saturate(dot(normalWS, mainLight.direction));
-	half3 glints  = mainLight.color * pow(saturate(dot(reflectWS, mainLight.direction)), 128.0h) * highlightMask;
+	float3 viewDirWS = -viewVector;
+	float2 positionSS = input.positionCS.xy;
+	SourceEyeLight light = (SourceEyeLight)0;
+	light.vertexLight = SourceEyeAmbient(input.positionWS, bentNormal, viewDirWS, positionSS);
+
+	AccumulateSourceEyeLight(GetMainLight(input.shadowCoord), bentNormal, irisTangentNormal, corneaReflection,
+							 T, B, N, highlightMask, light);
 
 #ifdef _ADDITIONAL_LIGHTS
-	// URP's clustered LIGHT_LOOP_BEGIN reads a local called "inputData" by name to find which cluster
-	// the pixel is in, so one has to exist even though this pass builds its lighting by hand. It is
-	// needed in variants that list _ADDITIONAL_LIGHTS as DISABLED too: Core.hlsl force-defines that
-	// keyword whenever the cluster loop is on (Core.hlsl:20), which is how the _CLUSTER_LIGHT_LOOP
-	// variant reached this block at all.
+	// URP's clustered LIGHT_LOOP_BEGIN reads a local called "inputData" by name to find which cluster the pixel
+	// is in, so one has to exist even though this pass builds its lighting by hand. It is needed in variants
+	// that list _ADDITIONAL_LIGHTS as DISABLED too: Core.hlsl force-defines that keyword whenever the cluster
+	// loop is on (Core.hlsl:20), which is how the _CLUSTER_LIGHT_LOOP variant reached this block at all.
 	InputData inputData = (InputData)0;
 	inputData.positionWS = input.positionWS;
-	inputData.normalWS = normalWS;
-	inputData.viewDirectionWS = viewWS;
+	inputData.normalWS = N;
+	inputData.viewDirectionWS = viewDirWS;
 	inputData.shadowCoord = input.shadowCoord;
 	inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
 
 	uint lightCount = GetAdditionalLightsCount();
 	LIGHT_LOOP_BEGIN(lightCount)
-		Light light = GetAdditionalLight(lightIndex, input.positionWS, half4(1, 1, 1, 1));
-		half attenuation = light.distanceAttenuation * light.shadowAttenuation;
-		diffuse += light.color * attenuation * saturate(dot(normalWS, light.direction));
-		glints  += light.color * attenuation * pow(saturate(dot(reflectWS, light.direction)), 128.0h) * highlightMask;
+		AccumulateSourceEyeLight(GetAdditionalLight(lightIndex, input.positionWS, half4(1, 1, 1, 1)), bentNormal,
+								 irisTangentNormal, corneaReflection, T, B, N, highlightMask, light);
 	LIGHT_LOOP_END
 #endif
 
-	half3 ambient = SampleSH(normalWS);
-	half3 light = (diffuse + ambient) * occlusion;
+	// A little view-dependent iris light from the ambient alone, for scenes with no local lights (:377).
+	// g_flAverageAmbient is the ambient cube's mean; the ambient either side of the eye averages to exactly the
+	// probes' constant term for L1, which is that mean.
+	half averageAmbient = Luminance(0.5 * (SourceEyeAmbient(input.positionWS, N, viewDirWS, positionSS) +
+										   SourceEyeAmbient(input.positionWS, -N, viewDirWS, positionSS)));
+	light.irisLighting += saturate(dot(irisTangentNormal, -tangentView)) * averageAmbient * highlightMask * 0.5;
 
-	half3 colour = iris.rgb;
-	colour += corneaNoise * 0.1h;           // defines the raised cornea layer in close-ups
-	colour *= light;
+	// Ambient occlusion colours the VERTEX light only (:385-388), after the iris caustic is done
+	half3 occlusionTexture = SAMPLE_TEXTURE2D(_AmbientOcclTexture, sampler_AmbientOcclTexture, input.uv).rgb;
+	light.vertexLight *= lerp(_AmbientOcclColor.rgb, half3(1, 1, 1), occlusionTexture);
+
+	// The combine (:430-446), term for term
+	half3 colour = iris.rgb;                               // unlit iris, pupil and sclera
+	colour += corneaNoise * 0.1h;                          // "to help define raised cornea layer for close-ups"
+	colour *= light.vertexLight + light.irisLighting;      // vertex lighting + the iris caustic
 #ifdef _ENVMAP
-	half3 reflection = _Glossiness * SAMPLE_TEXTURECUBE(_EnvMap, sampler_EnvMap, reflectWS).rgb;
-	colour += reflection * light;
+	colour += _Glossiness * SAMPLE_TEXTURECUBE(_EnvMap, sampler_EnvMap, corneaReflection).rgb * light.vertexLight;
 #endif
-	colour += glints;
+	colour += light.glints;
 
 	return half4(colour, 1.0h);
 }

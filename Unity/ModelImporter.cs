@@ -314,7 +314,9 @@ namespace Chisel.Import.Source.VPKTools
 		// out loud that it takes model 0. Every model with eyes has to be written again to gain the uv.
 		// 7: that uv spans the eyeball's IRIS SIZE rather than its radius, which is a different number per model
 		// and was drawing every iris too small.
-		internal static readonly (string generator, int version) ModelVersion     = ("model", 7);
+		// 8: an eyeball vertex's normal points out from the eye's centre, as Source computes it per vertex,
+		// instead of the mesh's own - which on these ten-triangle bands is not the sphere's.
+		internal static readonly (string generator, int version) ModelVersion     = ("model", 8);
 		static readonly (string generator, int version) AnimationVersion = ("animation", 1);
 
 		/// <summary>
@@ -605,6 +607,19 @@ namespace Chisel.Import.Source.VPKTools
 				var span = (eyeball.IrisScale > 1e-6f) ? 2.0f / eyeball.IrisScale
 													   : 2.0f * Mathf.Max(eyeball.Radius, 1e-4f);
 				return new EyeProjection(origin, left.normalized, up, span);
+			}
+
+			/// <summary>
+			/// The eye's surface normal at a vertex: straight out from the eyeball's centre. Source computes exactly
+			/// this per vertex - "Normal = (Pos - Eye origin)", eye_refract_vs20.fxc:126 - rather than using the
+			/// mesh's own normal, which keeps the eye reading as a ball when the mesh is a ten-triangle band. Baked
+			/// here it is the same per-vertex value, and a skinned normal rides with the head the way the vertex does.
+			/// </summary>
+			public Vector3 SphereNormal(Vector3 position)
+			{
+				var outward = position - origin;
+				// A vertex AT the centre has no direction of its own; face it the way the eye looks
+				return (outward.sqrMagnitude > 1e-12f) ? outward.normalized : Vector3.Cross(uAxis, vAxis).normalized;
 			}
 
 			/// <summary>
@@ -1582,7 +1597,7 @@ namespace Chisel.Import.Source.VPKTools
 												{
 													index1 = modelEntry.Vertices.Count;
 													modelEntry.Vertices.Add(vertices[vertex1].Position);
-													modelEntry.Normals.Add(vertices[vertex1].Normal);
+													modelEntry.Normals.Add(eyeProjection?.SphereNormal(vertices[vertex1].Position) ?? vertices[vertex1].Normal);
 													modelEntry.Uvs.Add(SourceEngineUnits.VmfFixTexcoord(vertices[vertex1].TexCoord));
 													modelEntry.EyeUvs.Add(eyeProjection?.Project(vertices[vertex1].Position) ?? Vector2.zero);
 													if (hasBones) modelEntry.BoneWeights.Add(ToUnityBoneWeight(vertices[vertex1]));
@@ -1594,7 +1609,7 @@ namespace Chisel.Import.Source.VPKTools
 												{
 													index2 = modelEntry.Vertices.Count;
 													modelEntry.Vertices.Add(vertices[vertex2].Position);
-													modelEntry.Normals.Add(vertices[vertex2].Normal);
+													modelEntry.Normals.Add(eyeProjection?.SphereNormal(vertices[vertex2].Position) ?? vertices[vertex2].Normal);
 													modelEntry.Uvs.Add(SourceEngineUnits.VmfFixTexcoord(vertices[vertex2].TexCoord));
 													modelEntry.EyeUvs.Add(eyeProjection?.Project(vertices[vertex2].Position) ?? Vector2.zero);
 													if (hasBones) modelEntry.BoneWeights.Add(ToUnityBoneWeight(vertices[vertex2]));
@@ -1606,7 +1621,7 @@ namespace Chisel.Import.Source.VPKTools
 												{
 													index3 = modelEntry.Vertices.Count;
 													modelEntry.Vertices.Add(vertices[vertex3].Position);
-													modelEntry.Normals.Add(vertices[vertex3].Normal);
+													modelEntry.Normals.Add(eyeProjection?.SphereNormal(vertices[vertex3].Position) ?? vertices[vertex3].Normal);
 													modelEntry.Uvs.Add(SourceEngineUnits.VmfFixTexcoord(vertices[vertex3].TexCoord));
 													modelEntry.EyeUvs.Add(eyeProjection?.Project(vertices[vertex3].Position) ?? Vector2.zero);
 													if (hasBones) modelEntry.BoneWeights.Add(ToUnityBoneWeight(vertices[vertex3]));

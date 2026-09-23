@@ -20,6 +20,7 @@ Shader "Chisel/Source/EyeRefract"
 		_Glossiness ("$glossiness", Float) = 1.0
 		_CorneaBumpStrength ("$corneabumpstrength", Float) = 1.0
 		_ParallaxStrength ("$parallaxstrength", Float) = 0.25
+		[ToggleUI] _HalfLambert ("$halflambert", Float) = 0
 
 		// An eye is always opaque and always two-sided-free; these exist so the importer's shared
 		// render-state code has somewhere to write, and so the inspector shows what is actually in force.
@@ -68,6 +69,9 @@ Shader "Chisel/Source/EyeRefract"
 			#pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
 			#pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
 			#pragma multi_compile _ _CLUSTER_LIGHT_LOOP
+			// The eye's ambient comes from the same probes as every other surface - APV when the renderer has it.
+			// Without these variants SampleSH reads the object's light probes, which APV leaves unfilled.
+			#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
 			#pragma multi_compile_instancing
 			// A BatchRendererGroup refuses any pass with no DOTS_INSTANCING_ON variant, at draw submission and
 			// not at compile - so the symptom is silence and nothing drawn. See ChiselSourceEyePass.hlsl for

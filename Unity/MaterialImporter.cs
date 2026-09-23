@@ -40,7 +40,11 @@ namespace Chisel.Import.Source.VPKTools
 		// cubemap shape behind it. Every one of those materials has to be rebuilt to pick the texture up, and
 		// to enable _NORMALMAP with it: the keyword is set from the texture, so a null one left the whole bump
 		// path compiled out of the variant, and assigning the texture by hand afterwards did nothing.
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 20);
+		// 21: eye materials gain their cornea cubemap (_EnvMap + _ENVMAP, which EnvMapOf had turned away) and
+		// $halflambert, and _EyeballRadius is written in metres. Also clears the dead _ENVMAPFROMPROBES_ON that
+		// [Toggle] left in every material's m_InvalidKeywords before 7e598b6, since a rebuild copies a fresh
+		// material over the asset, keywords and all.
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 21);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -709,8 +713,17 @@ namespace Chisel.Import.Source.VPKTools
 						sourceMaterial.AmbientOcclusionColor.r,
 						sourceMaterial.AmbientOcclusionColor.g,
 						sourceMaterial.AmbientOcclusionColor.b, 1)));
+				// In Source this is a WORLD-space radius, used for one thing only: ray-tracing the eye as a sphere
+				// (IntersectRaySphere, eye_refract_ps2x.fxc:187) when $raytracesphere is on. It plays no part in the
+				// iris projection, which comes from the model's eyeball (ModelImporter.EyeProjection). So it goes
+				// over in world units - metres here - to be right for whatever reads it. Every eye in Black Mesa
+				// sets $raytracesphere 0, and the ray trace is not ported.
 				if (sourceMaterial.EyeballRadius.HasValue)
-					SetFloatIfPresent(unityMaterial, "_EyeballRadius", sourceMaterial.EyeballRadius.Value);
+					SetFloatIfPresent(unityMaterial, "_EyeballRadius", sourceMaterial.EyeballRadius.Value * SourceEngineUnits.VmfInvMeters);
+				// The eye's diffuse light wraps round its dark side (CosineTermInternal); all 8 of the game's eye
+				// materials set it.
+				SetFloatIfPresent(unityMaterial, "_HalfLambert", sourceMaterial.HalfLambert == true ? 1.0f : 0.0f);
+				// The cornea's $envmap is ApplySourceEnvMap's, below - it owns _ENVMAP and would switch it off again.
 				if (sourceMaterial.Dilation.HasValue)
 					SetFloatIfPresent(unityMaterial, "_Dilation", sourceMaterial.Dilation.Value);
 				if (sourceMaterial.CorneaBumpStrength.HasValue)
@@ -1097,6 +1110,25 @@ namespace Chisel.Import.Source.VPKTools
 		private static void ApplySourceEnvMap(GameResources gameResources, Material unityMaterial, VMT sourceMaterial, Texture2D mainTexture)
 		{
 			unityMaterial.DisableKeyword("_ENVMAP");
+
+			// EyeRefract's cornea reflection. EnvMapOf knows only the *Generic shaders and turned every eye's $envmap
+			// away, so no eye had ever reflected anything. Source's EyeRefract takes a named cubemap straight, scaled
+			// by $glossiness (eye_refract_ps2x.fxc:396), with none of the Generic rules. All 8 eye materials in the
+			// game name one ("models/<character>/eye-reflection-cubemap-"). env_cubemap is not handled: no eye uses
+			// it, and this shader has no probe lookup.
+			if (unityMaterial.HasProperty("_Iris"))
+			{
+				var eyeEnvMap = sourceMaterial.EnvMapTextureName?.Trim();
+				if (string.IsNullOrEmpty(eyeEnvMap) ||
+					string.Equals(eyeEnvMap, "env_cubemap", System.StringComparison.OrdinalIgnoreCase))
+					return;
+				var eyeCubemap = gameResources.ImportCubemap(eyeEnvMap);
+				if (eyeCubemap == null)
+					return;
+				unityMaterial.SetTexture("_EnvMap", eyeCubemap);
+				unityMaterial.EnableKeyword("_ENVMAP");
+				return;
+			}
 			var baseHasAlpha = mainTexture != null &&
 							   UnityEngine.Experimental.Rendering.GraphicsFormatUtility.HasAlphaChannel(mainTexture.graphicsFormat);
 			var envMap = EnvMapOf(sourceMaterial, baseHasAlpha);

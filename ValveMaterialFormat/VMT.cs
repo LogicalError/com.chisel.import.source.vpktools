@@ -172,6 +172,9 @@ namespace Chisel.Import.Source.VPKTools
 		/// SDK sets it on the sky (sky_dx9, sky_hdr_dx9) and on debug wireframe, i.e. surfaces beyond the fog's reach
 		/// or not part of the world at all.</summary>
 		public bool?        NoFog;
+		/// <summary>$halflambert - diffuse is (N·L · 0.5 + 0.5)² rather than max(N·L, 0), which lets light wrap round the
+		/// dark side (CosineTermInternal, common_vs_fxc.h). Every eye material in Black Mesa sets it.</summary>
+		public bool?        HalfLambert;
 
 		public float?       AlphaTestReference;
 		public bool?		AlphaTest;
@@ -618,7 +621,7 @@ namespace Chisel.Import.Source.VPKTools
 						case "$groundmax": // '-0.1'.
 						case "$groundmin": // '-0.3'.
 						case "$groupbame": // 'bubble'.
-						case "$halflambert":
+						// $halflambert is parsed for real further down; only its gbuffer variant is ignored
 						case "$halflambert_gbuffer_off": // '1'.
 						case "$halfwidth": // '0.1'.
 										   //case "$hdrbasetexture": // 'skybox/xen_sky_6_yellow_hdrbk'.
@@ -1143,6 +1146,7 @@ namespace Chisel.Import.Source.VPKTools
 						//case "$nocull": // ''.expected boolean value.
 						case "$nocull": { TryParseBoolProperty(property, ref vmfMaterial.NoCull); break; }
 						case "$nofog": { TryParseBoolProperty(property, ref vmfMaterial.NoFog); break; }
+						case "$halflambert": { TryParseBoolProperty(property, ref vmfMaterial.HalfLambert); break; }
 
 						case "$blendmodulatetexture": { vmfMaterial.BlendModulateTextureName = property.Value; break; }
 						case "$maskedblending": { TryParseBoolProperty(property, ref vmfMaterial.MaskedBlending); break; }
