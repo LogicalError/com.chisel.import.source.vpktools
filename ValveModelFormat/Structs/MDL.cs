@@ -1326,6 +1326,77 @@ namespace Chisel.Import.Source.VPKTools
 		}
 	};
 		
+	// mstudioeyeball_t
+	//
+	// An eyeball is not geometry: it is the sphere a mesh is understood to lie on. Source's eye shaders project the
+	// iris onto it with planes built from Origin, Up and Forward, and take the surface normal from Origin rather than
+	// from the mesh, which is why an eye reads as a ball even where the mesh is a ten-triangle strip. The mesh that
+	// belongs to one says so itself: StudioMesh.MaterialType 1 means eyeball and MaterialParam is the index into this
+	// array. That link is worth reading rather than inferring - on marine.mdl the mesh with the eyeball_l material is
+	// eyeball 1 and eyeball_r is eyeball 0.
+	//
+	// Origin, Up and Forward are in the space of Bone, so they reach model space through that bone's bind pose.
+	public class StudioEyeball
+	{
+		public string	Name;
+		public int		Bone;
+		public Vector3	Origin;
+		public float	ZOffset;
+		public float	Radius;
+		public Vector3	Up;
+		public Vector3	Forward;
+		public int		Texture;
+		public float	IrisScale;
+
+		private static StudioEyeball LoadItem(BinaryReader reader, Lookup lookup)
+		{
+			var startSeek = reader.BaseStream.Position;
+
+			var item = lookup.Get<StudioEyeball>(startSeek);
+			if (item != null)
+				return item;
+
+			item = new StudioEyeball
+			{
+				Name		= reader.ReadNullString(startSeek + reader.ReadInt32()),
+				Bone		= reader.ReadInt32(),
+				Origin		= reader.ReadVector3(),
+				ZOffset		= reader.ReadSingle(),
+				Radius		= reader.ReadSingle(),
+				Up			= reader.ReadVector3(),
+				Forward		= reader.ReadVector3(),
+				Texture		= reader.ReadInt32()
+			};
+			reader.ReadInt32();						// unused1
+			item.IrisScale	= reader.ReadSingle();
+			// The rest is the eyelid flex wiring and padding, which nothing here poses.
+
+			reader.BaseStream.Seek(startSeek, SeekOrigin.Begin);
+
+			lookup.Set<StudioEyeball>(startSeek, item);
+			return item;
+		}
+
+		public static StudioEyeball[] Load(BinaryReader reader, Lookup lookup, int count, long offset)
+		{
+			if (count <= 0 || count > 8 || offset == 0)
+				return new StudioEyeball[0];
+
+			var items = new StudioEyeball[count];
+
+			var startSeek = reader.BaseStream.Position;
+			const int itemSize = 172;				// studio.h:1240-1273, summed
+			for (var i = 0; i < count; i++)
+			{
+				reader.BaseStream.Seek(offset + (i * itemSize), SeekOrigin.Begin);
+				items[i] = LoadItem(reader, lookup);
+			}
+
+			reader.BaseStream.Seek(startSeek, SeekOrigin.Begin);
+			return items;
+		}
+	};
+
 	// mstudio_modelvertexdata_t
 	public class StudioModelVertexData
 	{
@@ -1359,6 +1430,8 @@ namespace Chisel.Import.Source.VPKTools
 		public int NumEyeballs;
 		public int EyeballIndex;
 
+		public StudioEyeball[] Eyeballs;
+
 		//public StudioModelVertexData Vertexdata; // set at runtime as vertices/tangents of vvd file
 			
 		private static StudioModel LoadItem(BinaryReader reader, Lookup lookup)
@@ -1390,6 +1463,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			item.NumEyeballs		= reader.ReadInt32();
 			item.EyeballIndex		= reader.ReadInt32();
+			item.Eyeballs			= StudioEyeball.Load(reader, lookup, item.NumEyeballs, startSeek + item.EyeballIndex);
 
 			reader.BaseStream.Seek(startSeek, SeekOrigin.Begin);
 
@@ -1406,7 +1480,14 @@ namespace Chisel.Import.Source.VPKTools
 
 			var startSeek = reader.BaseStream.Position;
 
-			const int itemSize = 124;
+			// mstudiomodel_t is 148 bytes, not 124: 64 of name, nine ints, the mesh and vertex offsets, the eyeball
+			// count and offset, a two-pointer vertexdata and int[8] of padding. A bodypart with one model never
+			// notices the difference - every model[0] sits at the start whatever the stride - which is why 124
+			// survived. Measured on marine.mdl: at 124 twelve of its models read sanely and ten come back as
+			// garbage (numeyeballs 806656 and the like), at 148 all twenty-two read. The garbage ones were dropped
+			// silently downstream by the count guards, so the importer has in effect been reading model 0 of each
+			// bodypart and nothing else; ModelImporter now says that in as many words instead of relying on it.
+			const int itemSize = 148;
 			for (var i = 0; i < count; i++)
 			{
 				var currentOffset = offset + (i * itemSize);

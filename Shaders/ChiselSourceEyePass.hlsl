@@ -15,21 +15,22 @@
 //     result.rgb += cReflection * cVertexLight
 //     result.rgb += cSpecularHighlights
 //
-// WHAT IS APPROXIMATED, and why it cannot be exact here. Source projects the iris onto the eyeball with
-// $IrisU/$IrisV and takes the surface normal from the sphere centre $EyeOrigin - and the client rewrites
-// all three every frame from the eye attachment, which is how an eye tracks what it is looking at. An
-// imported scene has no such runtime, so the projection is done in OBJECT space instead: the eye is taken
-// to be centred on the mesh's origin and looking along z, with x across and y up. A static eye is the
-// honest result, not a bug.
+// WHAT IS APPROXIMATED, and why. Source projects the iris onto the eyeball with $IrisU/$IrisV and takes the
+// surface normal from the sphere centre $EyeOrigin - and the client rewrites all three every frame from the
+// eye attachment, which is how an eye tracks what it is looking at. An imported scene has no such runtime,
+// so the projection is frozen at the pose the model was authored in: an eye looking straight ahead. A static
+// eye is the honest result, not a bug.
 //
-// WHAT IS STILL WRONG, so nobody reads the paragraph above as a claim that this is finished. The two axes
-// and the centre here are a DEFAULT, and Source keeps the real ones per eyeball in the model file:
-// mstudioeyeball_t (studio.h:1240) carries org, up, forward, radius and iris_scale, and baseanimating.cpp
-// puts them in world space with the eye bone's matrix. Nothing reads them yet. On a material preview, whose
-// mesh is centred and one unit across, the default is right. On an actual character it is not: an eyeball
-// is a submesh of the whole body, so object space is centred between the character's feet and the
-// projection lands far outside [0,1] - every pixel clamps to the edge of the iris texture, which is the
-// sclera, and the eye renders as a white blob. Fixing that needs the eyeball structs, not another constant.
+// It is NOT frozen at a guess, though. The planes come from the model's own eyeball - mstudioeyeball_t
+// (studio.h:1240) gives its centre, up and forward vectors and radius in the eye bone's space - resolved at
+// the bind pose and measured into a uv per vertex at import (ModelImporter.EyeProjection), carried in uv2.
+// Per vertex rather than per material because an eye material is shared between models, and because these
+// meshes are skinned: after skinning, object space is the character's, not the eyeball's, so nothing that
+// depends on where the eye sits in object space survives being posed.
+//
+// A mesh with no such uv falls back to a projection about the mesh's own origin, which is right for exactly
+// one thing - a material preview's primitive, centred and one unit across - and wrong for a character, whose
+// object space is centred between its feet.
 
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
@@ -54,6 +55,7 @@ struct Attributes
 	float4 positionOS : POSITION;
 	float3 normalOS   : NORMAL;
 	float2 uv         : TEXCOORD0;
+	float2 eyeUv      : TEXCOORD1;   // the importer's iris uv; see SourceEyeFragment
 	UNITY_VERTEX_INPUT_INSTANCE_ID
 };
 
@@ -65,6 +67,7 @@ struct Varyings
 	float3 normalWS   : TEXCOORD2;
 	float2 uv         : TEXCOORD3;   // $AmbientOcclTexture uses the MESH's own uvs (eye_refract_vs20.fxc:189)
 	float4 shadowCoord : TEXCOORD4;
+	float2 eyeUv      : TEXCOORD5;
 	UNITY_VERTEX_INPUT_INSTANCE_ID
 	UNITY_VERTEX_OUTPUT_STEREO
 };
@@ -81,11 +84,14 @@ Varyings SourceEyeVertex(Attributes input)
 	output.positionWS  = positions.positionWS;
 	output.positionOS  = input.positionOS.xyz;
 	output.uv          = TRANSFORM_TEX(input.uv, _Iris);
-	// Source takes the normal from the eyeball's CENTRE rather than the mesh (eye_refract_vs20.fxc:126),
-	// which keeps the eye reading as a sphere even where the mesh is coarse.
-	float3 normalOS    = (dot(input.positionOS.xyz, input.positionOS.xyz) > 1e-8) ? normalize(input.positionOS.xyz)
-																				 : input.normalOS;
-	output.normalWS    = TransformObjectToWorldNormal(normalOS);
+	output.eyeUv       = input.eyeUv;
+	// Source takes the normal from the eyeball's CENTRE rather than the mesh (eye_refract_vs20.fxc:126), which
+	// keeps the eye reading as a sphere even where the mesh is coarse. The centre is not available here, and the
+	// thing that used to stand in for it - normalize(positionOS) - is the direction away from the MESH's origin,
+	// which on a character is a point between its feet. The mesh's own normal is the eyeball's actual surface
+	// direction and identical to Source's on a sphere; the difference is only that a normal an artist smoothed
+	// into the surrounding face stays smoothed.
+	output.normalWS    = TransformObjectToWorldNormal(input.normalOS);
 	output.shadowCoord = TransformWorldToShadowCoord(positions.positionWS);
 	return output;
 }
@@ -100,8 +106,14 @@ half4 SourceEyeFragment(Varyings input) : SV_Target
 	// the numbers spell them in Source's frame (x forward, y left, z up), and a mesh here is in Unity's,
 	// so the three have to be named again rather than copied across. This reads u from x and v from y with
 	// the eye facing z. Copying the literal yz is what put the eye on its side in the material preview.
+	// The importer measures this per vertex from the model's own eyeball - its centre, its left and up vectors and
+	// its radius, all from mstudioeyeball_t - and writes it into uv2 (ModelImporter.EyeProjection), because these
+	// meshes are skinned and a skinned vertex arrives here already posed: object space is no longer the eyeball's.
+	// A mesh that carries none hands zero, and the default below stands in - which is the case for a material
+	// preview's own primitive, where a mesh centred on the origin and one unit across makes it right.
 	float radius = max(_EyeballRadius, 1e-4h);
-	float2 sphereUv = (input.positionOS.xy / (2.0 * radius)) + 0.5;
+	float2 sphereUv = any(input.eyeUv) ? input.eyeUv
+									   : ((input.positionOS.xy / (2.0 * radius)) + 0.5);
 
 	// The cornea texture is a CROPPED version of the iris texture, and Source relates the two by
 	// vSphereUv = vCorneaUv * 0.5 + 0.25 (eye_refract_ps2x.fxc:205). The projection above spans the whole

@@ -52,6 +52,16 @@ namespace Chisel.Import.Source.VPKTools
 		public readonly List<Vector2>		Uvs			= new();
 		public readonly List<BoneWeight>	BoneWeights = new();
 		public readonly List<MdlMeshEntry>	SubMeshes   = new();
+
+		/// <summary>
+		/// The iris uv of every vertex of an eyeball mesh, and zero everywhere else. See <see cref="EyeProjection"/>:
+		/// it has to travel with the vertex rather than sit on the material, because these meshes are skinned and a
+		/// skinned vertex reaches the shader already posed - object space is no longer the eyeball's.
+		/// </summary>
+		public readonly List<Vector2>		EyeUvs		= new();
+
+		/// <summary>True once any eyeball mesh has contributed a uv, so a model without eyes writes no uv2 at all.</summary>
+		public bool HasEyeUvs;
 		
 
 		public void GenerateMesh(GameObject parentGameObject, MdlSkeleton skeleton, Matrix4x4 sourceRestPose)
@@ -167,6 +177,9 @@ namespace Chisel.Import.Source.VPKTools
 					boneWeights	 = (skeleton == null || skeleton.Bones.Count == 0 || BoneWeights.Count != Vertices.Count) ? null : BoneWeights.ToArray(),
 					bindposes	 = (skeleton == null || skeleton.Bones.Count == 0 || bindposes == null) ? null : bindposes,
 					uv			 = Uvs.ToArray(),
+					// uv2, because the importer leaves generateSecondaryUV off, so Unity will not overwrite it with
+					// lightmap uvs. A model with no eyeball carries none of this at all.
+					uv2			 = (EyeUvs.Count != Vertices.Count || !HasEyeUvs) ? null : EyeUvs.ToArray(),
 					subMeshCount = SubMeshes.Count,
 					name	     = Name,
 					bounds		 = Model.MDL.ViewBounds
@@ -296,7 +309,10 @@ namespace Chisel.Import.Source.VPKTools
 		// 5: an empty material slot no longer renumbers the submeshes after it (FbxExporter.CollectMaterials).
 		// Every model exported before this that had one is wearing shifted materials, with its last submesh drawn
 		// by Unity's white default, so they all have to be written again rather than only the ones anyone noticed.
-		internal static readonly (string generator, int version) ModelVersion     = ("model", 5);
+		// 6: eyeball meshes carry an iris uv in uv2 (EyeProjection), and mstudiomodel_t is stepped by its real 148
+		// bytes rather than 124 - which made every bodypart after its first model readable, so the loop now says
+		// out loud that it takes model 0. Every model with eyes has to be written again to gain the uv.
+		internal static readonly (string generator, int version) ModelVersion     = ("model", 6);
 		static readonly (string generator, int version) AnimationVersion = ("animation", 1);
 
 		/// <summary>
@@ -310,6 +326,12 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>What the names of the ragdoll set's nodes start with (<see cref="ModelCollisionSet.Ragdoll"/>).</summary>
 		internal const string kRagdollCollisionPrefix = kCollisionNodePrefix + "ragdoll ";
+
+		/// <summary>
+		/// <c>mstudiomesh_t.materialtype</c> for an eyeball, whose <c>materialparam</c> is then the index of the
+		/// <see cref="StudioEyeball"/> it is drawn as. Every other mesh carries 0.
+		/// </summary>
+		internal const int kEyeballMaterialType = 1;
 
 		internal static bool IsCollisionNode(string name)
 		{
@@ -502,6 +524,90 @@ namespace Chisel.Import.Source.VPKTools
 		/// whether or not it is skinned, so a single bone means "not really a skeleton".
 		/// </para>
 		/// </summary>
+		/// <summary>
+		/// The plane pair Source projects an eyeball's iris with, resolved once per eyeball into the model's own
+		/// space so it can be evaluated per vertex.
+		/// <para>
+		/// Source rebuilds $IrisU and $IrisV every frame from the eye attachment, which is how an eye tracks what it
+		/// is looking at, and an imported scene has no such runtime. What it does have is the eyeball itself:
+		/// mstudioeyeball_t gives the centre, the up and forward vectors and the radius, in the eye bone's space.
+		/// Resolving them at the bind pose gives the planes for an eye looking straight ahead, which is the pose the
+		/// model was authored in.
+		/// </para>
+		/// <para>
+		/// Everything here stays in SOURCE space, alongside the vertices it is measured against. The conversion to
+		/// Unity swizzles two axes, which flips handedness, so a cross product taken after it would come out
+		/// mirrored; taken before, and with the result being two dot products, the uv is simply carried through
+		/// unchanged by whatever transform the vertices go on to have.
+		/// </para>
+		/// </summary>
+		public readonly struct EyeProjection
+		{
+			readonly Vector3 origin;
+			readonly Vector3 uAxis;
+			readonly Vector3 vAxis;
+			readonly float   diameter;
+
+			EyeProjection(Vector3 origin, Vector3 uAxis, Vector3 vAxis, float diameter)
+			{
+				this.origin   = origin;
+				this.uAxis    = uAxis;
+				this.vAxis    = vAxis;
+				this.diameter = diameter;
+			}
+
+			/// <summary>The bind pose of one bone, in the model's space: its own transform and every parent's.</summary>
+			static Matrix4x4 BoneToModel(MDL mdlHeader, int boneIndex)
+			{
+				var matrix = Matrix4x4.identity;
+				if (mdlHeader?.Bones == null)
+					return matrix;
+				// A malformed parent chain must not spin here, and a bone is never its own ancestor in a sane file
+				for (int guard = 0; guard <= mdlHeader.Bones.Length; guard++)
+				{
+					if (boneIndex < 0 || boneIndex >= mdlHeader.Bones.Length)
+						break;
+					var bone = mdlHeader.Bones[boneIndex];
+					matrix = Matrix4x4.TRS(bone.Position, bone.Quaternion, Vector3.one) * matrix;
+					boneIndex = bone.ParentBone;
+				}
+				return matrix;
+			}
+
+			public static EyeProjection Build(MDL mdlHeader, StudioEyeball eyeball)
+			{
+				var boneToModel = BoneToModel(mdlHeader, eyeball.Bone);
+				var origin  = boneToModel.MultiplyPoint3x4(eyeball.Origin);
+				var up      = boneToModel.MultiplyVector(eyeball.Up).normalized;
+				var forward = boneToModel.MultiplyVector(eyeball.Forward).normalized;
+
+				// $IrisU defaults to [0 1 0 0] and $IrisV to [0 0 1 0]. Read in Source's frame - x forward, y left,
+				// z up - those are the eye's LEFT and UP for an eye looking straight down x, and cross(up, forward)
+				// reproduces the first exactly: cross((0,0,1), (1,0,0)) is (0,1,0). Naming them that way is what
+				// makes the projection follow an eye that looks somewhere else.
+				var left = Vector3.Cross(up, forward);
+				if (left.sqrMagnitude < 1e-12f)
+					left = Vector3.Cross(up, Vector3.forward);      // degenerate up/forward: keep a usable pair
+				return new EyeProjection(origin, left.normalized, up, Mathf.Max(eyeball.Radius, 1e-4f) * 2.0f);
+			}
+
+			/// <summary>
+			/// Where one vertex lands on the iris texture. Source's own relation between the two uvs it uses is
+			/// vSphereUv = vCorneaUv * 0.5 + 0.25 (eye_refract_ps2x.fxc:205), so the eyeball's full width spanning
+			/// [0,1] here is the SPHERE uv, and the cornea - a crop of the middle of the same picture - is the
+			/// shader's business to derive from it.
+			/// </summary>
+			public Vector2 Project(Vector3 position)
+			{
+				var offset = position - origin;
+				// v is negated for the reason VmfFixTexcoord negates an authored one: a Source texture starts at its
+				// top row and a Unity one at its bottom, so a uv built to Source's convention has to be flipped to
+				// land on the same texel here.
+				return new Vector2( Vector3.Dot(offset, uAxis) / diameter + 0.5f,
+								   -Vector3.Dot(offset, vAxis) / diameter + 0.5f);
+			}
+		}
+
 		public static MdlSkeleton BuildSkeleton(MDL mdlHeader)
 		{
 			if (mdlHeader?.Bones == null || mdlHeader.Bones.Length <= 1)
@@ -1338,7 +1444,17 @@ namespace Chisel.Import.Source.VPKTools
 				var vtxBodyPart	= vtxHeader.BodyPartHeaders[bodyID];
 				var mdlBodyPart	= mdlHeader.Bodyparts[bodyID];
 
-				for (int vtxModelID = 0; vtxModelID < mdlBodyPart.Models.Length; ++vtxModelID)
+				// A bodypart is a CHOICE, not a set: Source shows one of its models at a time, picked by the
+				// entity's body value, which is how one marine wears a gasmask and the next a helmet. Nothing here
+				// reads a body value yet, and model 0 is what body 0 selects - so taking the first is the default
+				// loadout rather than an arbitrary pick.
+				//
+				// It is also exactly what this loop has been producing. mstudiomodel_t was being stepped by 124
+				// bytes instead of 148, so every model after the first in a bodypart was read from the middle of
+				// its predecessor and came back with a garbage mesh count, which the count guards then dropped.
+				// With the stride corrected those models are real, and importing all of them would put every
+				// bodygroup variant on the model at once.
+				for (int vtxModelID = 0; vtxModelID < Mathf.Min(1, mdlBodyPart.Models.Length); ++vtxModelID)
 				{
 					var vtxModel	= vtxBodyPart.ModelHeaders[vtxModelID];
 					var mdlModel	= mdlBodyPart.Models[vtxModelID];
@@ -1383,7 +1499,18 @@ namespace Chisel.Import.Source.VPKTools
 							modelEntry.Name = mdlModel.Name + " +" + mdlBodyPart.Name + "[" + mdlMesh.MaterialIndex + "]".Trim();
 
 							var indexLookup			= new Dictionary<int, int>();
-							
+
+							// Source marks an eyeball mesh with materialtype 1 and puts the eyeball's own index in
+							// materialparam. Worth reading rather than inferring from the order the meshes come in:
+							// on marine.mdl the mesh with the eyeball_l material is eyeball 1, and eyeball_r is 0.
+							EyeProjection? eyeProjection = null;
+							if (mdlMesh.MaterialType == kEyeballMaterialType && mdlModel.Eyeballs != null &&
+								(uint)mdlMesh.MaterialParam < (uint)mdlModel.Eyeballs.Length)
+							{
+								eyeProjection = EyeProjection.Build(mdlHeader, mdlModel.Eyeballs[mdlMesh.MaterialParam]);
+								modelEntry.HasEyeUvs = true;
+							}
+
 							var mdlMeshVertexIndexStart = mdlMesh.VertexIndexStart;
 
 							var meshEntry = new MdlMeshEntry()
@@ -1441,6 +1568,7 @@ namespace Chisel.Import.Source.VPKTools
 													modelEntry.Vertices.Add(vertices[vertex1].Position);
 													modelEntry.Normals.Add(vertices[vertex1].Normal);
 													modelEntry.Uvs.Add(SourceEngineUnits.VmfFixTexcoord(vertices[vertex1].TexCoord));
+													modelEntry.EyeUvs.Add(eyeProjection?.Project(vertices[vertex1].Position) ?? Vector2.zero);
 													if (hasBones) modelEntry.BoneWeights.Add(ToUnityBoneWeight(vertices[vertex1]));
 													if (tangents != null) modelEntry.Tangents.Add(tangents[vertex1]);
 													indexLookup[vertex1] = index1;
@@ -1452,6 +1580,7 @@ namespace Chisel.Import.Source.VPKTools
 													modelEntry.Vertices.Add(vertices[vertex2].Position);
 													modelEntry.Normals.Add(vertices[vertex2].Normal);
 													modelEntry.Uvs.Add(SourceEngineUnits.VmfFixTexcoord(vertices[vertex2].TexCoord));
+													modelEntry.EyeUvs.Add(eyeProjection?.Project(vertices[vertex2].Position) ?? Vector2.zero);
 													if (hasBones) modelEntry.BoneWeights.Add(ToUnityBoneWeight(vertices[vertex2]));
 													if (tangents != null) modelEntry.Tangents.Add(tangents[vertex2]);
 													indexLookup[vertex2] = index2;
@@ -1463,6 +1592,7 @@ namespace Chisel.Import.Source.VPKTools
 													modelEntry.Vertices.Add(vertices[vertex3].Position);
 													modelEntry.Normals.Add(vertices[vertex3].Normal);
 													modelEntry.Uvs.Add(SourceEngineUnits.VmfFixTexcoord(vertices[vertex3].TexCoord));
+													modelEntry.EyeUvs.Add(eyeProjection?.Project(vertices[vertex3].Position) ?? Vector2.zero);
 													if (hasBones) modelEntry.BoneWeights.Add(ToUnityBoneWeight(vertices[vertex3]));
 													if (tangents != null) modelEntry.Tangents.Add(tangents[vertex3]);
 													indexLookup[vertex3] = index3;

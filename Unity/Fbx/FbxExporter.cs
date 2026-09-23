@@ -707,23 +707,16 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			var uvs = mesh.uv;
 			var hasUvs = uvs != null && uvs.Length == vertices.Length;
 			if (hasUvs)
-			{
-				var values = new double[cornerVertex.Count * 2];
-				for (int i = 0; i < cornerVertex.Count; i++)
-				{
-					var uv = uvs[cornerVertex[i]];
-					values[(i * 2) + 0] = uv.x;
-					values[(i * 2) + 1] = uv.y;
-				}
+				WriteUvLayer(geometry, cornerVertex, uvs, 0, "UVMap");
 
-				var layer = geometry.Add(new FbxNode("LayerElementUV"));
-				layer.Prop(FbxProperty.Int(0));
-				layer.Add("Version", FbxProperty.Int(101));
-				layer.Add("Name", FbxProperty.String("UVMap"));
-				layer.Add("MappingInformationType", FbxProperty.String("ByPolygonVertex"));
-				layer.Add("ReferenceInformationType", FbxProperty.String("Direct"));
-				layer.Add("UV", FbxProperty.Array(values));
-			}
+			// A second set, for the iris uv of an eyeball mesh (ModelImporter.EyeProjection). Unity takes the sets
+			// in order, so this one arrives as uv2 - which is also where it would put generated lightmap uvs, but
+			// ConfigureImportedModel leaves generateSecondaryUV off, so nothing overwrites it. A mesh with no eyes
+			// has no uv2 and no layer here.
+			var eyeUvs = mesh.uv2;
+			var hasEyeUvs = eyeUvs != null && eyeUvs.Length == vertices.Length;
+			if (hasEyeUvs)
+				WriteUvLayer(geometry, cornerVertex, eyeUvs, 1, "EyeUVMap");
 
 			{
 				var layer = geometry.Add(new FbxNode("LayerElementMaterial"));
@@ -750,13 +743,42 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			AddLayerElement(layers, "LayerElementMaterial");
 			if (hasUvs)
 				AddLayerElement(layers, "LayerElementUV");
+
+			// A second uv set is a second Layer, not a second element of the first: a Layer holds at most one
+			// element of each type, and the set's index is the Layer's.
+			if (hasEyeUvs)
+			{
+				var eyeLayer = geometry.Add(new FbxNode("Layer"));
+				eyeLayer.Prop(FbxProperty.Int(1));
+				eyeLayer.Add("Version", FbxProperty.Int(100));
+				AddLayerElement(eyeLayer, "LayerElementUV", 1);
+			}
 		}
 
-		static void AddLayerElement(FbxNode layer, string type)
+		static void WriteUvLayer(FbxNode geometry, List<int> cornerVertex, Vector2[] uvs, int index, string name)
+		{
+			var values = new double[cornerVertex.Count * 2];
+			for (int i = 0; i < cornerVertex.Count; i++)
+			{
+				var uv = uvs[cornerVertex[i]];
+				values[(i * 2) + 0] = uv.x;
+				values[(i * 2) + 1] = uv.y;
+			}
+
+			var layer = geometry.Add(new FbxNode("LayerElementUV"));
+			layer.Prop(FbxProperty.Int(index));
+			layer.Add("Version", FbxProperty.Int(101));
+			layer.Add("Name", FbxProperty.String(name));
+			layer.Add("MappingInformationType", FbxProperty.String("ByPolygonVertex"));
+			layer.Add("ReferenceInformationType", FbxProperty.String("Direct"));
+			layer.Add("UV", FbxProperty.Array(values));
+		}
+
+		static void AddLayerElement(FbxNode layer, string type, int typedIndex = 0)
 		{
 			var entry = layer.Add(new FbxNode("LayerElement") { AlwaysBlock = true });
 			entry.Add("Type", FbxProperty.String(type));
-			entry.Add("TypedIndex", FbxProperty.Int(0));
+			entry.Add("TypedIndex", FbxProperty.Int(typedIndex));
 		}
 
 		#endregion
