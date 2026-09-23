@@ -223,10 +223,11 @@ half4 SourceEyeFragment(Varyings input) : SV_Target
 	float3 gradientV = (r1 * ddx(sphereUv.y) + r2 * ddy(sphereUv.y)) * inverseDeterminant;
 	float3 T = gradientU - dot(gradientU, N) * N;
 	T = (dot(T, T) > 1e-20) ? normalize(T) : normalize(cross(float3(0, 1, 0), N) + float3(1e-5, 0, 0));
-	// B is orthonormal as Valve's is, but runs along INCREASING v - the axis the cornea texture's G is drawn in.
-	// That is read off the texture, not assumed: across eye-cornea R rises toward larger u (25 at the left, 230 at
-	// the right) and G toward the file's top row (24 at the bottom, 232 at the top) - a convex dome in the
-	// texture's own axes. Valve's cross(N, T) runs the other way on this projection and decoded the dome concave.
+	// B is orthonormal as Valve's is and runs along INCREASING v, which on the importer's uv is UP the eye - where
+	// Valve's own B points. Valve's is cross(N, T) (vs20:142), but the same cross product in Unity's left-handed
+	// world comes out mirrored, pointing down, so the direction is taken from the uv instead of trusted. The cornea
+	// texture agrees: across eye-cornea R rises toward larger u (25 at the left, 230 at the right) and G toward the
+	// file's top row, larger v (24 at the bottom, 232 at the top) - a convex dome in this frame.
 	float3 B = cross(N, T);
 	B *= (dot(B, gradientV) < 0.0) ? -1.0 : 1.0;
 
@@ -238,14 +239,18 @@ half4 SourceEyeFragment(Varyings input) : SV_Target
 	half  highlightMask = cornea.a;
 
 	// Hacked parallax mapping on the iris (:214-229): the cornea's B holds how deep the iris sits under it (255 at
-	// the centre, ~16 at the edge). Valve's formula, WITHOUT its "Need to flip x...not sure why" - that flip
-	// squared their result with a frame whose T ran against u; in a frame drawn from the texture's own axes, as
-	// this one is, the unflipped formula pulls the iris sample toward the centre on BOTH axes, which is what
-	// looking through a convex cornea does: it magnifies. With the flip it pushed outward, and on an eyeball band
-	// far wider than it is tall that squashed the pupil into a vertical slit.
+	// the centre, ~16 at the edge). Valve's frame is (T, B) = (+u, -v): its B points up while its v runs down the
+	// texture. That mirror is the "Need to flip x...not sure why" - with the flip both axes agree, and what they
+	// agree on is to move the iris sample ALONG the view ray's tangential direction, away from the viewer. The iris
+	// reads as a layer recessed under the cornea, and its deepest part, the pupil, slides toward whoever is looking.
+	// This frame is (+u, +v), so the same result is sphereUv + parallax on both axes and no flip. (Subtracting it
+	// here, as this port first did, slid the pupil away from the viewer; subtracting with Valve's flip squashed it
+	// into a vertical slit, one axis each way.)
 	float2 parallax = (tangentView.xy * cornea.b * _ParallaxStrength) / (1.0 - tangentView.z);
-	float2 irisUv = sphereUv - parallax;
-	half   corneaNoise = SAMPLE_TEXTURE2D(_Iris, sampler_Iris, sphereUv + parallax * 0.5).a;
+	float2 irisUv = sphereUv + parallax;
+	// The noise moves half as far the OTHER way - Valve's vSphereUv + parallax * 0.5, in its mirrored frame - which
+	// puts it above the surface: "to help define raised cornea layer"
+	half   corneaNoise = SAMPLE_TEXTURE2D(_Iris, sampler_Iris, sphereUv - parallax * 0.5).a;
 
 	// Dilate the pupil (:307-312). 0.2 is the iris's uv radius - Valve's constant, not a tuned one.
 	irisUv -= 0.5;
@@ -292,6 +297,17 @@ half4 SourceEyeFragment(Varyings input) : SV_Target
 	inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
 
 	uint lightCount = GetAdditionalLightsCount();
+#if USE_CLUSTER_LIGHT_LOOP
+	// The cluster loop walks the PUNCTUAL lights only. Under Forward+ and Deferred+ every additional directional
+	// light sits at the front of the list and is looped on its own, as URP's UniversalFragmentPBR does
+	// (Lighting.hlsl) - without this, a directional light that was not the main one never reached the eye.
+	[loop] for (uint lightIndex = 0; lightIndex < min(URP_FP_DIRECTIONAL_LIGHTS_COUNT, MAX_VISIBLE_LIGHTS); lightIndex++)
+	{
+		CLUSTER_LIGHT_LOOP_SUBTRACTIVE_LIGHT_CHECK
+		AccumulateSourceEyeLight(GetAdditionalLight(lightIndex, input.positionWS, half4(1, 1, 1, 1)), bentNormal,
+								 irisTangentNormal, corneaReflection, T, B, N, highlightMask, light);
+	}
+#endif
 	LIGHT_LOOP_BEGIN(lightCount)
 		AccumulateSourceEyeLight(GetAdditionalLight(lightIndex, input.positionWS, half4(1, 1, 1, 1)), bentNormal,
 								 irisTangentNormal, corneaReflection, T, B, N, highlightMask, light);

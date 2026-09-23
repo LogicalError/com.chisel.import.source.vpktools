@@ -316,7 +316,9 @@ namespace Chisel.Import.Source.VPKTools
 		// and was drawing every iris too small.
 		// 8: an eyeball vertex's normal points out from the eye's centre, as Source computes it per vertex,
 		// instead of the mesh's own - which on these ten-triangle bands is not the sphere's.
-		internal static readonly (string generator, int version) ModelVersion     = ("model", 8);
+		// 9: the iris uv's v runs up the eye. It ran down, which is Source's own D3D convention unflipped, so every
+		// eye wore its iris and cornea textures upside down.
+		internal static readonly (string generator, int version) ModelVersion     = ("model", 9);
 		static readonly (string generator, int version) AnimationVersion = ("animation", 1);
 
 		/// <summary>
@@ -585,10 +587,13 @@ namespace Chisel.Import.Source.VPKTools
 				var up      = boneToModel.MultiplyVector(eyeball.Up).normalized;
 				var forward = boneToModel.MultiplyVector(eyeball.Forward).normalized;
 
-				// $IrisU defaults to [0 1 0 0] and $IrisV to [0 0 1 0]. Read in Source's frame - x forward, y left,
-				// z up - those are the eye's LEFT and UP for an eye looking straight down x, and cross(up, forward)
-				// reproduces the first exactly: cross((0,0,1), (1,0,0)) is (0,1,0). Naming them that way is what
-				// makes the projection follow an eye that looks somewhere else.
+				// u runs along the eye's LEFT and v along its up. The engine rewrites $IrisU and $IrisV every frame, so
+				// their shader defaults ([0 1 0 0], [0 0 1 0]) say nothing; what pins the signs down is Valve's own
+				// shader decoding the cornea texture. Its frame is T = cross(up, N), B = cross(N, T), and eye-cornea's
+				// R rises toward the file's right and G toward its top: that reads as a convex dome only if u grows
+				// toward the eye's left and v toward its bottom. In Source's frame - x forward, y left, z up -
+				// cross(up, forward) is exactly that left: cross((0,0,1), (1,0,0)) is (0,1,0). Naming the axes rather
+				// than copying numbers is what makes the projection follow an eye that looks somewhere else.
 				var left = Vector3.Cross(up, forward);
 				if (left.sqrMagnitude < 1e-12f)
 					left = Vector3.Cross(up, Vector3.forward);      // degenerate up/forward: keep a usable pair
@@ -631,11 +636,13 @@ namespace Chisel.Import.Source.VPKTools
 			public Vector2 Project(Vector3 position)
 			{
 				var offset = position - origin;
-				// v is negated for the reason VmfFixTexcoord negates an authored one: a Source texture starts at its
-				// top row and a Unity one at its bottom, so a uv built to Source's convention has to be flipped to
-				// land on the same texel here.
-				return new Vector2( Vector3.Dot(offset, uAxis) / span + 0.5f,
-								   -Vector3.Dot(offset, vAxis) / span + 0.5f);
+				// v runs UP the eye. Source's own v runs down it - the engine builds $IrisV from the eye's up vector
+				// negated, which is why eye_refract_vs20.fxc recovers "vEyeSocketUpVector" as normalize(-IrisV) - so
+				// that a texture's top row, which is where D3D starts, lands at the top of the eye. A Unity texture
+				// starts at its bottom row, and the flip VmfFixTexcoord applies to an authored uv lands the same
+				// texel here: the iris's painted lid shadow on top, its lit lower half below.
+				return new Vector2(Vector3.Dot(offset, uAxis) / span + 0.5f,
+								   Vector3.Dot(offset, vAxis) / span + 0.5f);
 			}
 		}
 
