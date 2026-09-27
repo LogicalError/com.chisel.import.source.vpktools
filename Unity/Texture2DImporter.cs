@@ -301,14 +301,11 @@ namespace Chisel.Import.Source.VPKTools
 			for (int i = 0; i < vtffiles.Length; i++)
 			{
 				var vtfFile = vtffiles[i];
-				if (vtfFile == null || vtfFile.Frames == null || vtfFile.Frames.Length == 0)
-				{
-					sidePixels[i] = new Color[size * size];
-					continue;
-				}
-
-				// TODO: make sure that all images (which are not null) are upscaled to the correct size, when they're not the correct size
-				sidePixels[i] = vtfFile.Frames[0].Pixels;
+				var pixels  = (vtfFile?.Frames != null && vtfFile.Frames.Length > 0) ? vtfFile.Frames[0].Pixels : null;
+				// Front, back, right and left are the sides; up and down are not
+				var isSide  = i != 2 && i != 3;
+				sidePixels[i] = (pixels == null) ? new Color[size * size]
+												 : SkyFaceAsSquare(pixels, vtfFile.Width, vtfFile.Height, size, isSide);
 			}
 
 			bool isHDR = false;
@@ -325,6 +322,51 @@ namespace Chisel.Import.Source.VPKTools
 			PackagePath.EnsureDirectoriesExist(destinationPath);
 			File.WriteAllBytes(destinationPath, bytes);
 			Object.DestroyImmediate(cubeTexture);
+		}
+
+		/// <summary>
+		/// One sky face as the engine draws it onto its side of the sky cube, resampled to a size x size square. Source
+		/// stretches each face's texture over its face whatever its resolution - Half-Life 2's skies ship a 4x4 bottom -
+		/// with one exception: a SIDE half as tall as it is wide (512x256, most of the HL2 skies) covers only the UPPER
+		/// half of its face, and the engine stretches its bottom row down over the lower half. Pixels are bottom row
+		/// first, as the VTF reader keeps them and SetPixels takes them; the texture is sampled bilinearly and clamped,
+		/// as its CLAMPS/CLAMPT flags have the game do.
+		/// <para>
+		/// A face that already is size x size comes back unchanged, so a sky that imported before still writes the
+		/// same file. Every other shape used to throw from SetPixels, which took the whole map import down with it.
+		/// </para>
+		/// </summary>
+		internal static Color[] SkyFaceAsSquare(Color[] pixels, int width, int height, int size, bool isSide)
+		{
+			var halfHeight = isSide && height * 2 == width;
+			if (width == size && height == size && pixels.Length >= size * size)
+				return pixels;
+			var square = new Color[size * size];
+			if (width <= 0 || height <= 0 || pixels.Length < width * height)
+				return square;
+
+			// Row 'fromTop' of the texture, as the reader stores it: bottom row first
+			Color Texel(int fromTop, int column) => pixels[(height - 1 - fromTop) * width + column];
+			for (int y = 0; y < size; y++)
+			{
+				// Down the face from its top edge, 0 to 1, at this row's centre
+				var down = 1.0f - (y + 0.5f) / size;
+				if (halfHeight)
+					down = Mathf.Min(down * 2.0f, 1.0f);
+				var sy = Mathf.Clamp(down * height - 0.5f, 0, height - 1);
+				var y0 = (int)sy;
+				var y1 = Mathf.Min(y0 + 1, height - 1);
+				for (int x = 0; x < size; x++)
+				{
+					var sx = Mathf.Clamp((x + 0.5f) / size * width - 0.5f, 0, width - 1);
+					var x0 = (int)sx;
+					var x1 = Mathf.Min(x0 + 1, width - 1);
+					var upper = Color.Lerp(Texel(y0, x0), Texel(y0, x1), sx - x0);
+					var lower = Color.Lerp(Texel(y1, x0), Texel(y1, x1), sx - x0);
+					square[y * size + x] = Color.Lerp(upper, lower, sy - y0);
+				}
+			}
+			return square;
 		}
 
 		// Where an animated texture's frames are written as one flipbook, beside the PNGs of its frames
