@@ -692,12 +692,13 @@ namespace Chisel.Import.Source.VPKTools
 				hideFlags = HideFlags.DontUnloadUnusedAsset
 			};
 
-			var mainTexture = SetMaterialTexture(gameResources, unityMaterial, "_BaseMap", sourceMaterial.BaseTextureName);
-
 			// A cut-out's base alpha IS its silhouette, so its mip chain has to keep the alpha test's
 			// coverage or the shape thins away with distance (Texture2DImporter.MarkAsAlphaTested).
+			var alphaTestReference = sourceMaterial.HaveCutout ? (sourceMaterial.AlphaTestReference ?? 0.5f) : 0.0f;
+			var mainTexture = SetMaterialTexture(gameResources, unityMaterial, "_BaseMap", sourceMaterial.BaseTextureName,
+												 alphaTestReference: alphaTestReference);
 			if (mainTexture != null && sourceMaterial.HaveCutout)
-				Texture2DImporter.MarkAsAlphaTested(mainTexture, sourceMaterial.AlphaTestReference ?? 0.5f);
+				Texture2DImporter.MarkAsAlphaTested(mainTexture, alphaTestReference);
 
 			// EyeRefract. An eye material names no $basetexture at all - $iris carries the iris, the pupil
 			// AND the sclera - so the line above found nothing and, before Chisel/Source/EyeRefract
@@ -1697,13 +1698,18 @@ namespace Chisel.Import.Source.VPKTools
 		/// decoding rather than merely re-typing. Same reasoning as <paramref name="isNormalMap"/>:
 		/// only the VMT knows.
 		/// </param>
+		/// <param name="alphaTestReference">
+		/// Above zero, the value this slot's alpha is tested at as a cut-out (Texture2DImporter.MarkAsAlphaTested), which a
+		/// texture written now is imported with.
+		/// </param>
 		private static Texture2D SetMaterialTexture(GameResources gameResources,
 													Material material,
 													string materialPropertyName,
 													string textureName,
 													bool isNormalMap = false,
 													bool warnIfMissing = true,
-													bool selfShadowed = false)
+													bool selfShadowed = false,
+													float alphaTestReference = 0.0f)
 		{
 			if (string.IsNullOrEmpty(textureName) || !material)
 				return null;
@@ -1722,9 +1728,15 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			}
 
+			// What this slot makes of the texture, so one written now is imported once, already as that; one that exists
+			// is claimed below, as before (both leave it the same)
+			var claim = isNormalMap ? TextureClaim.AsNormalMap(selfShadowed)
+					  : IsColorSlot(material, materialPropertyName) ? TextureClaim.AsColor
+					  : default;
 			var images = gameResources.ImportVTF(
 				textureName,
-				PackagePath.DefaultMaterialPaths);
+				PackagePath.DefaultMaterialPaths,
+				claim.WithAlphaTest(alphaTestReference));
 
 			if (images == null || images.Length == 0)
 			{

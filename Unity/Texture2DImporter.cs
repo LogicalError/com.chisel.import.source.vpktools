@@ -7,6 +7,42 @@ using System.Linq;
 
 namespace Chisel.Import.Source.VPKTools
 {
+	/// <summary>
+	/// What a material asks of a texture it names: how the slot it goes into reads it. Handed to the texture's import, so a
+	/// texture written from its VTF is imported once, already as that, instead of imported plain and then re-imported for
+	/// every claim (<see cref="Texture2DImporter.MarkAsColor"/>, <see cref="Texture2DImporter.MarkAsNormalMap"/>,
+	/// <see cref="Texture2DImporter.MarkAsAlphaTested"/>, which still apply a claim to a texture that exists).
+	/// </summary>
+	public readonly struct TextureClaim
+	{
+		/// <summary>The slot samples colour, which Source reads as sRGB (MaterialImporter.IsColorSlot).</summary>
+		public readonly bool Color;
+		/// <summary>The VMT names it under a bump-map parameter.</summary>
+		public readonly bool NormalMap;
+		/// <summary>... and says $ssbump 1.</summary>
+		public readonly bool SelfShadowed;
+		/// <summary>The value its alpha is tested at, as a cut-out silhouette; 0 for none.</summary>
+		public readonly float AlphaTestReference;
+
+		TextureClaim(bool color, bool normalMap, bool selfShadowed, float alphaTestReference)
+		{
+			Color = color;
+			NormalMap = normalMap;
+			SelfShadowed = selfShadowed;
+			AlphaTestReference = alphaTestReference > 0.0f ? alphaTestReference : 0.0f;
+		}
+
+		public static TextureClaim AsColor => new(true, false, false, 0);
+		public static TextureClaim AsNormalMap(bool selfShadowed) => new(false, true, selfShadowed, 0);
+		public TextureClaim WithAlphaTest(float reference) => new(Color, NormalMap, SelfShadowed, reference);
+
+		/// <summary>
+		/// The claim on the other frames of an animated texture, of which a material names frame 0: colour reaches every
+		/// frame (MarkAsColor claims the whole set), a normal map and an alpha test only the frame named.
+		/// </summary>
+		public TextureClaim OfOtherFrame() => new(Color, false, false, 0);
+	}
+
 	public static class Texture2DImporter
 	{
 		/// <summary>
@@ -31,11 +67,12 @@ namespace Chisel.Import.Source.VPKTools
 			return GeneratedAssetVersion.IsCurrent(AssetDatabase.GetAssetPath(texture), GeneratedVersion);
 		}
 
-		public static Texture2D[] Import(VTF sourceTexture, string outputPath)
+		/// <param name="claim">How the material asking for it reads it; see <see cref="TextureClaim"/>.</param>
+		public static Texture2D[] Import(VTF sourceTexture, string outputPath, TextureClaim claim = default)
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, ".png");
 			var foundAsset = UnityAssets.Load<Texture2D>(destinationPath);
-			if (foundAsset != null && IsCurrent(foundAsset))
+			if (foundAsset != null && IsCurrent(foundAsset) && ImportedAsWritten(foundAsset, sourceTexture))
 				return new Texture2D[] { foundAsset };
 
 			var filePath = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + "[0].png");
@@ -43,15 +80,18 @@ namespace Chisel.Import.Source.VPKTools
 			if (foundAsset != null && IsCurrent(foundAsset))
 			{
 				var frameTextureList = new List<Texture2D>();
+				bool asWritten = true;
 				int index = 0;
 				while (foundAsset != null)
 				{
+					asWritten &= ImportedAsWritten(foundAsset, sourceTexture);
 					frameTextureList.Add(foundAsset);
 					index++;
 					filePath = Path.Combine(Path.GetDirectoryName(outputPath), Path.GetFileNameWithoutExtension(outputPath) + $"[{index}].png");
 					foundAsset = UnityAssets.Load<Texture2D>(filePath);
 				}
-				return frameTextureList.ToArray();
+				if (asWritten)
+					return frameTextureList.ToArray();
 			}
 
 			// Write texture as a png file - over the outdated one, if there is one, which keeps its .meta
@@ -61,10 +101,22 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 
 			var frameTextures = new Texture2D[frameNames.Length];
+			var assetPaths = new string[frameNames.Length];
+			for (int i = 0; i < frameNames.Length; i++)
+				assetPaths[i] = UnityAssets.GetAssetPath(frameNames[i]);
+
+			// Imported once, as what they end up as (ImportOnce); the way below only where that cannot be done
+			if (ImportOnce(sourceTexture, assetPaths, claim))
+			{
+				for (int i = 0; i < assetPaths.Length; i++)
+					frameTextures[i] = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPaths[i]);
+				return frameTextures;
+			}
+
 			for (int i = 0; i < frameNames.Length; i++)
 			{
 				// Import png file as an asset
-				var assetPath = UnityAssets.GetAssetPath(frameNames[i]);
+				var assetPath = assetPaths[i];
 				AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUncompressedImport);
 
 				// Hand the asset over to our own importer, which rebuilds the mip chain the way Source
@@ -85,6 +137,229 @@ namespace Chisel.Import.Source.VPKTools
 				frameTextures[i] = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
 			}
 			return frameTextures;
+		}
+
+		/// <summary>
+		/// Whether a texture this importer wrote from a VTF still has the importer, and the settings, it was written with.
+		/// <para>
+		/// A stamp says which code wrote an asset, not that nothing changed it since. An importer setting changed by hand,
+		/// or by a script fixing textures up afterwards, stays wrong under a current stamp for good: nothing ever looks at it
+		/// again. So each import that reuses a texture checks it, and one that does not hold is written again right here,
+		/// in place (the GUID, and what claims left on it, survive). What is checked is what the importer decides: the
+		/// importer itself, and the settings the VTF decides (<see cref="SourceSettings"/>); a normal map's type and
+		/// shape. What materials claim and the switches meant to be set by hand are the asset's own and are left alone.
+		/// </para>
+		/// </summary>
+		internal static bool ImportedAsWritten(Texture2D texture, VTF sourceTexture)
+		{
+			switch (AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(texture)))
+			{
+				case SourceTextureImporter source:
+				{
+					var written = SourceSettings(sourceTexture, default, source);
+					return source.generateMipmaps == written.generateMipmaps && source.filterMode == written.filterMode &&
+						   source.anisoLevel == written.anisoLevel && source.wrapU == written.wrapU && source.wrapV == written.wrapV;
+				}
+				case TextureImporter textureImporter:
+					// Only a normal map leaves SourceTextureImporter (MarkAsNormalMap), and it is a 2D normal map
+					return textureImporter.textureType == TextureImporterType.NormalMap &&
+						   textureImporter.textureShape == TextureImporterShape.Texture2D;
+				default:
+					return false;
+			}
+		}
+
+		/// <summary>
+		/// Off takes every texture the slow way again - imported plain, handed to <see cref="SourceTextureImporter"/>,
+		/// configured, then claimed, one import each - which is what <see cref="ImportOnce"/> is compared against.
+		/// </summary>
+		public static bool ImportOnceEnabled = true;
+
+		// Said once per editor session, whatever the number of textures it happens to
+		static bool s_SaidRepaired;
+
+		/// <summary>
+		/// Imports a texture that was just written from its VTF ONCE, as what it ends up as, and returns whether it did.
+		/// <para>
+		/// The slow way takes three to six imports, each its own refresh: plain, handed to SourceTextureImporter, configured
+		/// from the VTF (<see cref="ConfigureSourceImporter"/>), then once for each claim of the material asking for it
+		/// (<see cref="MarkAsColor"/>, <see cref="MarkAsAlphaTested"/>, or <see cref="MarkAsNormalMap"/>'s conversion). Here
+		/// the .meta is written first, with the importer and every one of those settings (see <see cref="GeneratedMeta"/>),
+		/// so the one import is the last one. What the asset ends up as is the same: the same importer and settings, and a
+		/// normal map's pixels converted by the same code, exactly once. The claims the caller applies afterwards then find
+		/// nothing left to do.
+		/// </para>
+		/// <para>
+		/// False, with nothing changed, when it cannot be done - there is no template to write the .meta from yet, or a
+		/// normal map does not convert - and the slow way does it as before. Once the .meta is written there is no going
+		/// back to the slow way: its configure step would strip the normal-map stamp and convert the pixels a second time.
+		/// So an import that did not come out as written is put right through the importer instead, and said once.
+		/// </para>
+		/// </summary>
+		/// <param name="assetPaths">The texture's frames, as just written by <see cref="SaveFramesAsPNG"/>; a material
+		/// names frame 0, and the others take the claim as <see cref="TextureClaim.OfOtherFrame"/> gives it.</param>
+		static bool ImportOnce(VTF sourceTexture, string[] assetPaths, TextureClaim claim)
+		{
+			if (!ImportOnceEnabled || assetPaths == null || assetPaths.Length == 0)
+				return false;
+			// Frame 0 is a normal map when claimed as one, every other frame a Source texture
+			var normalTemplate = claim.NormalMap ? GeneratedMeta.Template(GeneratedMeta.Kind.NormalMap) : null;
+			var sourceTemplate = (!claim.NormalMap || assetPaths.Length > 1) ? GeneratedMeta.Template(GeneratedMeta.Kind.SourceTexture) : null;
+			if ((claim.NormalMap && normalTemplate == null) || ((!claim.NormalMap || assetPaths.Length > 1) && sourceTemplate == null))
+				return false;
+
+			// Every frame's .meta goes down before any of them is imported: an import may notice the other new files, and
+			// one noticed without its .meta would be imported with Unity's defaults
+			var normalUserData = (string)null;
+			var sourceSettings = new GeneratedMeta.SourceTextureSettings[assetPaths.Length];
+			var sourceUserData = new string[assetPaths.Length];
+			for (int i = 0; i < assetPaths.Length; i++)
+			{
+				var assetPath = assetPaths[i];
+				var frameClaim = i == 0 ? claim : claim.OfOtherFrame();
+				var existing = AssetImporter.GetAtPath(assetPath);
+				var guid = GeneratedMeta.GuidFor(assetPath);
+				if (frameClaim.NormalMap)                  // frame 0 only, so nothing is written yet
+				{
+					if (!ConvertSourceNormalMapFile(assetPath, frameClaim.SelfShadowed))
+						return false;                       // the slow way takes it, as before
+					// As MarkAsNormalMap stamps it: pixels written from the VTF, converted
+					normalUserData = UserDataForRewrittenPixels(existing?.userData) + ";" + kNormalMapStamp;
+					GeneratedMeta.Write(assetPath, GeneratedMeta.Fill(normalTemplate, guid, normalUserData));
+				}
+				else
+				{
+					sourceSettings[i] = SourceSettings(sourceTexture, frameClaim, existing as SourceTextureImporter);
+					sourceUserData[i] = UserDataForRewrittenPixels(existing?.userData);
+					GeneratedMeta.Write(assetPath, GeneratedMeta.Fill(sourceTemplate, guid, sourceUserData[i], sourceSettings[i]));
+				}
+			}
+
+			for (int i = 0; i < assetPaths.Length; i++)
+			{
+				AssetDatabase.ImportAsset(assetPaths[i], ImportAssetOptions.ForceSynchronousImport);
+				if (i == 0 && claim.NormalMap)
+					RepairNormalMap(assetPaths[i], normalUserData);
+				else
+					RepairSourceTexture(assetPaths[i], sourceSettings[i], sourceUserData[i]);
+			}
+			return true;
+		}
+
+		/// <summary>
+		/// What a Source texture's importer ends up set to: <see cref="ConfigureSourceImporter"/>'s settings from the VTF, the
+		/// claim, and what the asset being rewritten already carried, which ConfigureSourceImporter leaves alone - a texture
+		/// any material samples as colour stays colour, the strictest alpha test stays, and the switches set by hand stay.
+		/// </summary>
+		internal static GeneratedMeta.SourceTextureSettings SourceSettings(VTF sourceTexture, TextureClaim claim, SourceTextureImporter existing)
+		{
+			var flags = sourceTexture.Flags;
+			var pointSampled = (flags & VTFImageFlag.TEXTUREFLAGS_POINTSAMPLE) != (VTFImageFlag)0;
+			var filterMode = FilterMode.Bilinear;
+			if (pointSampled) filterMode = FilterMode.Point;
+			if ((flags & VTFImageFlag.TEXTUREFLAGS_TRILINEAR) != (VTFImageFlag)0) filterMode = FilterMode.Trilinear;
+			if ((flags & VTFImageFlag.TEXTUREFLAGS_ANISOTROPIC) != (VTFImageFlag)0) filterMode = FilterMode.Trilinear;
+
+			var settings = new GeneratedMeta.SourceTextureSettings
+			{
+				sRGB               = claim.Color,
+				generateMipmaps    = sourceTexture.MipmapCount > 1,
+				alphaTestReference = claim.AlphaTestReference,
+				// What a new SourceTextureImporter starts as; set by hand, per texture, if ever
+				preserveAlphaCoverage = false,
+				compress           = true,
+				filterMode         = filterMode,
+				anisoLevel         = pointSampled ? 1 : kForcedAnisoLevel,
+				wrapU = ((flags & VTFImageFlag.TEXTUREFLAGS_CLAMPS) != (VTFImageFlag)0) ? TextureWrapMode.Clamp : TextureWrapMode.Repeat,
+				wrapV = ((flags & VTFImageFlag.TEXTUREFLAGS_CLAMPT) != (VTFImageFlag)0) ? TextureWrapMode.Clamp : TextureWrapMode.Repeat,
+			};
+			if (existing != null)
+			{
+				settings.sRGB                  |= existing.sRGB;
+				settings.alphaTestReference     = Mathf.Max(settings.alphaTestReference, existing.alphaTestReference);
+				settings.preserveAlphaCoverage  = existing.preserveAlphaCoverage;
+				settings.compress               = existing.compress;
+			}
+			return settings;
+		}
+
+		// The import came out as the .meta said, or is made to, through the importer
+		static void RepairSourceTexture(string assetPath, GeneratedMeta.SourceTextureSettings settings, string userData)
+		{
+			if (AssetImporter.GetAtPath(assetPath) is not SourceTextureImporter)
+			{
+				SayRepaired(assetPath, "not imported by SourceTextureImporter");
+				AssetDatabase.SetImporterOverride<SourceTextureImporter>(assetPath);
+			}
+			if (AssetImporter.GetAtPath(assetPath) is not SourceTextureImporter importer)
+				return;
+
+			var serialized = new SerializedObject(importer);
+			bool changed = false;
+			foreach (var field in GeneratedMeta.SourceTextureFields)
+			{
+				var property = serialized.FindProperty(field);
+				var want = settings.Value(field);
+				var have = property == null ? null
+						 : property.propertyType == SerializedPropertyType.Boolean ? (property.boolValue ? "1" : "0")
+						 : property.propertyType == SerializedPropertyType.Float ? property.floatValue.ToString("R", System.Globalization.CultureInfo.InvariantCulture)
+						 : property.propertyType == SerializedPropertyType.Enum ? property.enumValueIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)
+						 : property.intValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+				if (property == null || have == want)
+					continue;
+				SayRepaired(assetPath, $"{field} is {have}, the .meta said {want}");
+				switch (property.propertyType)
+				{
+					case SerializedPropertyType.Boolean: property.boolValue = want == "1"; break;
+					case SerializedPropertyType.Float:   property.floatValue = float.Parse(want, System.Globalization.CultureInfo.InvariantCulture); break;
+					case SerializedPropertyType.Enum:    property.enumValueIndex = int.Parse(want, System.Globalization.CultureInfo.InvariantCulture); break;
+					default:                             property.intValue = int.Parse(want, System.Globalization.CultureInfo.InvariantCulture); break;
+				}
+				changed = true;
+			}
+			if (changed)
+				serialized.ApplyModifiedPropertiesWithoutUndo();
+			if (importer.userData != userData)
+			{
+				SayRepaired(assetPath, "userData");
+				importer.userData = userData;
+				changed = true;
+			}
+			if (changed)
+				importer.SaveAndReimport();
+		}
+
+		// As MarkAsNormalMap leaves it
+		static void RepairNormalMap(string assetPath, string userData)
+		{
+			if (AssetImporter.GetAtPath(assetPath) is SourceTextureImporter)
+			{
+				SayRepaired(assetPath, "imported by SourceTextureImporter, not as a normal map");
+				AssetDatabase.ClearImporterOverride(assetPath);
+			}
+			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter importer)
+				return;
+			if (importer.textureType == TextureImporterType.NormalMap && importer.textureShape == TextureImporterShape.Texture2D &&
+				importer.userData == userData)
+				return;
+
+			SayRepaired(assetPath, $"type {importer.textureType}, shape {importer.textureShape}");
+			importer.userData = userData;
+			importer.textureType = TextureImporterType.NormalMap;
+			TextureImporterSettings settings = new();
+			importer.ReadTextureSettings(settings);
+			settings.textureShape = TextureImporterShape.Texture2D;
+			importer.SetTextureSettings(settings);
+			importer.SaveAndReimport();
+		}
+
+		static void SayRepaired(string assetPath, string what)
+		{
+			if (s_SaidRepaired)
+				return;
+			s_SaidRepaired = true;
+			Debug.LogWarning($"[Chisel] {assetPath} did not import as its .meta was written ({what}); set through the importer " +
+							 "instead. Said once: textures after it may have the same problem.");
 		}
 
 		/// <summary>
@@ -117,6 +392,19 @@ namespace Chisel.Import.Source.VPKTools
 								  sourceTexture.Width, sourceTexture.Height, outputPath);
 		}
 
+		/// <summary>
+		/// Whether a mask this importer wrote is still imported as it was written: as data (see <see cref="WriteAlphaMask"/>).
+		/// One changed since - power_up_transformer_n's was typed as a normal map on 09-22, three hours after it was
+		/// written, and read as a normal map it masks nothing - is written again at its next import, rather than kept
+		/// because its stamp is current (see <see cref="ImportedAsWritten"/>).
+		/// </summary>
+		internal static bool AlphaMaskImportedAsWritten(string assetPath)
+		{
+			return AssetImporter.GetAtPath(assetPath) is TextureImporter importer &&
+				   importer.textureType == TextureImporterType.Default && !importer.sRGBTexture &&
+				   importer.alphaSource == TextureImporterAlphaSource.None && !importer.alphaIsTransparency;
+		}
+
 		/// <summary>A texture's alpha channel as an opaque grey image.</summary>
 		internal static Color[] AlphaAsMask(Color[] pixels)
 		{
@@ -132,7 +420,8 @@ namespace Chisel.Import.Source.VPKTools
 			var destinationPath = Path.ChangeExtension(outputPath, null) + kAlphaMaskSuffix + ".png";
 			var foundAsset = UnityAssets.Load<Texture2D>(destinationPath);
 			if (foundAsset != null &&
-				GeneratedAssetVersion.IsCurrent(AssetDatabase.GetAssetPath(foundAsset), GeneratedVersion, AlphaMaskVersion))
+				GeneratedAssetVersion.IsCurrent(AssetDatabase.GetAssetPath(foundAsset), GeneratedVersion, AlphaMaskVersion) &&
+				AlphaMaskImportedAsWritten(AssetDatabase.GetAssetPath(foundAsset)))
 				return foundAsset;
 
 			PackagePath.EnsureDirectoriesExist(destinationPath);

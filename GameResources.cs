@@ -163,7 +163,9 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceTexture;
 		}
 
-		public Texture2D[] ImportVTF(string entryName, string[] searchPaths = null)
+		/// <param name="claim">How the material asking for it reads it, so a texture written now is imported once, already
+		/// as that (<see cref="TextureClaim"/>).</param>
+		public Texture2D[] ImportVTF(string entryName, string[] searchPaths = null, TextureClaim claim = default)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
 			PackagePath.EnsureExtension(ref entryName, PackagePath.ExtensionVTF);
@@ -178,7 +180,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (sourceTexture == null)
 				return null;			
 			var outputPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname));
-			return Texture2DImporter.Import(sourceTexture, outputPath);
+			return Texture2DImporter.Import(sourceTexture, outputPath, claim);
 		}
 
 
