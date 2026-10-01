@@ -319,7 +319,7 @@ namespace Chisel.Import.Source.VPKTools
 		// 9: the iris uv's v runs up the eye. It ran down, which is Source's own D3D convention unflipped, so every
 		// eye wore its iris and cornea textures upside down.
 		internal static readonly (string generator, int version) ModelVersion     = ("model", 9);
-		static readonly (string generator, int version) AnimationVersion = ("animation", 1);
+		internal static readonly (string generator, int version) AnimationVersion = ("animation", 1);
 
 		/// <summary>
 		/// What every collision node's name starts with. A model file cannot mark a mesh as a collider, so
@@ -355,7 +355,11 @@ namespace Chisel.Import.Source.VPKTools
 			var destinationPath = Path.ChangeExtension(outputPath, kModelExtension);
 			var assetPath = UnityAssets.GetAssetPath(destinationPath);
 			var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
-			if (foundAsset != null && (model == null || GeneratedAssetVersion.IsCurrent(assetPath, ModelVersion, AnimationVersion)))
+			var current = foundAsset != null && GeneratedAssetVersion.IsCurrent(assetPath, ModelVersion, AnimationVersion);
+			var asWritten = current && ImportedAsWritten(assetPath);
+			if (current && !asWritten && model != null)
+				Debug.Log($"{assetPath}: its import settings were changed after it was written, so it is written again.");
+			if (foundAsset != null && (model == null || asWritten))
 			{
 				// The materials are versioned on their own: an outdated one is rebuilt in place, where the model file's
 				// links still find it, and a missing one is made again.
@@ -397,12 +401,15 @@ namespace Chisel.Import.Source.VPKTools
 			var root = new GameObject(model.MDL.Name);
 			var collisionMeshes = new List<Mesh>();
 			FbxExporter.Result exported;
+			int lodCount;
 			try
 			{
 				// A model with a skeleton is posed from its animation by Unity itself; one without has its
 				// default pose put into the mesh.
 				var restPose = (skeleton == null) ? DefaultPoseOfSingleBone(gameResources, model) : Matrix4x4.identity;
 				BuildHierarchy(root, model, modelEntries, skeleton, restPose);
+				// One LOD per _LOD name in the file, which is what Unity's importer builds the LODGroup from
+				lodCount = root.TryGetComponent<LODGroup>(out var lodGroup) ? lodGroup.lodCount : 1;
 				SetSkin(root, modelEntries, defaultSkin);
 				BuildCollision(root, model, skeleton, restPose, collisionMeshes);
 				var takes = BuildAnimationTakes(gameResources, model.MDL, model.MDLEntry, skeleton);
@@ -423,8 +430,11 @@ namespace Chisel.Import.Source.VPKTools
 				GameObject.DestroyImmediate(root);
 			}
 
-			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
-			ConfigureImportedModel(assetPath, exported, ModelVersion, AnimationVersion);
+			if (!ImportOnce(assetPath, exported, lodCount, ModelVersion, AnimationVersion))
+			{
+				AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+				ConfigureImportedModel(assetPath, exported, ModelVersion, AnimationVersion);
+			}
 
 			// Whatever animation this model shares with others goes into its own file, once, rather
 			// than being baked into every model that references it.
@@ -888,7 +898,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			// Asked of the importer rather than by loading the file: every model that includes this
 			// animation asks, on every import, and these files run to tens of megabytes.
-			if (GeneratedAssetVersion.IsCurrent(assetPath, AnimationVersion))
+			if (GeneratedAssetVersion.IsCurrent(assetPath, AnimationVersion) && ImportedAsWritten(assetPath))
 				return assetPath;
 
 			var skeleton = BuildSkeleton(header);
@@ -918,8 +928,11 @@ namespace Chisel.Import.Source.VPKTools
 				GameObject.DestroyImmediate(root);
 			}
 
-			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
-			ConfigureImportedModel(assetPath, exported, AnimationVersion);
+			if (!ImportOnce(assetPath, exported, 1, AnimationVersion))
+			{
+				AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+				ConfigureImportedModel(assetPath, exported, AnimationVersion);
+			}
 
 			if (AssetDatabase.GetMainAssetTypeAtPath(assetPath) == null)
 			{
@@ -1025,6 +1038,157 @@ namespace Chisel.Import.Source.VPKTools
 				}
 			}
 			return false;
+		}
+
+		/// <summary>
+		/// Off takes every model file the slow way again - imported with Unity's defaults, then configured
+		/// (<see cref="ConfigureImportedModel"/>), two imports - which is what <see cref="ImportOnce"/> is compared against.
+		/// </summary>
+		public static bool ImportOnceEnabled = true;
+
+		// Said once per editor session, whatever the number of models it happens to
+		static bool s_SaidRepaired;
+
+		/// <summary>
+		/// Imports a model file that was just written ONCE, configured as <see cref="ConfigureImportedModel"/> leaves it,
+		/// and returns whether it did.
+		/// <para>
+		/// The slow way takes two imports, each its own refresh, and an import of a model is the file read and its meshes
+		/// built: Unity's defaults first, then the configuration's SaveAndReimport.
+		/// Here the .meta goes down first: a template Unity wrote for another generated model (all of them are one shape
+		/// but for seven fields, see <see cref="GeneratedMeta.ModelFields"/>), with this model's GUID, stamp, material
+		/// remaps, LOD transitions and rig in it, so the one import is the last one.
+		/// </para>
+		/// <para>
+		/// False, with nothing written, when there is no template yet or a material is not an asset of its own: the slow
+		/// way does it, as before. An import that did not come out as written is put right through the importer, and said
+		/// once.
+		/// </para>
+		/// </summary>
+		internal static bool ImportOnce(string assetPath, FbxExporter.Result exported, int lodCount, params (string generator, int version)[] versions)
+		{
+			if (!ImportOnceEnabled || exported == null)
+				return false;
+			var template = GeneratedMeta.Template(GeneratedMeta.Kind.Model);
+			if (template == null)
+				return false;
+
+			// As AddRemap leaves them: each name onto its material, the last one written under a name winning
+			var materials = new Dictionary<string, string>();
+			for (int i = 0; exported.MaterialNames != null && i < exported.MaterialNames.Length; i++)
+			{
+				var material = (exported.Materials != null && i < exported.Materials.Length) ? exported.Materials[i] : null;
+				if (material == null)
+					continue;
+				if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(material, out string guid, out long fileId) || fileId != kMaterialFileId)
+					return false;
+				materials[exported.MaterialNames[i]] = guid;
+			}
+			var remaps = new List<(string name, string guid)>(materials.Count);
+			foreach (var pair in materials)
+				remaps.Add((pair.Key, pair.Value));
+			var settings = new GeneratedMeta.ModelSettings
+			{
+				materials       = remaps,
+				lodCount        = lodCount,
+				rigged          = exported.BoneCount > 0 || exported.TakeCount > 0,
+				importAnimation = exported.TakeCount > 0,
+			};
+			var existing = AssetImporter.GetAtPath(assetPath);
+			var meta = GeneratedMeta.FillModel(template, GeneratedMeta.GuidFor(assetPath),
+											   GeneratedAssetVersion.Stamp(existing?.userData, versions), settings);
+			if (meta == null)
+				return false;
+
+			GeneratedMeta.Write(assetPath, meta);
+			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+			RepairModel(assetPath, exported, versions);
+			return true;
+		}
+
+		// A material asset's main object, which is what a remap names
+		const long kMaterialFileId = 2100000;
+
+		// The LOD transitions: ModelImporter has no property for them, only the serialized field its inspector edits
+		static SerializedProperty LodScreenPercentages(SerializedObject importer) => importer.FindProperty("m_LODScreenPercentages");
+
+		// The import came out as the .meta said, or is made to, through the importer. The LOD transitions are held to the
+		// LODGroup Unity built from the file's _LOD names, not to the count they were written for.
+		static void RepairModel(string assetPath, FbxExporter.Result exported, (string generator, int version)[] versions)
+		{
+			if (AssetImporter.GetAtPath(assetPath) is not UnityEditor.ModelImporter importer)
+				return;
+			var model = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+			var lodCount = (model != null && model.TryGetComponent<LODGroup>(out var lodGroup)) ? lodGroup.lodCount : 1;
+			if (IsConfiguredAsWritten(importer, exported, lodCount) && GeneratedAssetVersion.IsCurrentUserData(importer.userData, versions))
+				return;
+
+			if (!s_SaidRepaired)
+			{
+				s_SaidRepaired = true;
+				Debug.LogWarning($"{assetPath}: the import did not come out as the .meta written for it said, so it was configured " +
+								 "with an import of its own. Every model written this way takes two imports instead of one until " +
+								 "this is looked into.");
+			}
+			var serialized = new SerializedObject(importer);
+			var transitions = LodScreenPercentages(serialized);
+			var expected = (lodCount > 1) ? lodCount : 0;
+			if (transitions != null && transitions.arraySize != expected)
+			{
+				transitions.arraySize = expected;
+				for (int i = 0; i < expected; i++)
+					transitions.GetArrayElementAtIndex(i).floatValue = GeneratedMeta.DefaultLodTransition(i, expected);
+				serialized.ApplyModifiedPropertiesWithoutUndo();
+			}
+			ConfigureImportedModel(assetPath, exported, versions);
+		}
+
+		/// <summary>
+		/// Whether a model file's importer is set as <see cref="ConfigureImportedModel"/> sets it for this export: the
+		/// settings every model gets (<see cref="ImportedAsWritten"/>), its rig, its remaps and its LOD transitions.
+		/// </summary>
+		internal static bool IsConfiguredAsWritten(UnityEditor.ModelImporter importer, FbxExporter.Result exported, int lodCount)
+		{
+			if (!HasTheFixedSettings(importer))
+				return false;
+			var rigged = exported.BoneCount > 0 || exported.TakeCount > 0;
+			if (importer.animationType != (rigged ? ModelImporterAnimationType.Generic : ModelImporterAnimationType.None) ||
+				importer.importAnimation != (exported.TakeCount > 0) ||
+				(rigged && importer.avatarSetup != ModelImporterAvatarSetup.CreateFromThisModel))
+				return false;
+			var transitions = LodScreenPercentages(new SerializedObject(importer));
+			if (transitions == null || transitions.arraySize != ((lodCount > 1) ? lodCount : 0))
+				return false;
+			var remaps = importer.GetExternalObjectMap();
+			for (int i = 0; exported.MaterialNames != null && i < exported.MaterialNames.Length; i++)
+			{
+				var material = (exported.Materials != null && i < exported.Materials.Length) ? exported.Materials[i] : null;
+				if (material == null)
+					continue;
+				if (!remaps.TryGetValue(new AssetImporter.SourceAssetIdentifier(typeof(Material), exported.MaterialNames[i]), out var target) ||
+					target != material)
+					return false;
+			}
+			return true;
+		}
+
+		/// <summary>
+		/// Whether a model file this importer wrote still has the import settings every model of it gets
+		/// (<see cref="ConfigureImportedModel"/>). A stamp says which code wrote a model, not that nothing changed its
+		/// settings since: one changed by hand, or by a script fixing models up, would stay that way under a current
+		/// stamp for good. So a model reused with them changed is written again, at its import (as
+		/// Texture2DImporter.ImportedAsWritten does for a texture).
+		/// </summary>
+		internal static bool ImportedAsWritten(string assetPath)
+		{
+			return AssetImporter.GetAtPath(assetPath) is UnityEditor.ModelImporter importer && HasTheFixedSettings(importer);
+		}
+
+		static bool HasTheFixedSettings(UnityEditor.ModelImporter importer)
+		{
+			return importer.importNormals == ModelImporterNormals.Import && importer.importTangents == ModelImporterTangents.Import &&
+				   !importer.importBlendShapes && !importer.importVisibility && !importer.importCameras && !importer.importLights &&
+				   importer.useFileScale && importer.materialImportMode == ModelImporterMaterialImportMode.ImportStandard;
 		}
 
 		/// <summary>

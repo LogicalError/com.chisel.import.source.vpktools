@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 
 using UnityEditor;
@@ -28,12 +30,20 @@ namespace Chisel.Import.Source.VPKTools
 			SourceTexture,
 			/// <summary>A .png converted to Unity's normal-map convention, owned by Unity's TextureImporter.</summary>
 			NormalMap,
+			/// <summary>A model file (.fbx) owned by Unity's ModelImporter: a model or a shared animation.</summary>
+			Model,
 		}
 
-		// Where the templates are looked for: the textures this importer wrote before
-		static string TextureFolder => TemplateFolderOverride ?? Path.Combine(Application.dataPath, PackagePath.OutputPath, PackagePath.TextureSubPath);
+		// Where the templates are looked for: the assets of that kind this importer wrote before
+		static string FolderOf(Kind kind) => TemplateFolderOverride ??
+			Path.Combine(Application.dataPath, PackagePath.OutputPath, kind == Kind.Model ? kModelSubPath : PackagePath.TextureSubPath);
 
-		/// <summary>For a test: look for templates here instead, among textures it wrote the slow way itself.</summary>
+		static string PatternOf(Kind kind) => kind == Kind.Model ? "*.fbx.meta" : "*.png.meta";
+
+		// Where Source's models land: their entry names all begin with "models/"
+		const string kModelSubPath = "models";
+
+		/// <summary>For a test: look for templates here instead, among assets it wrote the slow way itself.</summary>
 		internal static string TemplateFolderOverride;
 
 		/// <summary>For a test: forget the templates found, so the next asset looks again.</summary>
@@ -55,11 +65,12 @@ namespace Chisel.Import.Source.VPKTools
 				return cached;
 
 			string template = null;
-			if (Directory.Exists(TextureFolder))
+			var folder = FolderOf(kind);
+			if (Directory.Exists(folder))
 			{
 				var shapes = new Dictionary<string, (int count, string text)>();
 				int sampled = 0;
-				foreach (var path in Directory.EnumerateFiles(TextureFolder, "*.png.meta", SearchOption.AllDirectories))
+				foreach (var path in Directory.EnumerateFiles(folder, PatternOf(kind), SearchOption.AllDirectories))
 				{
 					string text;
 					try { text = File.ReadAllText(path); }
@@ -99,6 +110,10 @@ namespace Chisel.Import.Source.VPKTools
 					return metaText.Contains("\nTextureImporter:") &&
 						   metaText.Contains(Texture2DImporter.kNormalMapStamp) &&
 						   Regex.IsMatch(metaText, @"(?m)^  textureType: 1\r?$") && Regex.IsMatch(metaText, @"(?m)^  textureShape: 1\r?$");
+				case Kind.Model:
+					return metaText.Contains("\nModelImporter:") &&
+						   (metaText.Contains(GeneratedAssetVersion.Token(ModelImporter.ModelVersion.generator, ModelImporter.ModelVersion.version)) ||
+							metaText.Contains(GeneratedAssetVersion.Token(ModelImporter.AnimationVersion.generator, ModelImporter.AnimationVersion.version)));
 				default:
 					return false;
 			}
@@ -115,7 +130,105 @@ namespace Chisel.Import.Source.VPKTools
 				foreach (var field in SourceTextureFields)
 					shape = Regex.Replace(shape, @"(?m)^(  " + field + @":).*$", "$1 _");
 			}
+			if (kind == Kind.Model)
+			{
+				shape = s_ModelExternalObjects.Replace(shape, "  externalObjects: _\n");
+				shape = s_ModelLodScreenPercentages.Replace(shape, "    lODScreenPercentages: _\n");
+				foreach (var field in ModelFields)
+					shape = Regex.Replace(shape, @"(?m)^(  " + field + @":).*$", "$1 _");
+			}
 			return shape;
+		}
+
+		// A model's material remaps, up to the block that follows them, and its LOD transitions, likewise
+		static readonly Regex s_ModelExternalObjects     = new(@"(?ms)^  externalObjects:.*?(?=^  materials:)");
+		static readonly Regex s_ModelLodScreenPercentages = new(@"(?ms)^    lODScreenPercentages:.*?(?=^    globalScale:)");
+
+		/// <summary>
+		/// The single-line fields of a generated model's .meta set per model (ModelImporter.ConfigureImportedModel): beside
+		/// them only its GUID, userData, material remaps and LOD transitions differ from one to the next
+		/// .
+		/// </summary>
+		internal static readonly string[] ModelFields = { "importAnimation", "animationType", "avatarSetup" };
+
+		/// <summary>What a generated model's importer is set to per model, as ModelImporter.ConfigureImportedModel sets it.</summary>
+		internal struct ModelSettings
+		{
+			/// <summary>Each material name in the file and the GUID of the material asset it is remapped onto.</summary>
+			public IReadOnlyCollection<(string name, string guid)> materials;
+			/// <summary>How many LODs the file's _LOD names make; Unity's default transition for each goes in.</summary>
+			public int lodCount;
+			/// <summary>Bones or takes: animationType Generic and an avatar of its own.</summary>
+			public bool rigged;
+			/// <summary>Takes: importAnimation.</summary>
+			public bool importAnimation;
+		}
+
+		/// <summary>
+		/// The transition Unity's model importer gives LOD <paramref name="index"/> of <paramref name="count"/> when it
+		/// builds a file's LODGroup: a quarter of the screen, halved for each level after, and 1% for the last. Every one of
+		/// the 10,442 generated model .metas that Unity wrote holds exactly these.
+		/// </summary>
+		internal static float DefaultLodTransition(int index, int count)
+		{
+			return (index == count - 1) ? 0.01f : 0.25f * Mathf.Pow(0.5f, index);
+		}
+
+		// A name the remap block can hold as it is, unquoted - Source's material names are; anything else takes the slow way
+		static readonly Regex s_PlainName = new(@"^[A-Za-z0-9_][A-Za-z0-9_.\-/ ]*$");
+
+		/// <summary>
+		/// The template with this GUID, userData and these per-model settings, or null when the template does not have the
+		/// blocks to put them in or a material name is not one this writes (the caller takes the slow way).
+		/// </summary>
+		internal static string FillModel(string template, string guid, string userData, ModelSettings settings)
+		{
+			var crlf = template.Contains("\r\n");
+			var text = Fill(template, guid, userData).Replace("\r\n", "\n");
+
+			// The remaps in the order Unity keeps them: by name
+			var remaps = new StringBuilder();
+			var materials = settings.materials ?? Array.Empty<(string name, string guid)>();
+			if (materials.Count == 0)
+				remaps.Append("  externalObjects: {}\n");
+			else
+			{
+				remaps.Append("  externalObjects:\n");
+				foreach (var (name, materialGuid) in materials.OrderBy(material => material.name, StringComparer.Ordinal))
+				{
+					if (name == null || name.EndsWith(" ") || !s_PlainName.IsMatch(name) || !Regex.IsMatch(materialGuid ?? "", "^[0-9a-f]{32}$"))
+						return null;
+					remaps.Append("  - first:\n      type: UnityEngine:Material\n      assembly: UnityEngine.CoreModule\n      name: ").Append(name)
+						  .Append("\n    second: {fileID: 2100000, guid: ").Append(materialGuid).Append(", type: 2}\n");
+				}
+			}
+			if (s_ModelExternalObjects.Matches(text).Count != 1)
+				return null;
+			text = s_ModelExternalObjects.Replace(text, remaps.ToString().Replace("$", "$$"));
+
+			var lods = new StringBuilder();
+			if (settings.lodCount <= 1)
+				lods.Append("    lODScreenPercentages: []\n");
+			else
+			{
+				lods.Append("    lODScreenPercentages:\n");
+				for (int i = 0; i < settings.lodCount; i++)
+					lods.Append("    - ").Append(DefaultLodTransition(i, settings.lodCount).ToString("R", CultureInfo.InvariantCulture)).Append('\n');
+			}
+			if (s_ModelLodScreenPercentages.Matches(text).Count != 1)
+				return null;
+			text = s_ModelLodScreenPercentages.Replace(text, lods.ToString());
+
+			foreach (var (field, value) in new[] { ("importAnimation", settings.importAnimation ? "1" : "0"),
+												   ("animationType", settings.rigged ? "2" : "0"),
+												   ("avatarSetup", settings.rigged ? "1" : "0") })
+			{
+				var line = new Regex(@"(?m)^(  " + field + @":).*$");
+				if (line.Matches(text).Count != 1)
+					return null;
+				text = line.Replace(text, "$1 " + value);
+			}
+			return crlf ? text.Replace("\n", "\r\n") : text;
 		}
 
 		/// <summary>
