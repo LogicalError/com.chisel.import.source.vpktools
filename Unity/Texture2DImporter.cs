@@ -176,9 +176,14 @@ namespace Chisel.Import.Source.VPKTools
 						   source.anisoLevel == written.anisoLevel && source.wrapU == written.wrapU && source.wrapV == written.wrapV;
 				}
 				case TextureImporter textureImporter:
-					// Only a normal map leaves SourceTextureImporter (MarkAsNormalMap), and it is a 2D normal map
+				{
+					// Only a normal map leaves SourceTextureImporter (MarkAsNormalMap): a 2D normal map, sampled as its VTF says
+					var sampling = NormalMapSamplingOf(sourceTexture);
 					return textureImporter.textureType == TextureImporterType.NormalMap &&
-						   textureImporter.textureShape == TextureImporterShape.Texture2D;
+						   textureImporter.textureShape == TextureImporterShape.Texture2D &&
+						   textureImporter.filterMode == sampling.filterMode && textureImporter.anisoLevel == sampling.anisoLevel &&
+						   textureImporter.wrapModeU == sampling.wrapU && textureImporter.wrapModeV == sampling.wrapV;
+				}
 				default:
 					return false;
 			}
@@ -226,6 +231,7 @@ namespace Chisel.Import.Source.VPKTools
 			// Every frame's .meta goes down before any of them is imported: an import may notice the other new files, and
 			// one noticed without its .meta would be imported with Unity's defaults
 			var normalUserData = (string)null;
+			var normalSampling = NormalMapSamplingOf(sourceTexture);
 			var sourceSettings = new GeneratedMeta.SourceTextureSettings[assetPaths.Length];
 			var sourceUserData = new string[assetPaths.Length];
 			for (int i = 0; i < assetPaths.Length; i++)
@@ -236,11 +242,13 @@ namespace Chisel.Import.Source.VPKTools
 				var guid = GeneratedMeta.GuidFor(assetPath);
 				if (frameClaim.NormalMap)                  // frame 0 only, so nothing is written yet
 				{
-					if (!ConvertSourceNormalMapFile(assetPath, frameClaim.SelfShadowed))
-						return false;                       // the slow way takes it, as before
-					// As MarkAsNormalMap stamps it: pixels written from the VTF, converted
+					// As MarkAsNormalMap stamps it: pixels written from the VTF, converted; sampled as the VTF says
 					normalUserData = UserDataForRewrittenPixels(existing?.userData) + ";" + kNormalMapStamp;
-					GeneratedMeta.Write(assetPath, GeneratedMeta.Fill(normalTemplate, guid, normalUserData));
+					var normalMeta = GeneratedMeta.FillNormalMap(normalTemplate, guid, normalUserData, normalSampling);
+					// The .meta is made before the pixels are converted: the slow way would convert them again
+					if (normalMeta == null || !ConvertSourceNormalMapFile(assetPath, frameClaim.SelfShadowed))
+						return false;                       // the slow way takes it, as before
+					GeneratedMeta.Write(assetPath, normalMeta);
 				}
 				else
 				{
@@ -254,11 +262,28 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				AssetDatabase.ImportAsset(assetPaths[i], ImportAssetOptions.ForceSynchronousImport);
 				if (i == 0 && claim.NormalMap)
-					RepairNormalMap(assetPaths[i], normalUserData);
+					RepairNormalMap(assetPaths[i], normalUserData, normalSampling);
 				else
 					RepairSourceTexture(assetPaths[i], sourceSettings[i], sourceUserData[i]);
 			}
 			return true;
+		}
+
+		/// <summary>
+		/// How a normal map is sampled: as its VTF says, like every other texture (<see cref="SourceSettings"/>) - the forced
+		/// anisotropy (Black Mesa's mat_forceaniso 16, point-sampled textures aside), and the VTF's filter and wrap. Unity's
+		/// own importer, which a normal map goes to, would leave its defaults: anisotropy 1, bilinear, repeat.
+		/// </summary>
+		internal static GeneratedMeta.NormalMapSampling NormalMapSamplingOf(VTF sourceTexture)
+		{
+			var settings = SourceSettings(sourceTexture, default, null);
+			return new GeneratedMeta.NormalMapSampling
+			{
+				filterMode = settings.filterMode,
+				anisoLevel = settings.anisoLevel,
+				wrapU      = settings.wrapU,
+				wrapV      = settings.wrapV,
+			};
 		}
 
 		/// <summary>
@@ -345,7 +370,7 @@ namespace Chisel.Import.Source.VPKTools
 		}
 
 		// As MarkAsNormalMap leaves it
-		static void RepairNormalMap(string assetPath, string userData)
+		static void RepairNormalMap(string assetPath, string userData, GeneratedMeta.NormalMapSampling sampling)
 		{
 			if (AssetImporter.GetAtPath(assetPath) is SourceTextureImporter)
 			{
@@ -355,17 +380,33 @@ namespace Chisel.Import.Source.VPKTools
 			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter importer)
 				return;
 			if (importer.textureType == TextureImporterType.NormalMap && importer.textureShape == TextureImporterShape.Texture2D &&
-				importer.userData == userData)
+				importer.userData == userData && SampledAs(importer, sampling))
 				return;
 
-			SayRepaired(assetPath, $"type {importer.textureType}, shape {importer.textureShape}");
+			SayRepaired(assetPath, $"type {importer.textureType}, shape {importer.textureShape}, aniso {importer.anisoLevel}, " +
+								   $"{importer.filterMode}, {importer.wrapModeU}/{importer.wrapModeV}");
 			importer.userData = userData;
 			importer.textureType = TextureImporterType.NormalMap;
 			TextureImporterSettings settings = new();
 			importer.ReadTextureSettings(settings);
 			settings.textureShape = TextureImporterShape.Texture2D;
 			importer.SetTextureSettings(settings);
+			SetSampling(importer, sampling);
 			importer.SaveAndReimport();
+		}
+
+		static bool SampledAs(TextureImporter importer, GeneratedMeta.NormalMapSampling sampling)
+		{
+			return importer.filterMode == sampling.filterMode && importer.anisoLevel == sampling.anisoLevel &&
+				   importer.wrapModeU == sampling.wrapU && importer.wrapModeV == sampling.wrapV;
+		}
+
+		static void SetSampling(TextureImporter importer, GeneratedMeta.NormalMapSampling sampling)
+		{
+			importer.filterMode  = sampling.filterMode;
+			importer.anisoLevel  = sampling.anisoLevel;
+			importer.wrapModeU   = sampling.wrapU;
+			importer.wrapModeV   = sampling.wrapV;
 		}
 
 		static void SayRepaired(string assetPath, string what)
@@ -945,9 +986,18 @@ namespace Chisel.Import.Source.VPKTools
 			// handle one: Unity's NormalMap type re-encodes the texture (DXT5nm keeps X in alpha) and every
 			// shader in the project unpacks that convention, so reproducing it would be a second encoder to
 			// keep in step for no gain - the mip filtering this is all for is an alpha-test problem, and a
-			// normal map has no alpha test.
-			if (AssetImporter.GetAtPath(assetPath) is SourceTextureImporter)
+			// normal map has no alpha test. How the VTF says it is sampled goes with it: Unity's importer
+			// starts from its defaults (anisotropy 1, bilinear, repeat), which every normal map had until
+			// the rest of the textures had the forced anisotropy and the VTF's filter and wrap.
+			GeneratedMeta.NormalMapSampling? sampling = null;
+			if (AssetImporter.GetAtPath(assetPath) is SourceTextureImporter source)
+			{
+				sampling = new GeneratedMeta.NormalMapSampling
+				{
+					filterMode = source.filterMode, anisoLevel = source.anisoLevel, wrapU = source.wrapU, wrapV = source.wrapV,
+				};
 				AssetDatabase.ClearImporterOverride(assetPath);
+			}
 
 			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter textureImporter)
 				return texture;
@@ -976,6 +1026,8 @@ namespace Chisel.Import.Source.VPKTools
 			textureImporter.ReadTextureSettings(settings);
 			settings.textureShape = TextureImporterShape.Texture2D;
 			textureImporter.SetTextureSettings(settings);
+			if (sampling.HasValue)
+				SetSampling(textureImporter, sampling.Value);
 
 			textureImporter.SaveAndReimport();
 			return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);

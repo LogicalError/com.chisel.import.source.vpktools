@@ -130,6 +130,11 @@ namespace Chisel.Import.Source.VPKTools
 				foreach (var field in SourceTextureFields)
 					shape = Regex.Replace(shape, @"(?m)^(  " + field + @":).*$", "$1 _");
 			}
+			if (kind == Kind.NormalMap)
+			{
+				foreach (var field in NormalMapSamplingFields)
+					shape = Regex.Replace(shape, @"(?m)^(    " + field + @":).*$", "$1 _");
+			}
 			if (kind == Kind.Model)
 			{
 				shape = s_ModelExternalObjects.Replace(shape, "  externalObjects: _\n");
@@ -272,6 +277,51 @@ namespace Chisel.Import.Source.VPKTools
 			}
 
 			static string Bool(bool value) => value ? "1" : "0";
+		}
+
+		/// <summary>
+		/// The fields of a normal map's TextureImporter set per texture from its VTF, in its textureSettings block: how it is
+		/// sampled, as every other texture the VTF decides is (Texture2DImporter.SourceSettings).
+		/// </summary>
+		internal static readonly string[] NormalMapSamplingFields = { "filterMode", "aniso", "wrapU", "wrapV" };
+
+		/// <summary>How a normal map is sampled: the fields of <see cref="NormalMapSamplingFields"/>.</summary>
+		internal struct NormalMapSampling
+		{
+			public FilterMode      filterMode;
+			public int             anisoLevel;
+			public TextureWrapMode wrapU;
+			public TextureWrapMode wrapV;
+
+			public string Value(string field)
+			{
+				switch (field)
+				{
+					case "filterMode": return ((int)filterMode).ToString(CultureInfo.InvariantCulture);
+					case "aniso":      return anisoLevel.ToString(CultureInfo.InvariantCulture);
+					case "wrapU":      return ((int)wrapU).ToString(CultureInfo.InvariantCulture);
+					case "wrapV":      return ((int)wrapV).ToString(CultureInfo.InvariantCulture);
+					default: throw new ArgumentException("not a sampling field of a normal map: " + field);
+				}
+			}
+		}
+
+		/// <summary>
+		/// The normal-map template with this GUID, userData and sampling, or null when the template does not hold each
+		/// sampling field exactly once (the caller takes the slow way).
+		/// </summary>
+		internal static string FillNormalMap(string template, string guid, string userData, NormalMapSampling sampling)
+		{
+			var text = Fill(template, guid, userData);
+			foreach (var field in NormalMapSamplingFields)
+			{
+				var line = new Regex(@"(?m)^(    " + field + @":).*?(\r?)$");
+				if (line.Matches(text).Count != 1)
+					return null;
+				var value = sampling.Value(field);
+				text = line.Replace(text, m => m.Groups[1].Value + " " + value + m.Groups[2].Value);
+			}
+			return text;
 		}
 
 		/// <summary>The template with this GUID and userData, and for a Source texture these settings.</summary>
