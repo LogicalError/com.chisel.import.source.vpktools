@@ -32,6 +32,7 @@ namespace Chisel.Import.Source.VPKTools
 		const string kTokenPrefix      = "chisel-";
 		const string kVersionSeparator = "-v";
 		const char   kTokenSeparator   = ';';
+		const string kWrittenPrefix    = kTokenPrefix + "written-";
 
 		/// <summary>
 		/// The version of the importer as a whole, recorded on every generated asset next to the version of
@@ -82,6 +83,31 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			tokens.RemoveAll(token => IsTokenOf(token, version.generator));
 			tokens.Add(Token(version.generator, version.version));
+		}
+
+		/// <summary>
+		/// The userData with this hash of the asset as it was written (<c>chisel-written-&lt;hash&gt;</c>) in place of any
+		/// earlier one. A version stamp says which code wrote an asset; this says what it wrote, so one changed since - by
+		/// hand, or by a script fixing it up - can be told from one that was not. Version stamps leave it as it is.
+		/// </summary>
+		public static string WithWrittenHash(string userData, string hash)
+		{
+			var tokens = Split(userData);
+			tokens.RemoveAll(token => token.StartsWith(kWrittenPrefix, StringComparison.Ordinal));
+			if (!string.IsNullOrEmpty(hash))
+				tokens.Add(kWrittenPrefix + hash);
+			return string.Join(kTokenSeparator.ToString(), tokens);
+		}
+
+		/// <summary>The hash <see cref="WithWrittenHash"/> put in, or null.</summary>
+		public static string WrittenHashOf(string userData)
+		{
+			foreach (var token in Split(userData))
+			{
+				if (token.StartsWith(kWrittenPrefix, StringComparison.Ordinal))
+					return token.Substring(kWrittenPrefix.Length);
+			}
+			return null;
 		}
 
 		/// <summary>

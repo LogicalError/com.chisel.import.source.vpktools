@@ -44,7 +44,13 @@ namespace Chisel.Import.Source.VPKTools
 		// $halflambert, and _EyeballRadius is written in metres. Also clears the dead _ENVMAPFROMPROBES_ON that
 		// [Toggle] left in every material's m_InvalidKeywords before 7e598b6, since a rebuild copies a fresh
 		// material over the asset, keywords and all.
-		public static readonly (string generator, int version) GeneratedVersion = ("material", 21);
+		// 22: no material is written with DontUnloadUnusedAsset any more. Every builder set it on the material it made,
+		// and it is a serialized flag: 6,844 .mat files carried "m_ObjectHideFlags: 32", so every material ever loaded,
+		// in any session, stayed loaded with its textures (3.8 GB of them, unheld, in one census). URP fallback
+		// materials are written as URP's own validation leaves them (ValidateAsTheShaderInspectorDoes), which it
+		// otherwise did to them after the import, unsaved, for the next SaveAssets to write. And each material carries
+		// a hash of itself as written (WrittenHash), so one changed after it was written is put right at its next import.
+		public static readonly (string generator, int version) GeneratedVersion = ("material", 22);
 
 		public static Material Import(GameResources gameResources, VMT sourceMaterial, string outputPath, bool isSprite = false)
 		{
@@ -55,6 +61,11 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				if (!IsCurrent(foundAsset))
 					Reconvert(gameResources, sourceMaterial, foundAsset, materialName, isSprite);
+				else if (!IsAsWritten(foundAsset))
+				{
+					Debug.Log($"{UnityEditor.AssetDatabase.GetAssetPath(foundAsset)} was changed after it was written, so it is written again.");
+					Reconvert(gameResources, sourceMaterial, foundAsset, materialName, isSprite);
+				}
 				return foundAsset;
 			}
 
@@ -91,6 +102,8 @@ namespace Chisel.Import.Source.VPKTools
 			try
 			{
 				UnityEditor.AssetDatabase.CreateAsset(built, assetPath);
+				// The file is written by now, and the import at the end of the block leaves it as it is
+				userData = GeneratedAssetVersion.WithWrittenHash(userData, WrittenHash(assetPath));
 				GeneratedMeta.SetUserData(assetPath, userData);
 			}
 			finally
@@ -164,13 +177,17 @@ namespace Chisel.Import.Source.VPKTools
 					var name = existing.name;
 					UnityEditor.EditorUtility.CopySerialized(rebuilt, existing);
 					existing.name = name;
+					// However older code pinned it: an asset is unloaded when nothing uses it, and reloaded when used
+					existing.hideFlags &= ~HideFlags.DontUnloadUnusedAsset;
 					UnityEditor.EditorUtility.SetDirty(existing);
 					UnityEditor.AssetDatabase.SaveAssetIfDirty(existing);
 
 					var importer = UnityEditor.AssetImporter.GetAtPath(assetPath);
 					if (importer != null)
 					{
-						importer.userData = GeneratedAssetVersion.Stamp(importer.userData, GeneratedVersion, Texture2DImporter.GeneratedVersion);
+						importer.userData = GeneratedAssetVersion.WithWrittenHash(
+							GeneratedAssetVersion.Stamp(importer.userData, GeneratedVersion, Texture2DImporter.GeneratedVersion),
+							WrittenHash(assetPath));
 						UnityEditor.AssetDatabase.WriteImportSettingsIfDirty(assetPath);
 					}
 				}
@@ -192,6 +209,50 @@ namespace Chisel.Import.Source.VPKTools
 		}
 
 		/// <summary>
+		/// A hash of the material as its file holds it: the Material's own YAML document, not what else the file may come
+		/// to hold - ChiselSurfaceMetadata, URP's version marker - which is not the importer's to write. Null when there
+		/// is no file.
+		/// </summary>
+		internal static string WrittenHash(string assetPath)
+		{
+			var path = Path.GetFullPath(assetPath);
+			if (!File.Exists(path))
+				return null;
+			var text = File.ReadAllText(path).Replace("\r\n", "\n");
+			// The main Material is "--- !u!21 &2100000", up to the next object or the end. Unity writes a file's objects in
+			// fileID order, so a sub-asset may come after it: taken without the line end before the next object, and
+			// without the file's last one, it reads the same whichever follows
+			var start = text.IndexOf("--- !u!21 &2100000", System.StringComparison.Ordinal);
+			if (start >= 0)
+			{
+				var end = text.IndexOf("\n--- !u!", start, System.StringComparison.Ordinal);
+				text = ((end >= 0) ? text.Substring(start, end - start) : text.Substring(start)).TrimEnd('\n');
+			}
+			using var sha = System.Security.Cryptography.SHA1.Create();
+			var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(text));
+			return System.BitConverter.ToString(hash, 0, 8).Replace("-", "").ToLowerInvariant();
+		}
+
+		/// <summary>
+		/// Whether the material is still what this importer wrote: its file holds what <see cref="WrittenHash"/> recorded
+		/// when it was written.
+		/// <para>
+		/// A version stamp says which code wrote a material, not that nothing changed it since: a value set by hand, or by
+		/// a script fixing materials up, would stay under a current stamp for good, and so would what URP's
+		/// postprocessor did to a new material for the next SaveAssets to write. So an import that reuses a material
+		/// writes it again, in place, when it was changed (as Texture2DImporter.ImportedAsWritten does for a texture).
+		/// One written before the hash was recorded has none, and is written again once.
+		/// </para>
+		/// </summary>
+		static bool IsAsWritten(Material material)
+		{
+			var assetPath = UnityEditor.AssetDatabase.GetAssetPath(material);
+			var importer = UnityEditor.AssetImporter.GetAtPath(assetPath);
+			var written = (importer != null) ? GeneratedAssetVersion.WrittenHashOf(importer.userData) : null;
+			return written != null && written == WrittenHash(assetPath);
+		}
+
+		/// <summary>
 		/// Records that the material is what the current code builds. The material has to be saved
 		/// already: this reimports it from disk.
 		/// </summary>
@@ -204,7 +265,10 @@ namespace Chisel.Import.Source.VPKTools
 			if (importer == null)
 				return;
 
-			importer.userData = GeneratedAssetVersion.Stamp(importer.userData, GeneratedVersion, Texture2DImporter.GeneratedVersion);
+			var assetPath = UnityEditor.AssetDatabase.GetAssetPath(material);
+			importer.userData = GeneratedAssetVersion.WithWrittenHash(
+				GeneratedAssetVersion.Stamp(importer.userData, GeneratedVersion, Texture2DImporter.GeneratedVersion),
+				WrittenHash(assetPath));
 			importer.SaveAndReimport();
 		}
 
@@ -225,7 +289,7 @@ namespace Chisel.Import.Source.VPKTools
 			var destinationPath = Path.ChangeExtension(outputPath, ".mat");
 			destinationPath = PackagePath.GetOutputPath(destinationPath);
 			var foundAsset = UnityAssets.Load<Material>(destinationPath);
-			if (foundAsset != null && IsCurrent(foundAsset))
+			if (foundAsset != null && IsCurrent(foundAsset) && IsAsWritten(foundAsset))
 				return foundAsset;
 
 			var skysidename = skyname;
@@ -443,11 +507,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (!shader)
 				return null;
 
-			var unityMaterial = new Material(shader)
-			{
-				name = materialName,
-				hideFlags = HideFlags.DontUnloadUnusedAsset
-			};
+			var unityMaterial = new Material(shader) { name = materialName };
 			SetMaterialTexture(gameResources, unityMaterial, "_BaseMap", sourceMaterial.BaseTextureName);
 			return unityMaterial;
 		}
@@ -541,7 +601,6 @@ namespace Chisel.Import.Source.VPKTools
 				Debug.Log("!unityMaterial");
 				return null; 
 			}
-			unityMaterial.hideFlags = HideFlags.DontUnloadUnusedAsset;
 			unityMaterial.name = materialName.ToString();
 			if (unityMaterial.HasProperty("_Smoothness"))
 				unityMaterial.SetFloat("_Smoothness", 0);
@@ -740,7 +799,33 @@ namespace Chisel.Import.Source.VPKTools
 
 			//unityMaterial.doubleSidedGI
 			//unityMaterial.enableInstancing
+
+			// What URP itself makes of these properties: the keywords, blend state, queue and passes they call for. Left to
+			// URP, its postprocessor did it to a new material after the import, in memory, for the next SaveAssets to
+			// write (37 materials found rewritten after their stamp), and a rebuilt one, which it leaves alone, kept
+			// what is written here: the same VMT came out two ways.
+			ValidateAsTheShaderInspectorDoes(unityMaterial);
 			return unityMaterial;
+		}
+
+		/// <summary>
+		/// Runs the shader's own inspector's ValidateMaterial on the material, as the Material inspector does. For URP's
+		/// Lit and Unlit that is BaseShaderGUI.SetMaterialKeywords - what URP's material postprocessor also does to a new
+		/// material (ShaderUtils.UpdateMaterial). A shader without an inspector of its own, which is all of ours, is left
+		/// as it is.
+		/// </summary>
+		static void ValidateAsTheShaderInspectorDoes(Material material)
+		{
+			var editor = UnityEditor.Editor.CreateEditor(material) as UnityEditor.MaterialEditor;
+			try
+			{
+				editor?.customShaderGUI?.ValidateMaterial(material);
+			}
+			finally
+			{
+				if (editor != null)
+					Object.DestroyImmediate(editor);
+			}
 		}
 
 		/// <summary>
@@ -751,11 +836,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// </summary>
 		private static Material CreateSourceShaderMaterial(GameResources gameResources, VMT sourceMaterial, string materialName, Shader shader)
 		{
-			var unityMaterial = new Material(shader)
-			{
-				name = materialName,
-				hideFlags = HideFlags.DontUnloadUnusedAsset
-			};
+			var unityMaterial = new Material(shader) { name = materialName };
 
 			// A cut-out's base alpha IS its silhouette, so its mip chain has to keep the alpha test's
 			// coverage or the shape thins away with distance (Texture2DImporter.MarkAsAlphaTested).
@@ -1906,11 +1987,7 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			}
 
-			var material = new Material(shader)
-			{
-				name = "Color_" + color,
-				hideFlags = HideFlags.None | HideFlags.DontUnloadUnusedAsset
-			};
+			var material = new Material(shader) { name = "Color_" + color };
 			material.SetColor("_BaseColor", color);
 			return material;
 		}
@@ -1954,11 +2031,7 @@ namespace Chisel.Import.Source.VPKTools
 				Debug.LogWarning("Sky face shader not found: " + _skyFaceShaderName);
 				return skybox;
 			}
-			var built = new Material(shader)
-			{
-				name = skybox.name + " (faces)",
-				hideFlags = HideFlags.DontUnloadUnusedAsset
-			};
+			var built = new Material(shader) { name = skybox.name + " (faces)" };
 			built.CopyMatchingPropertiesFromMaterial(skybox);
 
 			var skyboxPath = UnityEditor.AssetDatabase.GetAssetPath(skybox);
@@ -2002,11 +2075,7 @@ namespace Chisel.Import.Source.VPKTools
 			if (!shader)
 				return null;
 
-			var unityMaterial = new Material(shader)
-			{
-				name = materialName,
-				hideFlags = HideFlags.DontUnloadUnusedAsset
-			};
+			var unityMaterial = new Material(shader) { name = materialName };
 
 			try
 			{
