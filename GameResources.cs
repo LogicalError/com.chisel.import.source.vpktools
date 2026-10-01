@@ -277,6 +277,12 @@ namespace Chisel.Import.Source.VPKTools
 		// because entries are interned in `lookup`, so the same name always yields the same object.
 		readonly Dictionary<(GameEntry entry, bool isSprite, bool brushFace), Material> importedMaterials = new();
 
+		/// <summary>
+		/// Lets go of the materials imported so far. They are one import's: kept, they stayed loaded for as long as this
+		/// object lived - the importer's lives until the domain reloads - every import adding its own.
+		/// </summary>
+		public void ReleaseImportedMaterials() => importedMaterials.Clear();
+
 		/// <param name="brushFace">
 		/// The material goes on a brush face that is not a displacement. A material that blends a second layer
 		/// by vertex alpha then comes back as vbsp would give it to such a face, without that layer
