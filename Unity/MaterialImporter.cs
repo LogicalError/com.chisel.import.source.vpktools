@@ -258,6 +258,21 @@ namespace Chisel.Import.Source.VPKTools
 		/// <param name="progress">Told the index of each request it builds and the count, for a progress bar.</param>
 		public static Material[] ImportAll(GameResources gameResources, IReadOnlyList<Request> requests, System.Action<int, int> progress = null)
 		{
+			// Each step timed (ImportSteps): inside a model batch, as steps of it
+			var batch = ImportSteps.Begin("Source material import");
+			var buildCount = 0;
+			try
+			{
+				return ImportAll(gameResources, requests, progress, ref buildCount);
+			}
+			finally
+			{
+				batch.End($"{requests.Count} materials, {buildCount} built", requests.Count > 1);
+			}
+		}
+
+		static Material[] ImportAll(GameResources gameResources, IReadOnlyList<Request> requests, System.Action<int, int> progress, ref int buildCount)
+		{
 			var results = new Material[requests.Count];
 			var first = new Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase);
 			var sameFile = new List<(int index, int firstIndex)>();
@@ -277,12 +292,21 @@ namespace Chisel.Import.Source.VPKTools
 				}
 				first[file] = i;
 
-				var foundAsset = UnityAssets.Load<Material>(destinationPath);
+				Material foundAsset;
+				bool current = false, asWritten = false;
+				using (ImportSteps.Step("material lookups"))
+				{
+					foundAsset = UnityAssets.Load<Material>(destinationPath);
+					if (foundAsset != null)
+					{
+						current = IsCurrent(foundAsset);
+						asWritten = current && IsAsWritten(foundAsset);
+					}
+				}
 				if (foundAsset != null)
 				{
 					results[i] = foundAsset;
-					var current = IsCurrent(foundAsset);
-					if (current && IsAsWritten(foundAsset))
+					if (asWritten)
 						continue;
 					if (current)
 						Debug.Log($"{UnityEditor.AssetDatabase.GetAssetPath(foundAsset)} was changed after it was written, so it is written again.");
@@ -290,6 +314,7 @@ namespace Chisel.Import.Source.VPKTools
 				builds.Add((i, foundAsset, Path.GetFileNameWithoutExtension(destinationPath), destinationPath));
 			}
 
+			buildCount = builds.Count;
 			if (TextureCensusEnabled && builds.Count > 0)
 				CensusTextures(gameResources, requests, builds, progress);
 
@@ -300,7 +325,9 @@ namespace Chisel.Import.Source.VPKTools
 				if (!TextureCensusEnabled)
 					progress?.Invoke(i, requests.Count);
 				var request = requests[i];
-				var build = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
+				Material build;
+				using (ImportSteps.Step("material builds"))
+					build = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
 				if (build == null)
 					continue;
 				if (existing != null)
@@ -315,6 +342,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			if (created.Count > 0 || rebuilt.Count > 0)
 			{
+				using var writes = ImportSteps.Step("material writes");
 				var failed = new HashSet<int>();
 				UnityEditor.AssetDatabase.StartAssetEditing();
 				try
@@ -383,7 +411,8 @@ namespace Chisel.Import.Source.VPKTools
 					Material build = null;
 					try
 					{
-						build = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
+						using (ImportSteps.Step("census builds"))
+							build = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
 					}
 					catch (System.Exception)
 					{
@@ -400,7 +429,8 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				Debug.unityLogger.logEnabled = logging;
 			}
-			census.ImportWritten();
+			using (ImportSteps.Step("textures imported together"))
+				census.ImportWritten();
 		}
 
 		static bool IsCurrent(Material material)

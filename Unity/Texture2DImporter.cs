@@ -392,19 +392,26 @@ namespace Chisel.Import.Source.VPKTools
 			if (!ImportOnceEnabled || sourceTexture?.Frames == null || sourceTexture.Frames.Length == 0 ||
 				!HaveTemplates(claim, sourceTexture.Frames.Length))
 				return null;
-			var frameNames = SaveFramesAsPNG(sourceTexture, Path.ChangeExtension(outputPath, ".png"));
+			string[] frameNames;
+			using (ImportSteps.Step("pngs written"))
+				frameNames = SaveFramesAsPNG(sourceTexture, Path.ChangeExtension(outputPath, ".png"));
 			if (frameNames == null || frameNames.Length == 0)
 				return null;
 			var assetPaths = new string[frameNames.Length];
 			for (int i = 0; i < frameNames.Length; i++)
 				assetPaths[i] = UnityAssets.GetAssetPath(frameNames[i]).Replace('\\', '/');
-			var written = WriteMetas(sourceTexture, assetPaths, claim);
+			Written written;
+			using (ImportSteps.Step("metas written ahead"))
+				written = WriteMetas(sourceTexture, assetPaths, claim);
 			if (written == null)
 				return null;
 
 			var standIns = new Texture2D[assetPaths.Length];
-			for (int i = 0; i < assetPaths.Length; i++)
-				standIns[i] = StandInFor(written, i);
+			using (ImportSteps.Step("stand-ins"))
+			{
+				for (int i = 0; i < assetPaths.Length; i++)
+					standIns[i] = StandInFor(written, i);
+			}
 			return new Ahead { Written = written, StandIns = standIns };
 		}
 

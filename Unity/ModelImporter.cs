@@ -395,7 +395,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// <returns>For each request its prefabs - the model file's, then its skins' variants - or null.</returns>
 		public static GameObject[][] ImportAll(GameResources gameResources, IReadOnlyList<Request> requests, Action<int, int> progress = null)
 		{
-			var steps = s_Steps = new StepTimes();
+			var batch = ImportSteps.Begin("Source model import");
 			var written = new List<WrittenModel>();
 			try
 			{
@@ -403,10 +403,8 @@ namespace Chisel.Import.Source.VPKTools
 			}
 			finally
 			{
-				s_Steps = null;
 				// Said for a batch: a model imported on its own would say it once each
-				if (requests.Count > 1)
-					Debug.Log($"Source model import (steps): {requests.Count} models, {written.Count} written, {steps.Total:0.0}s - {steps.Report()}");
+				batch.End($"{requests.Count} models, {written.Count} written", requests.Count > 1);
 			}
 		}
 
@@ -506,53 +504,9 @@ namespace Chisel.Import.Source.VPKTools
 			}
 		}
 
-		// How long each step of ImportAll took, summed over its models, said once at its end: the models took 40 of
-		// a map's 70 s first import, with nothing to say which part of them. Null outside it.
-		static StepTimes s_Steps;
-
-		static StepScope Step(string name) => new StepScope(s_Steps?.Watch(name));
-
-		sealed class StepTimes
-		{
-			readonly System.Diagnostics.Stopwatch total = System.Diagnostics.Stopwatch.StartNew();
-			readonly List<(string name, System.Diagnostics.Stopwatch watch)> steps = new();
-
-			public double Total => total.Elapsed.TotalSeconds;
-
-			public System.Diagnostics.Stopwatch Watch(string name)
-			{
-				foreach (var (stepName, watch) in steps)
-				{
-					if (stepName == name)
-						return watch;
-				}
-				var added = new System.Diagnostics.Stopwatch();
-				steps.Add((name, added));
-				return added;
-			}
-
-			public string Report()
-			{
-				var parts = new List<string>(steps.Count);
-				foreach (var (name, watch) in steps)
-					parts.Add($"{name} {watch.Elapsed.TotalSeconds:0.0}s");
-				return string.Join(", ", parts);
-			}
-		}
-
-		// Times what it encloses into its step; nothing outside ImportAll
-		readonly struct StepScope : IDisposable
-		{
-			readonly System.Diagnostics.Stopwatch watch;
-
-			public StepScope(System.Diagnostics.Stopwatch watch)
-			{
-				this.watch = watch;
-				watch?.Start();
-			}
-
-			public void Dispose() => watch?.Stop();
-		}
+		// Each step of ImportAll timed (ImportSteps): the models took 40 of a map's 70 s first import
+		//, with nothing to say which part of them
+		static ImportSteps.Scope Step(string name) => ImportSteps.Step(name);
 
 		static readonly (string generator, int version)[] s_ModelVersions = { ModelVersion, AnimationVersion };
 

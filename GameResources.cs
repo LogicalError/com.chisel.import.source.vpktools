@@ -195,27 +195,37 @@ namespace Chisel.Import.Source.VPKTools
 				return taken;
 			// A texture imported earlier is taken on its header alone; the pixels are only read to write it. Every material
 			// that is built reads its textures, and most of them are current: a version bump rebuilds every material.
-			var header = LoadVTFHeader(entry);
-			if (header == null)
-				return null;
-			var reusable = Texture2DImporter.Reusable(header, outputPath);
+			Texture2D[] reusable;
+			using (ImportSteps.Step("texture lookups"))
+			{
+				var header = LoadVTFHeader(entry);
+				if (header == null)
+					return null;
+				reusable = Texture2DImporter.Reusable(header, outputPath);
+			}
 			if (reusable != null)
 				return reusable;
-			var sourceTexture = LoadVTF(entry);
+			VTF sourceTexture;
+			using (ImportSteps.Step("texture reads"))
+				sourceTexture = LoadVTF(entry);
 			if (sourceTexture == null)
 				return null;
 			// In a texture census it is written now and imported with every other one when the census ends
 			if (textureCensus != null)
 			{
-				var standIns = textureCensus.WriteAhead(entry, sourceTexture, outputPath, claim);
+				Texture2D[] standIns;
+				using (ImportSteps.Step("textures written ahead"))
+					standIns = textureCensus.WriteAhead(entry, sourceTexture, outputPath, claim);
 				if (standIns != null)
 					return standIns;
 				// Not written ahead: there is no template yet for what it is to be, so it is imported now, the slow way, and
 				// claimed at once, as without a census. The first texture of a kind is what the next ones are written ahead
 				// from, and a normal map is one only once it is converted
-				return Texture2DImporter.ClaimNow(Texture2DImporter.Import(sourceTexture, outputPath, claim), claim);
+				using (ImportSteps.Step("textures imported one by one"))
+					return Texture2DImporter.ClaimNow(Texture2DImporter.Import(sourceTexture, outputPath, claim), claim);
 			}
-			return Texture2DImporter.Import(sourceTexture, outputPath, claim);
+			using (ImportSteps.Step("textures imported one by one"))
+				return Texture2DImporter.Import(sourceTexture, outputPath, claim);
 		}
 
 		// While a texture census runs (BeginTextureCensus), what ImportVTF has to write it writes ahead of the import
@@ -404,22 +414,28 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			var outputPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname));
 			// A mask written earlier is taken without reading the texture at all
-			var reusable = Texture2DImporter.ReusableAlphaMask(outputPath);
+			Texture2D reusable;
+			using (ImportSteps.Step("texture lookups"))
+				reusable = Texture2DImporter.ReusableAlphaMask(outputPath);
 			if (reusable != null)
 				return reusable;
 			// Written ahead earlier in a texture census: its stand-in
 			if (textureCensus != null && textureCensus.TryTakeAlphaMask(entry, out var standIn))
 				return standIn;
-			var sourceTexture = LoadVTF(entry);
+			VTF sourceTexture;
+			using (ImportSteps.Step("texture reads"))
+				sourceTexture = LoadVTF(entry);
 			// In a texture census it is written now and imported with the textures when the census ends; without a template
 			// yet, it is imported now, and is the template for the next
 			if (textureCensus != null)
 			{
-				standIn = textureCensus.WriteAlphaMaskAhead(entry, sourceTexture, outputPath);
+				using (ImportSteps.Step("alpha masks written ahead"))
+					standIn = textureCensus.WriteAlphaMaskAhead(entry, sourceTexture, outputPath);
 				if (standIn != null)
 					return standIn;
 			}
-			return Texture2DImporter.ImportAlphaMask(sourceTexture, outputPath);
+			using (ImportSteps.Step("alpha masks imported one by one"))
+				return Texture2DImporter.ImportAlphaMask(sourceTexture, outputPath);
 		}
 
 
