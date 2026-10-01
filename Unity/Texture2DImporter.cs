@@ -338,6 +338,34 @@ namespace Chisel.Import.Source.VPKTools
 		internal static bool ClaimsDeferred;
 
 		/// <summary>
+		/// A texture's claim applied at once, census or not (<see cref="ClaimsDeferred"/>), as a build applies it to the
+		/// texture it is handed (MaterialImporter.SetMaterialTexture, and MarkAsAlphaTested on the base texture): for a
+		/// texture a census imports the slow way, because there is no template yet for what it is to be. Without a census
+		/// the first build to ask applies its claim at once too, so the builds still meet it claimed in the same order.
+		/// </summary>
+		internal static Texture2D[] ClaimNow(Texture2D[] textures, TextureClaim claim)
+		{
+			if (textures == null || textures.Length == 0 || textures[0] == null)
+				return textures;
+			var deferred = ClaimsDeferred;
+			ClaimsDeferred = false;
+			try
+			{
+				if (claim.NormalMap)
+					textures[0] = MarkAsNormalMap(textures[0], claim.SelfShadowed);
+				else if (claim.Color)
+					MarkAsColor(textures[0]);
+				if (claim.AlphaTestReference > 0)
+					MarkAsAlphaTested(textures[0], claim.AlphaTestReference);
+			}
+			finally
+			{
+				ClaimsDeferred = deferred;
+			}
+			return textures;
+		}
+
+		/// <summary>
 		/// A texture written ahead of its import for a texture census (<see cref="WriteAhead"/>), and stand-ins for its frames:
 		/// textures that are no asset, in the format the import is going to give each frame (SourceTextureImporter.FormatOf),
 		/// which is all a material build reads of a texture it is handed.

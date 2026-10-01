@@ -210,6 +210,10 @@ namespace Chisel.Import.Source.VPKTools
 				var standIns = textureCensus.WriteAhead(entry, sourceTexture, outputPath, claim);
 				if (standIns != null)
 					return standIns;
+				// Not written ahead: there is no template yet for what it is to be, so it is imported now, the slow way, and
+				// claimed at once, as without a census. The first texture of a kind is what the next ones are written ahead
+				// from, and a normal map is one only once it is converted
+				return Texture2DImporter.ClaimNow(Texture2DImporter.Import(sourceTexture, outputPath, claim), claim);
 			}
 			return Texture2DImporter.Import(sourceTexture, outputPath, claim);
 		}
