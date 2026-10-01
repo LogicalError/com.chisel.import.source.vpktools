@@ -321,8 +321,10 @@ namespace Chisel.Import.Source.VPKTools
 					// As MarkAsNormalMap stamps it: pixels written from the VTF, converted; sampled as the VTF says
 					written.NormalUserData = UserDataForRewrittenPixels(existing?.userData) + ";" + kNormalMapStamp;
 					var normalMeta = GeneratedMeta.FillNormalMap(normalTemplate, guid, written.NormalUserData, written.NormalSampling);
-					// The .meta is made before the pixels are converted: the slow way would convert them again
-					if (normalMeta == null || !ConvertSourceNormalMapFile(assetPath, frameClaim.SelfShadowed))
+					// The .meta is made before the pixels are converted: the slow way would convert them again. They are
+					// converted as written, from the pixels (WriteSourceNormalMap: the file the .png converted made)
+					if (normalMeta == null ||
+						!WriteSourceNormalMap(assetPath, sourceTexture.Frames[i].Pixels, sourceTexture.Width, sourceTexture.Height, frameClaim.SelfShadowed))
 						return null;                        // the slow way takes it, as before
 					GeneratedMeta.Write(assetPath, normalMeta);
 				}
@@ -395,7 +397,17 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			string[] frameNames;
 			using (ImportSteps.Step("pngs written"))
-				frameNames = SaveFramesAsPNG(sourceTexture, Path.ChangeExtension(outputPath, ".png"));
+			{
+				// A normal map of one frame is written by WriteMetas, converted (WriteSourceNormalMap), once
+				if (claim.NormalMap && sourceTexture.Frames.Length == 1)
+				{
+					var pngPath = Path.ChangeExtension(outputPath, ".png");
+					PackagePath.EnsureDirectoriesExist(pngPath);
+					frameNames = new[] { pngPath };
+				}
+				else
+					frameNames = SaveFramesAsPNG(sourceTexture, Path.ChangeExtension(outputPath, ".png"));
+			}
 			if (frameNames == null || frameNames.Length == 0)
 				return null;
 			var assetPaths = new string[frameNames.Length];
@@ -411,14 +423,14 @@ namespace Chisel.Import.Source.VPKTools
 			using (ImportSteps.Step("stand-ins"))
 			{
 				for (int i = 0; i < assetPaths.Length; i++)
-					standIns[i] = StandInFor(written, i);
+					standIns[i] = StandInFor(written, i, sourceTexture);
 			}
 			return new Ahead { Written = written, StandIns = standIns };
 		}
 
-		// A texture in the format frame's import is going to have: what SourceTextureImporter decides from the .png, read the
-		// way it reads it; a normal map's is Unity's own importer's, which no build asks about
-		static Texture2D StandInFor(Written written, int frame)
+		// A texture in the format frame's import is going to have: what SourceTextureImporter decides from the .png, taken from
+		// the pixels it was written from (FormatOfWritten); a normal map's is Unity's own importer's, which no build asks about
+		static Texture2D StandInFor(Written written, int frame, VTF sourceTexture)
 		{
 			var format = TextureFormat.RGBA32;
 			var linear = true;
@@ -426,16 +438,8 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				var settings = written.SourceSettings[frame];
 				linear = !settings.sRGB;
-				var source = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false, linear: true);
-				try
-				{
-					if (source.LoadImage(File.ReadAllBytes(Path.GetFullPath(written.AssetPaths[frame])), markNonReadable: false))
-						format = SourceTextureImporter.FormatOf(source.GetPixels32(), source.width, source.height, settings.compress);
-				}
-				finally
-				{
-					Object.DestroyImmediate(source);
-				}
+				format = FormatOfWritten(sourceTexture.Frames[frame].Pixels, sourceTexture.Width, sourceTexture.Height, settings.compress,
+										 written.AssetPaths[frame]);
 			}
 			return new Texture2D(4, 4, format, mipChain: false, linear: linear)
 			{
@@ -1344,6 +1348,127 @@ namespace Chisel.Import.Source.VPKTools
 			return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
 		}
 
+		// What ConvertSourceNormalMapFile does to each pixel of a Source normal map, in place
+		static void ConvertSourceNormalMapPixels(Color32[] pixels, bool selfShadowed)
+		{
+			for (int i = 0; i < pixels.Length; i++)
+			{
+				var p = pixels[i];
+				if (selfShadowed)
+				{
+					// Reconstruct a normal from the three basis intensities. Approximate by
+					// nature - the self-shadowing term is baked in and cannot be separated
+					// again - but far closer than treating the channels as an xyz normal.
+					var n = kSourceBumpBasis[0] * (p.r / 255.0f)
+						  + kSourceBumpBasis[1] * (p.g / 255.0f)
+						  + kSourceBumpBasis[2] * (p.b / 255.0f);
+					n = n.sqrMagnitude > 1e-12f ? n.normalized : Vector3.forward;
+					p.r = (byte)Mathf.Clamp(Mathf.RoundToInt((n.x * 0.5f + 0.5f) * 255.0f), 0, 255);
+					p.g = (byte)Mathf.Clamp(Mathf.RoundToInt((n.y * 0.5f + 0.5f) * 255.0f), 0, 255);
+					p.b = (byte)Mathf.Clamp(Mathf.RoundToInt((n.z * 0.5f + 0.5f) * 255.0f), 0, 255);
+					p.a = 255;
+				}
+				// DirectX -> OpenGL. Exact in 8 bits: v encodes 2v/255-1, and 255-v encodes
+				// its negation.
+				p.g = (byte)(255 - p.g);
+				pixels[i] = p;
+			}
+		}
+
+		/// <summary>
+		/// The byte a .png SaveFramesAsPNG writes holds for a float, as LoadImage reads it back: EncodeArrayToPNG makes each
+		/// float (v * 255 + 0.5), clamped, an 8-bit RGBA .png
+		/// . Not for a NaN, which the probe did not try.
+		/// </summary>
+		static byte PngByteOf(float value) => (byte)Mathf.Clamp(value * 255f + 0.5f, 0f, 255f);
+
+		/// <summary>The pixels a .png SaveFramesAsPNG writes from these holds (<see cref="PngByteOf"/>); null with a NaN.</summary>
+		internal static Color32[] PngPixelsOf(Color[] pixels)
+		{
+			var result = new Color32[pixels.Length];
+			for (int i = 0; i < pixels.Length; i++)
+			{
+				var p = pixels[i];
+				if (float.IsNaN(p.r) || float.IsNaN(p.g) || float.IsNaN(p.b) || float.IsNaN(p.a))
+					return null;
+				result[i] = new Color32(PngByteOf(p.r), PngByteOf(p.g), PngByteOf(p.b), PngByteOf(p.a));
+			}
+			return result;
+		}
+
+		/// <summary>
+		/// A normal map written ahead, as SaveFramesAsPNG and then ConvertSourceNormalMapFile write it - the same file - from the
+		/// pixels it is written from, as the .png would hold them (<see cref="PngPixelsOf"/>): without the unconverted .png
+		/// written first and read back. With a NaN among them, the way it was.
+		/// </summary>
+		internal static bool WriteSourceNormalMap(string assetPath, Color[] pixels, int width, int height, bool selfShadowed)
+		{
+			var fullPath = Path.GetFullPath(assetPath);
+			var converted = PngPixelsOf(pixels);
+			if (converted == null)
+			{
+				File.WriteAllBytes(fullPath, ImageConversion.EncodeArrayToPNG(pixels, UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
+																			 (uint)width, (uint)height));
+				return ConvertSourceNormalMapFile(assetPath, selfShadowed);
+			}
+			ConvertSourceNormalMapPixels(converted, selfShadowed);
+			Texture2D scratch = null;
+			try
+			{
+				scratch = new Texture2D(width, height, TextureFormat.RGBA32, mipChain: false, linear: true);
+				scratch.SetPixels32(converted);
+				scratch.Apply(updateMipmaps: false);
+				File.WriteAllBytes(fullPath, scratch.EncodeToPNG());
+				return true;
+			}
+			catch (System.Exception ex)
+			{
+				Debug.LogException(ex);
+				return false;
+			}
+			finally
+			{
+				if (scratch != null)
+					Object.DestroyImmediate(scratch);
+			}
+		}
+
+		/// <summary>
+		/// What SourceTextureImporter.FormatOf makes of a .png SaveFramesAsPNG wrote, from the pixels it was written from, as
+		/// the .png holds them (<see cref="PngByteOf"/>): only alpha decides it. Reading the .png back for it took 2.4 s of
+		/// a map's first import. A NaN alpha before any other below 255 has the .png read back.
+		/// </summary>
+		internal static TextureFormat FormatOfWritten(Color[] pixels, int width, int height, bool compress, string assetPath)
+		{
+			if (!compress || width % 4 != 0 || height % 4 != 0)
+				return TextureFormat.RGBA32;
+			foreach (var pixel in pixels)
+			{
+				if (float.IsNaN(pixel.a))
+					return FormatOfPng(assetPath, compress);
+				if (PngByteOf(pixel.a) != 255)
+					return TextureFormat.DXT5;
+			}
+			return TextureFormat.DXT1;
+		}
+
+		// What SourceTextureImporter.FormatOf makes of the .png, read back the way it reads it; RGBA32 when it does not read
+		static TextureFormat FormatOfPng(string assetPath, bool compress)
+		{
+			var format = TextureFormat.RGBA32;
+			var source = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false, linear: true);
+			try
+			{
+				if (source.LoadImage(File.ReadAllBytes(Path.GetFullPath(assetPath)), markNonReadable: false))
+					format = SourceTextureImporter.FormatOf(source.GetPixels32(), source.width, source.height, compress);
+			}
+			finally
+			{
+				Object.DestroyImmediate(source);
+			}
+			return format;
+		}
+
 		/// <summary>
 		/// Rewrites the .png in place so it holds a Unity-convention tangent normal.
 		/// <para>
@@ -1361,7 +1486,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// GUID and every reference to it - untouched.
 		/// </para>
 		/// </summary>
-		static bool ConvertSourceNormalMapFile(string assetPath, bool selfShadowed)
+		internal static bool ConvertSourceNormalMapFile(string assetPath, bool selfShadowed)
 		{
 			var fullPath = Path.GetFullPath(assetPath);
 			if (!File.Exists(fullPath))
@@ -1377,28 +1502,7 @@ namespace Chisel.Import.Source.VPKTools
 					return false;
 
 				var pixels = scratch.GetPixels32();
-				for (int i = 0; i < pixels.Length; i++)
-				{
-					var p = pixels[i];
-					if (selfShadowed)
-					{
-						// Reconstruct a normal from the three basis intensities. Approximate by
-						// nature - the self-shadowing term is baked in and cannot be separated
-						// again - but far closer than treating the channels as an xyz normal.
-						var n = kSourceBumpBasis[0] * (p.r / 255.0f)
-							  + kSourceBumpBasis[1] * (p.g / 255.0f)
-							  + kSourceBumpBasis[2] * (p.b / 255.0f);
-						n = n.sqrMagnitude > 1e-12f ? n.normalized : Vector3.forward;
-						p.r = (byte)Mathf.Clamp(Mathf.RoundToInt((n.x * 0.5f + 0.5f) * 255.0f), 0, 255);
-						p.g = (byte)Mathf.Clamp(Mathf.RoundToInt((n.y * 0.5f + 0.5f) * 255.0f), 0, 255);
-						p.b = (byte)Mathf.Clamp(Mathf.RoundToInt((n.z * 0.5f + 0.5f) * 255.0f), 0, 255);
-						p.a = 255;
-					}
-					// DirectX -> OpenGL. Exact in 8 bits: v encodes 2v/255-1, and 255-v encodes
-					// its negation.
-					p.g = (byte)(255 - p.g);
-					pixels[i] = p;
-				}
+				ConvertSourceNormalMapPixels(pixels, selfShadowed);
 
 				scratch.SetPixels32(pixels);
 				scratch.Apply(updateMipmaps: false);
