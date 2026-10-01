@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 
 using UnityEngine;
@@ -97,20 +98,32 @@ namespace Chisel.Import.Source.VPKTools
 		internal static void CreateStamped(Material built, string assetPath)
 		{
 			assetPath = assetPath.Replace('\\', '/');
-			var userData = GeneratedAssetVersion.Stamp(null, GeneratedVersion, Texture2DImporter.GeneratedVersion);
 			UnityEditor.AssetDatabase.StartAssetEditing();
 			try
 			{
-				UnityEditor.AssetDatabase.CreateAsset(built, assetPath);
-				// The file is written by now, and the import at the end of the block leaves it as it is
-				userData = GeneratedAssetVersion.WithWrittenHash(userData, WrittenHash(assetPath));
-				GeneratedMeta.SetUserData(assetPath, userData);
+				WriteNewInBlock(built, assetPath);
 			}
 			finally
 			{
 				UnityEditor.AssetDatabase.StopAssetEditing();
 			}
+			StampedByItsImport(built, assetPath);
+		}
 
+		// CreateStamped's writing, inside an asset-editing block, whose end imports it once: the file, and its .meta with the
+		// stamp and the hash of what was written in it
+		static void WriteNewInBlock(Material built, string assetPath)
+		{
+			UnityEditor.AssetDatabase.CreateAsset(built, assetPath);
+			// The file is written by now, and the import at the end of the block leaves it as it is
+			var userData = GeneratedAssetVersion.WithWrittenHash(
+				GeneratedAssetVersion.Stamp(null, GeneratedVersion, Texture2DImporter.GeneratedVersion), WrittenHash(assetPath));
+			GeneratedMeta.SetUserData(assetPath, userData);
+		}
+
+		// After the block: should the import not have read the stamp, it is stamped the slow way, and said once
+		static void StampedByItsImport(Material built, string assetPath)
+		{
 			var importer = UnityEditor.AssetImporter.GetAtPath(assetPath);
 			if (importer != null && !GeneratedAssetVersion.IsCurrentUserData(importer.userData, GeneratedVersion, Texture2DImporter.GeneratedVersion))
 			{
@@ -168,28 +181,10 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			try
 			{
-				var assetPath = UnityEditor.AssetDatabase.GetAssetPath(existing);
 				UnityEditor.AssetDatabase.StartAssetEditing();
 				try
 				{
-					// The name is not taken from the build: it is the asset's identity, and CreateMaterial
-					// appends "_nocull" to the one it builds.
-					var name = existing.name;
-					UnityEditor.EditorUtility.CopySerialized(rebuilt, existing);
-					existing.name = name;
-					// However older code pinned it: an asset is unloaded when nothing uses it, and reloaded when used
-					existing.hideFlags &= ~HideFlags.DontUnloadUnusedAsset;
-					UnityEditor.EditorUtility.SetDirty(existing);
-					UnityEditor.AssetDatabase.SaveAssetIfDirty(existing);
-
-					var importer = UnityEditor.AssetImporter.GetAtPath(assetPath);
-					if (importer != null)
-					{
-						importer.userData = GeneratedAssetVersion.WithWrittenHash(
-							GeneratedAssetVersion.Stamp(importer.userData, GeneratedVersion, Texture2DImporter.GeneratedVersion),
-							WrittenHash(assetPath));
-						UnityEditor.AssetDatabase.WriteImportSettingsIfDirty(assetPath);
-					}
+					WriteOverInBlock(existing, rebuilt);
 				}
 				finally
 				{
@@ -200,6 +195,149 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				UnityEngine.Object.DestroyImmediate(rebuilt);
 			}
+		}
+
+		// Overwrite's writing, inside an asset-editing block, whose end imports the asset once: saved, then stamped with
+		// the hash of what was written
+		static void WriteOverInBlock(Material existing, Material rebuilt)
+		{
+			var assetPath = UnityEditor.AssetDatabase.GetAssetPath(existing);
+			// The name is not taken from the build: it is the asset's identity, and CreateMaterial
+			// appends "_nocull" to the one it builds.
+			var name = existing.name;
+			UnityEditor.EditorUtility.CopySerialized(rebuilt, existing);
+			existing.name = name;
+			// However older code pinned it: an asset is unloaded when nothing uses it, and reloaded when used
+			existing.hideFlags &= ~HideFlags.DontUnloadUnusedAsset;
+			UnityEditor.EditorUtility.SetDirty(existing);
+			UnityEditor.AssetDatabase.SaveAssetIfDirty(existing);
+
+			var importer = UnityEditor.AssetImporter.GetAtPath(assetPath);
+			if (importer != null)
+			{
+				importer.userData = GeneratedAssetVersion.WithWrittenHash(
+					GeneratedAssetVersion.Stamp(importer.userData, GeneratedVersion, Texture2DImporter.GeneratedVersion),
+					WrittenHash(assetPath));
+				UnityEditor.AssetDatabase.WriteImportSettingsIfDirty(assetPath);
+			}
+		}
+
+		/// <summary>A material <see cref="ImportAll"/> is asked for: what <see cref="Import"/> takes.</summary>
+		public readonly struct Request
+		{
+			public readonly VMT    SourceMaterial;
+			public readonly string OutputPath;
+			public readonly bool   IsSprite;
+
+			public Request(VMT sourceMaterial, string outputPath, bool isSprite = false)
+			{
+				SourceMaterial = sourceMaterial;
+				OutputPath     = outputPath;
+				IsSprite       = isSprite;
+			}
+		}
+
+		/// <summary>
+		/// Imports a material for each request, each as <see cref="Import"/> would, but writes all the ones that have to be
+		/// written in ONE asset-editing block: one refresh between them, where Import takes one each. In this project a
+		/// refresh costs about 0.12 s besides the import itself
+		/// , and a material version bump rebuilds every material a map uses at its next import,
+		/// over a thousand for the larger maps. The textures a material is built with are imported as it asks for them.
+		/// <para>
+		/// The first request for a file decides it, as the first of two Import calls would. A material that cannot be
+		/// written comes back null and is said, so whoever asks for it next tries again on its own.
+		/// </para>
+		/// </summary>
+		/// <param name="progress">Told the index of each request it builds and the count, for a progress bar.</param>
+		public static Material[] ImportAll(GameResources gameResources, IReadOnlyList<Request> requests, System.Action<int, int> progress = null)
+		{
+			var results = new Material[requests.Count];
+			var first = new Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase);
+			var sameFile = new List<(int index, int firstIndex)>();
+			var created = new List<(int index, Material built, string assetPath)>();
+			var rebuilt = new List<(int index, Material existing, Material rebuilt)>();
+			for (int i = 0; i < requests.Count; i++)
+			{
+				progress?.Invoke(i, requests.Count);
+				var request = requests[i];
+				if (request.SourceMaterial == null || string.IsNullOrEmpty(request.OutputPath))
+					continue;
+				var destinationPath = Path.ChangeExtension(request.OutputPath, ".mat");
+				var file = Path.GetFullPath(destinationPath);
+				if (first.TryGetValue(file, out var firstIndex))
+				{
+					sameFile.Add((i, firstIndex));
+					continue;
+				}
+				first[file] = i;
+
+				var materialName = Path.GetFileNameWithoutExtension(destinationPath);
+				var foundAsset = UnityAssets.Load<Material>(destinationPath);
+				if (foundAsset != null)
+				{
+					results[i] = foundAsset;
+					var current = IsCurrent(foundAsset);
+					if (current && IsAsWritten(foundAsset))
+						continue;
+					if (current)
+						Debug.Log($"{UnityEditor.AssetDatabase.GetAssetPath(foundAsset)} was changed after it was written, so it is written again.");
+					var build = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
+					if (build != null)
+						rebuilt.Add((i, foundAsset, build));
+					continue;
+				}
+
+				var built = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
+				if (built == null)
+					continue;
+				PackagePath.EnsureDirectoriesExist(destinationPath);
+				results[i] = built;
+				created.Add((i, built, PackagePath.GetAssetPath(destinationPath).Replace('\\', '/')));
+			}
+
+			if (created.Count > 0 || rebuilt.Count > 0)
+			{
+				var failed = new HashSet<int>();
+				UnityEditor.AssetDatabase.StartAssetEditing();
+				try
+				{
+					foreach (var (index, built, assetPath) in created)
+					{
+						try { WriteNewInBlock(built, assetPath); }
+						catch (System.Exception exception) { failed.Add(index); Debug.LogException(exception); }
+					}
+					foreach (var (index, existing, build) in rebuilt)
+					{
+						try { WriteOverInBlock(existing, build); }
+						catch (System.Exception exception) { failed.Add(index); Debug.LogException(exception); }
+					}
+				}
+				finally
+				{
+					UnityEditor.AssetDatabase.StopAssetEditing();
+					foreach (var (_, _, build) in rebuilt)
+						UnityEngine.Object.DestroyImmediate(build);
+				}
+				foreach (var (index, built, assetPath) in created)
+				{
+					if (!failed.Contains(index) && UnityEditor.EditorUtility.IsPersistent(built))
+						StampedByItsImport(built, assetPath);
+					else
+					{
+						// Not an asset: a scene saved with it would carry a copy of its own
+						results[index] = null;
+						UnityEngine.Object.DestroyImmediate(built);
+					}
+				}
+				foreach (var (index, _, _) in rebuilt)
+				{
+					if (failed.Contains(index))
+						results[index] = null;
+				}
+			}
+			foreach (var (index, firstIndex) in sameFile)
+				results[index] = results[firstIndex];
+			return results;
 		}
 
 		static bool IsCurrent(Material material)

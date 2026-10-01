@@ -337,22 +337,72 @@ namespace Chisel.Import.Source.VPKTools
 				return cachedMaterial;
 
 			Material material = null;
-			VMT sourceMaterial = LoadVMT(entry);
+			var (sourceMaterial, outputPath) = MaterialRequestOf(entry, brushFace);
 			if (sourceMaterial != null)
-			{
-				var outputPath = PackagePath.GetOutputPath(entry.keyname);
-				if (brushFace && (MaterialImporter.VertexColorOf(sourceMaterial) & MaterialImporter.SourceVertexColor.Blend) != 0)
-				{
-					sourceMaterial = sourceMaterial.WithoutSecondLayer();
-					outputPath = Path.ChangeExtension(outputPath, null) + "_wvt_patch";
-				}
 				material = MaterialImporter.Import(this, sourceMaterial, outputPath, isSprite);
-			}
 
 			// Cached even when null: a VMT that failed to load will fail identically next time,
 			// and a miss is exactly as expensive as a hit.
 			importedMaterials[(entry, isSprite, brushFace)] = material;
 			return material;
+		}
+
+		// The VMT a material is built from and where it is written: for a brush face, a material that blends a second
+		// layer as vbsp patches it (see ImportVMT)
+		(VMT sourceMaterial, string outputPath) MaterialRequestOf(GameEntry entry, bool brushFace)
+		{
+			var sourceMaterial = LoadVMT(entry);
+			if (sourceMaterial == null)
+				return (null, null);
+			var outputPath = PackagePath.GetOutputPath(entry.keyname);
+			if (brushFace && (MaterialImporter.VertexColorOf(sourceMaterial) & MaterialImporter.SourceVertexColor.Blend) != 0)
+			{
+				sourceMaterial = sourceMaterial.WithoutSecondLayer();
+				outputPath = Path.ChangeExtension(outputPath, null) + "_wvt_patch";
+			}
+			return (sourceMaterial, outputPath);
+		}
+
+		/// <summary>
+		/// Imports the materials these requests name as <see cref="ImportVMT"/> would, one at a time - the same entries, the
+		/// same patch for a brush face, into the same cache - but writes them all at once (MaterialImporter.ImportAll): one
+		/// refresh between them, where one at a time takes one each. Asked first, with what a map's import is going to ask
+		/// for, ImportVMT then finds each of them here.
+		/// </summary>
+		/// <param name="progress">Told the index of each material it builds and the count, for a progress bar.</param>
+		public void PrepareMaterials(IEnumerable<(string entryName, bool isSprite, bool brushFace)> requests, Action<int, int> progress = null)
+		{
+			var keys = new List<(GameEntry entry, bool isSprite, bool brushFace)>();
+			var batch = new List<MaterialImporter.Request>();
+			var asked = new HashSet<(GameEntry entry, bool isSprite, bool brushFace)>();
+			foreach (var (entryName, isSprite, brushFace) in requests)
+			{
+				if (string.IsNullOrEmpty(entryName))
+					continue;
+				var name = entryName;
+				PackagePath.EnsureExtension(ref name, PackagePath.ExtensionVMT);
+				var entry = GetEntry(name, PackagePath.DefaultMaterialPaths);
+				if (entry == null)
+					continue;
+				var key = (entry, isSprite, brushFace);
+				if (importedMaterials.ContainsKey(key) || !asked.Add(key))
+					continue;
+				var (sourceMaterial, outputPath) = MaterialRequestOf(entry, brushFace);
+				// One that does not load is left to ImportVMT, which says so in its own way
+				if (sourceMaterial == null)
+					continue;
+				keys.Add(key);
+				batch.Add(new MaterialImporter.Request(sourceMaterial, outputPath, isSprite));
+			}
+			if (batch.Count == 0)
+				return;
+
+			var materials = MaterialImporter.ImportAll(this, batch, progress);
+			for (int i = 0; i < keys.Count; i++)
+			{
+				if (materials[i] != null)
+					importedMaterials[keys[i]] = materials[i];
+			}
 		}
 
 		// What vbsp makes of a brush side with each material (see VMTContents), read once per material
