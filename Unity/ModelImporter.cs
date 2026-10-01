@@ -258,7 +258,15 @@ namespace Chisel.Import.Source.VPKTools
 	{
 		public static GameObject Import(GameResources gameResources, SourceModel model, string outputPath, int skin)
 		{
-			var skinnedModels = Import(gameResources, model, outputPath);
+			return SkinOf(Import(gameResources, model, outputPath), skin);
+		}
+
+		/// <summary>
+		/// The prefab for one skin, of a model's prefabs (its file's, then its skins' variants): a skin the model does not have
+		/// gives the default skin, as in the game, and one that could not be made the first that was.
+		/// </summary>
+		public static GameObject SkinOf(GameObject[] skinnedModels, int skin)
+		{
 			if (skinnedModels == null || skinnedModels.Length == 0)
 				return null;
 
@@ -352,36 +360,190 @@ namespace Chisel.Import.Source.VPKTools
 
 		public static GameObject[] Import(GameResources gameResources, SourceModel model, string outputPath)
 		{
-			var destinationPath = Path.ChangeExtension(outputPath, kModelExtension);
-			var assetPath = UnityAssets.GetAssetPath(destinationPath);
-			var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
-			var current = foundAsset != null && GeneratedAssetVersion.IsCurrent(assetPath, ModelVersion, AnimationVersion);
-			var asWritten = current && ImportedAsWritten(assetPath);
-			if (current && !asWritten && model != null)
-				Debug.Log($"{assetPath}: its import settings were changed after it was written, so it is written again.");
-			if (foundAsset != null && (model == null || asWritten))
-			{
-				// The materials are versioned on their own: an outdated one is rebuilt in place, where the model file's
-				// links still find it, and a missing one is made again.
-				if (model != null)
-					ImportModelTextures(gameResources, model);
+			return ImportAll(gameResources, new[] { new Request(() => model, outputPath) })[0];
+		}
 
-				var models = LoadSkinVariants(outputPath, foundAsset);
-				// A model file can be current while the materials it links to are gone - deleted along with the
-				// materials folder, say - and Unity would bring it in without them. A material made again is a new
-				// asset, so the model file is built again, which links the materials anew.
-				if (model == null || !LinksToMissingMaterials(assetPath, models))
+		/// <summary>A model <see cref="ImportAll"/> is asked for: where it is written, and its files, read when they are
+		/// needed - null when they do not read.</summary>
+		public readonly struct Request
+		{
+			public readonly Func<SourceModel> Read;
+			public readonly string            OutputPath;
+
+			public Request(Func<SourceModel> read, string outputPath)
+			{
+				Read       = read;
+				OutputPath = outputPath;
+			}
+		}
+
+		/// <summary>
+		/// Imports a model for each request, each as <see cref="Import"/> did one at a time, but together: the materials of all
+		/// of them first, in one MaterialImporter.ImportAll (one refresh for their textures, one for themselves); then every
+		/// model file that has to be written is written with its .meta (ImportOnce's writing) and all of them are imported in
+		/// ONE asset-editing block, where each took a refresh of its own;
+		/// then what follows a model file's import: its skins' variants. The animation a model shares with others is written
+		/// before the block, which a refresh it takes may import a model file early for, as written: one imported since is
+		/// not imported twice.
+		/// <para>
+		/// A model is read where it is needed and let go of again: kept, every model of a map would be in memory at once. One
+		/// whose files do not read comes back null; one current and still as written comes back as it is.
+		/// </para>
+		/// </summary>
+		/// <param name="progress">Told the index of each model it writes and the count, for a progress bar.</param>
+		/// <returns>For each request its prefabs - the model file's, then its skins' variants - or null.</returns>
+		public static GameObject[][] ImportAll(GameResources gameResources, IReadOnlyList<Request> requests, Action<int, int> progress = null)
+		{
+			var results = new GameObject[requests.Count][];
+
+			// The materials of every model, together, each model read only for as long as it takes to ask. A model's import
+			// asks for its own again (ImportModelTextures), and finds them current; they are versioned on their own, so a
+			// current model file asks too.
+			PrepareMaterials(gameResources, ReadEach(requests));
+
+			var written = new List<WrittenModel>();
+			for (int i = 0; i < requests.Count; i++)
+			{
+				progress?.Invoke(i, requests.Count);
+				var outputPath = requests[i].OutputPath;
+				var destinationPath = Path.ChangeExtension(outputPath, kModelExtension);
+				var assetPath = UnityAssets.GetAssetPath(destinationPath);
+				var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
+				var model = requests[i].Read();
+				var current = foundAsset != null && GeneratedAssetVersion.IsCurrent(assetPath, ModelVersion, AnimationVersion);
+				var asWritten = current && ImportedAsWritten(assetPath);
+				if (current && !asWritten && model != null)
+					Debug.Log($"{assetPath}: its import settings were changed after it was written, so it is written again.");
+				if (foundAsset != null && (model == null || asWritten))
 				{
-					// The animation this model shares with others is versioned on its own, so it can be out of
-					// date when the model is not.
-					ImportIncludedAnimations(gameResources, model);
-					return models;
+					// The materials are versioned on their own: an outdated one is rebuilt in place, where the model file's
+					// links still find it, and a missing one is made again.
+					if (model != null)
+						ImportModelTextures(gameResources, model);
+
+					var models = LoadSkinVariants(outputPath, foundAsset);
+					// A model file can be current while the materials it links to are gone - deleted along with the
+					// materials folder, say - and Unity would bring it in without them. A material made again is a new
+					// asset, so the model file is built again, which links the materials anew.
+					if (model == null || !LinksToMissingMaterials(assetPath, models))
+					{
+						// The animation this model shares with others is versioned on its own, so it can be out of
+						// date when the model is not.
+						ImportIncludedAnimations(gameResources, model);
+						results[i] = models;
+						continue;
+					}
 				}
+
+				if (model == null)
+					continue;
+
+				var write = WriteModel(gameResources, model, outputPath);
+				if (write == null)
+					continue;
+				write.Index = i;
+				written.Add(write);
 			}
 
-			if (model == null)
-				return null;
+			// Every model file written with its .meta, imported together
+			var aheads = new List<MetaWritten>();
+			foreach (var write in written)
+			{
+				if (write.Meta != null)
+					aheads.Add(write.Meta);
+			}
+			ImportWritten(aheads);
 
+			foreach (var write in written)
+				results[write.Index] = SkinVariantsOf(write);
+			return results;
+		}
+
+		// Each request's model, read as it is come to: the one before is let go of by then
+		static IEnumerable<SourceModel> ReadEach(IReadOnlyList<Request> requests)
+		{
+			foreach (var request in requests)
+				yield return request.Read();
+		}
+
+		static readonly (string generator, int version)[] s_ModelVersions = { ModelVersion, AnimationVersion };
+
+		/// <summary>
+		/// A model file written by <see cref="WriteModel"/>, and what follows its import: what it is checked against, and its
+		/// materials, from which its skins' variants are made.
+		/// </summary>
+		sealed class WrittenModel
+		{
+			internal int Index;
+			internal string OutputPath;
+			internal string DestinationPath;
+			internal string AssetPath;
+			internal MdlModelMaterials Materials;
+			/// <summary>Its .meta, written with it (ImportOnce's writing), for ImportAll to import it with the others; null
+			/// when it was imported already, the slow way.</summary>
+			internal MetaWritten Meta;
+		}
+
+		/// <summary>A model file written with its .meta (<see cref="WriteAhead"/>), for <see cref="ImportWritten"/> to import
+		/// with others: what its import is checked against.</summary>
+		internal sealed class MetaWritten
+		{
+			internal string AssetPath;
+			internal FbxExporter.Result Exported;
+			internal (string generator, int version)[] Versions;
+			internal string UserData;
+			internal string PreviousUserData;
+
+			/// <summary>Imported since it was written, as written: a refresh in between came across it.</summary>
+			internal bool ImportedSince() =>
+				UserData != PreviousUserData && AssetImporter.GetAtPath(AssetPath) is AssetImporter importer && importer.userData == UserData;
+		}
+
+		/// <summary>
+		/// Writes a model file's .meta as ImportOnce does, without importing it: for <see cref="ImportWritten"/> to import it
+		/// with every other one written so. Null, with nothing written, when there is no template yet or a material is not
+		/// one this writes.
+		/// </summary>
+		internal static MetaWritten WriteAhead(string assetPath, FbxExporter.Result exported, int lodCount, params (string generator, int version)[] versions)
+		{
+			if (!WriteMeta(assetPath, exported, lodCount, versions, out var userData, out var previousUserData))
+				return null;
+			return new MetaWritten { AssetPath = assetPath, Exported = exported, Versions = versions, UserData = userData, PreviousUserData = previousUserData };
+		}
+
+		/// <summary>
+		/// Imports model files written ahead (<see cref="WriteAhead"/>) in ONE asset-editing block, where ImportOnce takes a
+		/// refresh each, and puts right what did not import as written, as ImportOnce does. One a refresh in between imported
+		/// already is not imported twice.
+		/// </summary>
+		internal static void ImportWritten(IReadOnlyList<MetaWritten> written)
+		{
+			if (written.Count == 0)
+				return;
+			AssetDatabase.StartAssetEditing();
+			try
+			{
+				foreach (var write in written)
+				{
+					if (!write.ImportedSince())
+						AssetDatabase.ImportAsset(write.AssetPath, ImportAssetOptions.ForceSynchronousImport);
+				}
+			}
+			finally
+			{
+				AssetDatabase.StopAssetEditing();
+			}
+			foreach (var write in written)
+				RepairModel(write.AssetPath, write.Exported, write.Versions);
+		}
+
+		// Writes a model's file - its hierarchy built, the FBX exported - and its .meta when there is a template for it, for
+		// ImportAll to import with the others; without one it is imported now, the slow way. The animation it shares with
+		// others is written now too, so the model can be let go of. Null when its meshes do not load.
+		static WrittenModel WriteModel(GameResources gameResources, SourceModel model, string outputPath)
+		{
+			var destinationPath = Path.ChangeExtension(outputPath, kModelExtension);
+			var assetPath = UnityAssets.GetAssetPath(destinationPath);
 			var modelMaterials = ImportModelTextures(gameResources, model);
 
 			var modelEntries = ImportModelLods(gameResources, model, out MdlSkeleton skeleton);
@@ -430,7 +592,15 @@ namespace Chisel.Import.Source.VPKTools
 				GameObject.DestroyImmediate(root);
 			}
 
-			if (!ImportOnce(assetPath, exported, lodCount, ModelVersion, AnimationVersion))
+			var write = new WrittenModel
+			{
+				OutputPath      = outputPath,
+				DestinationPath = destinationPath,
+				AssetPath       = assetPath,
+				Materials       = modelMaterials,
+				Meta            = WriteAhead(assetPath, exported, lodCount, s_ModelVersions),
+			};
+			if (write.Meta == null)
 			{
 				AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
 				ConfigureImportedModel(assetPath, exported, ModelVersion, AnimationVersion);
@@ -439,16 +609,24 @@ namespace Chisel.Import.Source.VPKTools
 			// Whatever animation this model shares with others goes into its own file, once, rather
 			// than being baked into every model that references it.
 			ImportIncludedAnimations(gameResources, model);
+			return write;
+		}
 
-			var imported = UnityAssets.Load<GameObject>(destinationPath);
+		// The prefabs of a model file just imported: the file's, then a variant over it for each further skin
+		static GameObject[] SkinVariantsOf(WrittenModel write)
+		{
+			var imported = UnityAssets.Load<GameObject>(write.DestinationPath);
 			if (imported == null)
 			{
-				Debug.LogError($"Failed to import the model written to {assetPath}");
+				Debug.LogError($"Failed to import the model written to {write.AssetPath}");
 				return null;
 			}
 
+			var modelMaterials = write.Materials;
+			var haveMultipleSkins = modelMaterials.skins != null && modelMaterials.skins.Length > 0;
 			if (!haveMultipleSkins)
 				return new GameObject[1] { imported };
+			var defaultSkin = (modelMaterials.skins[0] == null) ? modelMaterials : modelMaterials.skins[0];
 
 			// One file, one mesh - the skins differ only in which materials the renderers use, so the
 			// rest become prefab variants over the imported model instead of copies of it.
@@ -464,67 +642,67 @@ namespace Chisel.Import.Source.VPKTools
 					continue;
 
 				ApplySkinVariant(instance, defaultSkin, modelMaterials.skins[i]);
-				var skinPath = SkinVariantPath(outputPath, i);
+				var skinPath = SkinVariantPath(write.OutputPath, i);
 				PrefabUtility.SaveAsPrefabAsset(instance, UnityAssets.GetAssetPath(skinPath));
 				GameObject.DestroyImmediate(instance);
 				results[i] = UnityAssets.Load<GameObject>(skinPath);
 			}
 			return results;
+		}
 
-			// A skin differs from the default skin only in which material each slot uses, and the
-			// two tables are aligned slot for slot - so a variant is built by swapping one material
-			// for the other wherever it appears, not by finding each renderer by name. Names do not
-			// survive the model file: when a file has a single top-level node, Unity folds that node
-			// into the file's root and renames it after the file, so './traffic_warninglight
-			// +studio[0]' comes back as 'traffic_warninglight', every lookup missed, and every skin
-			// variant of every such model silently kept the default skin's materials.
-			static void ApplySkinVariant(GameObject instance, MdlMaterialTable fromSkin, MdlMaterialTable toSkin)
+		// A skin differs from the default skin only in which material each slot uses, and the
+		// two tables are aligned slot for slot - so a variant is built by swapping one material
+		// for the other wherever it appears, not by finding each renderer by name. Names do not
+		// survive the model file: when a file has a single top-level node, Unity folds that node
+		// into the file's root and renames it after the file, so './traffic_warninglight
+		// +studio[0]' comes back as 'traffic_warninglight', every lookup missed, and every skin
+		// variant of every such model silently kept the default skin's materials.
+		static void ApplySkinVariant(GameObject instance, MdlMaterialTable fromSkin, MdlMaterialTable toSkin)
+		{
+			if (instance == null || fromSkin?.unityMaterials == null || toSkin?.unityMaterials == null)
+				return;
+
+			var replacements = new Dictionary<Material, Material>();
+			var ambiguous    = new HashSet<Material>();
+			var slots        = Mathf.Min(fromSkin.unityMaterials.Length, toSkin.unityMaterials.Length);
+			for (int slot = 0; slot < slots; slot++)
 			{
-				if (instance == null || fromSkin?.unityMaterials == null || toSkin?.unityMaterials == null)
-					return;
-
-				var replacements = new Dictionary<Material, Material>();
-				var ambiguous    = new HashSet<Material>();
-				var slots        = Mathf.Min(fromSkin.unityMaterials.Length, toSkin.unityMaterials.Length);
-				for (int slot = 0; slot < slots; slot++)
+				var from = fromSkin.unityMaterials[slot];
+				var to   = toSkin.unityMaterials[slot];
+				if (from == null)
+					continue;
+				if (replacements.TryGetValue(from, out var existing))
 				{
-					var from = fromSkin.unityMaterials[slot];
-					var to   = toSkin.unityMaterials[slot];
-					if (from == null)
-						continue;
-					if (replacements.TryGetValue(from, out var existing))
-					{
-						// The same default material in two slots that this skin replaces differently
-						// cannot be told apart by material alone. The first slot's replacement wins;
-						// saying so beats a variant that is quietly half right.
-						if (existing != to)
-							ambiguous.Add(from);
-						continue;
-					}
-					replacements.Add(from, to);
+					// The same default material in two slots that this skin replaces differently
+					// cannot be told apart by material alone. The first slot's replacement wins;
+					// saying so beats a variant that is quietly half right.
+					if (existing != to)
+						ambiguous.Add(from);
+					continue;
 				}
-
-				foreach (var renderer in instance.GetComponentsInChildren<Renderer>(true))
-				{
-					var materials = renderer.sharedMaterials;
-					var changed   = false;
-					for (int i = 0; i < materials.Length; i++)
-					{
-						// A skin slot with no material of its own keeps the default one rather than
-						// rendering with none.
-						if (materials[i] == null || !replacements.TryGetValue(materials[i], out var replacement) || replacement == null)
-							continue;
-						materials[i] = replacement;
-						changed = true;
-					}
-					if (changed)
-						renderer.sharedMaterials = materials;
-				}
-
-				foreach (var material in ambiguous)
-					Debug.LogWarning($"[Chisel] {instance.name}: material '{material.name}' fills more than one slot and this skin " +
-									 "replaces them differently; the variant uses the first slot's replacement for both");
+				replacements.Add(from, to);
 			}
+
+			foreach (var renderer in instance.GetComponentsInChildren<Renderer>(true))
+			{
+				var materials = renderer.sharedMaterials;
+				var changed   = false;
+				for (int i = 0; i < materials.Length; i++)
+				{
+					// A skin slot with no material of its own keeps the default one rather than
+					// rendering with none.
+					if (materials[i] == null || !replacements.TryGetValue(materials[i], out var replacement) || replacement == null)
+						continue;
+					materials[i] = replacement;
+					changed = true;
+				}
+				if (changed)
+					renderer.sharedMaterials = materials;
+			}
+
+			foreach (var material in ambiguous)
+				Debug.LogWarning($"[Chisel] {instance.name}: material '{material.name}' fills more than one slot and this skin " +
+								 "replaces them differently; the variant uses the first slot's replacement for both");
 		}
 
 		/// <summary>
@@ -1067,6 +1245,23 @@ namespace Chisel.Import.Source.VPKTools
 		/// </summary>
 		internal static bool ImportOnce(string assetPath, FbxExporter.Result exported, int lodCount, params (string generator, int version)[] versions)
 		{
+			if (!WriteMeta(assetPath, exported, lodCount, versions, out _, out _))
+				return false;
+			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+			RepairModel(assetPath, exported, versions);
+			return true;
+		}
+
+		/// <summary>
+		/// ImportOnce's writing: the .meta of a model file just written, from a template Unity wrote for another generated
+		/// model, with this one's GUID, stamp, material remaps, LOD transitions and rig in it - the userData written, and what
+		/// the importer held before (null for a new file). False, with nothing written, when there is no template yet or a
+		/// material is not one this writes; the slow way then takes the file.
+		/// </summary>
+		static bool WriteMeta(string assetPath, FbxExporter.Result exported, int lodCount, (string generator, int version)[] versions,
+							  out string userData, out string previousUserData)
+		{
+			userData = previousUserData = null;
 			if (!ImportOnceEnabled || exported == null)
 				return false;
 			var template = GeneratedMeta.Template(GeneratedMeta.Kind.Model);
@@ -1095,14 +1290,14 @@ namespace Chisel.Import.Source.VPKTools
 				importAnimation = exported.TakeCount > 0,
 			};
 			var existing = AssetImporter.GetAtPath(assetPath);
-			var meta = GeneratedMeta.FillModel(template, GeneratedMeta.GuidFor(assetPath),
-											   GeneratedAssetVersion.Stamp(existing?.userData, versions), settings);
+			var stamp = GeneratedAssetVersion.Stamp(existing?.userData, versions);
+			var meta = GeneratedMeta.FillModel(template, GeneratedMeta.GuidFor(assetPath), stamp, settings);
 			if (meta == null)
 				return false;
 
 			GeneratedMeta.Write(assetPath, meta);
-			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
-			RepairModel(assetPath, exported, versions);
+			userData = stamp;
+			previousUserData = existing?.userData;
 			return true;
 		}
 
@@ -1526,7 +1721,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// refreshes for one material and some 100 for a few textures, most of them a model's.
 		/// </summary>
 		/// <param name="progress">Told the index of each material it builds and the count, for a progress bar.</param>
-		public static void PrepareMaterials(GameResources gameResources, IReadOnlyList<SourceModel> models, Action<int, int> progress = null)
+		public static void PrepareMaterials(GameResources gameResources, IEnumerable<SourceModel> models, Action<int, int> progress = null)
 		{
 			var requests = new List<MaterialImporter.Request>();
 			foreach (var model in models)
