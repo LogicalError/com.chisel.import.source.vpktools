@@ -395,6 +395,23 @@ namespace Chisel.Import.Source.VPKTools
 		/// <returns>For each request its prefabs - the model file's, then its skins' variants - or null.</returns>
 		public static GameObject[][] ImportAll(GameResources gameResources, IReadOnlyList<Request> requests, Action<int, int> progress = null)
 		{
+			var steps = s_Steps = new StepTimes();
+			var written = new List<WrittenModel>();
+			try
+			{
+				return ImportAll(gameResources, requests, progress, written);
+			}
+			finally
+			{
+				s_Steps = null;
+				// Said for a batch: a model imported on its own would say it once each
+				if (requests.Count > 1)
+					Debug.Log($"Source model import (steps): {requests.Count} models, {written.Count} written, {steps.Total:0.0}s - {steps.Report()}");
+			}
+		}
+
+		static GameObject[][] ImportAll(GameResources gameResources, IReadOnlyList<Request> requests, Action<int, int> progress, List<WrittenModel> written)
+		{
 			var results = new GameObject[requests.Count][];
 
 			// The materials of every model, together, each model read only for as long as it takes to ask. A model's import
@@ -402,7 +419,6 @@ namespace Chisel.Import.Source.VPKTools
 			// current model file asks too.
 			PrepareMaterials(gameResources, ReadEach(requests));
 
-			var written = new List<WrittenModel>();
 			for (int i = 0; i < requests.Count; i++)
 			{
 				progress?.Invoke(i, requests.Count);
@@ -410,7 +426,9 @@ namespace Chisel.Import.Source.VPKTools
 				var destinationPath = Path.ChangeExtension(outputPath, kModelExtension);
 				var assetPath = UnityAssets.GetAssetPath(destinationPath);
 				var foundAsset = UnityAssets.Load<GameObject>(destinationPath);
-				var model = requests[i].Read();
+				SourceModel model;
+				using (Step("reads"))
+					model = requests[i].Read();
 				var current = foundAsset != null && GeneratedAssetVersion.IsCurrent(assetPath, ModelVersion, AnimationVersion);
 				var asWritten = current && ImportedAsWritten(assetPath);
 				if (current && !asWritten && model != null)
@@ -453,7 +471,8 @@ namespace Chisel.Import.Source.VPKTools
 				if (write.Meta != null)
 					aheads.Add(write.Meta);
 			}
-			ImportWritten(aheads);
+			using (Step("import of the written"))
+				ImportWritten(aheads);
 
 			// What every model file imported comes out as, its skins' variants saved together
 			var files = new List<SkinnedFile>();
@@ -467,7 +486,9 @@ namespace Chisel.Import.Source.VPKTools
 				}
 				files.Add(new SkinnedFile(imported, write.OutputPath, write.Materials, write.Index));
 			}
-			var skinned = SaveSkinVariants(files);
+			GameObject[][] skinned;
+			using (Step("skins"))
+				skinned = SaveSkinVariants(files);
 			for (int f = 0; f < files.Count; f++)
 				results[files[f].Index] = skinned[f];
 			return results;
@@ -477,7 +498,60 @@ namespace Chisel.Import.Source.VPKTools
 		static IEnumerable<SourceModel> ReadEach(IReadOnlyList<Request> requests)
 		{
 			foreach (var request in requests)
-				yield return request.Read();
+			{
+				SourceModel model;
+				using (Step("reads"))
+					model = request.Read();
+				yield return model;
+			}
+		}
+
+		// How long each step of ImportAll took, summed over its models, said once at its end: the models took 40 of
+		// a map's 70 s first import, with nothing to say which part of them. Null outside it.
+		static StepTimes s_Steps;
+
+		static StepScope Step(string name) => new StepScope(s_Steps?.Watch(name));
+
+		sealed class StepTimes
+		{
+			readonly System.Diagnostics.Stopwatch total = System.Diagnostics.Stopwatch.StartNew();
+			readonly List<(string name, System.Diagnostics.Stopwatch watch)> steps = new();
+
+			public double Total => total.Elapsed.TotalSeconds;
+
+			public System.Diagnostics.Stopwatch Watch(string name)
+			{
+				foreach (var (stepName, watch) in steps)
+				{
+					if (stepName == name)
+						return watch;
+				}
+				var added = new System.Diagnostics.Stopwatch();
+				steps.Add((name, added));
+				return added;
+			}
+
+			public string Report()
+			{
+				var parts = new List<string>(steps.Count);
+				foreach (var (name, watch) in steps)
+					parts.Add($"{name} {watch.Elapsed.TotalSeconds:0.0}s");
+				return string.Join(", ", parts);
+			}
+		}
+
+		// Times what it encloses into its step; nothing outside ImportAll
+		readonly struct StepScope : IDisposable
+		{
+			readonly System.Diagnostics.Stopwatch watch;
+
+			public StepScope(System.Diagnostics.Stopwatch watch)
+			{
+				this.watch = watch;
+				watch?.Start();
+			}
+
+			public void Dispose() => watch?.Stop();
 		}
 
 		static readonly (string generator, int version)[] s_ModelVersions = { ModelVersion, AnimationVersion };
@@ -558,9 +632,14 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, kModelExtension);
 			var assetPath = UnityAssets.GetAssetPath(destinationPath);
-			var modelMaterials = ImportModelTextures(gameResources, model);
+			MdlModelMaterials modelMaterials;
+			using (Step("materials asked again"))
+				modelMaterials = ImportModelTextures(gameResources, model);
 
-			var modelEntries = ImportModelLods(gameResources, model, out MdlSkeleton skeleton);
+			MdlModelEntry[] modelEntries;
+			MdlSkeleton skeleton;
+			using (Step("meshes"))
+				modelEntries = ImportModelLods(gameResources, model, out skeleton);
 			if (modelEntries == null)
 			{
 				Debug.LogError("Failed to load model");
@@ -582,14 +661,21 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				// A model with a skeleton is posed from its animation by Unity itself; one without has its
 				// default pose put into the mesh.
-				var restPose = (skeleton == null) ? DefaultPoseOfSingleBone(gameResources, model) : Matrix4x4.identity;
-				BuildHierarchy(root, model, modelEntries, skeleton, restPose);
-				// One LOD per _LOD name in the file, which is what Unity's importer builds the LODGroup from
-				lodCount = root.TryGetComponent<LODGroup>(out var lodGroup) ? lodGroup.lodCount : 1;
-				SetSkin(root, modelEntries, defaultSkin);
-				BuildCollision(root, model, skeleton, restPose, collisionMeshes);
-				var takes = BuildAnimationTakes(gameResources, model.MDL, model.MDLEntry, skeleton);
-				exported = FbxExporter.Export(destinationPath, root, takes);
+				Matrix4x4 restPose;
+				using (Step("hierarchy and collision"))
+				{
+					restPose = (skeleton == null) ? DefaultPoseOfSingleBone(gameResources, model) : Matrix4x4.identity;
+					BuildHierarchy(root, model, modelEntries, skeleton, restPose);
+					// One LOD per _LOD name in the file, which is what Unity's importer builds the LODGroup from
+					lodCount = root.TryGetComponent<LODGroup>(out var lodGroup) ? lodGroup.lodCount : 1;
+					SetSkin(root, modelEntries, defaultSkin);
+					BuildCollision(root, model, skeleton, restPose, collisionMeshes);
+				}
+				List<FbxAnimationTake> takes;
+				using (Step("animation takes"))
+					takes = BuildAnimationTakes(gameResources, model.MDL, model.MDLEntry, skeleton);
+				using (Step("fbx export"))
+					exported = FbxExporter.Export(destinationPath, root, takes);
 			}
 			finally
 			{
@@ -606,23 +692,30 @@ namespace Chisel.Import.Source.VPKTools
 				GameObject.DestroyImmediate(root);
 			}
 
+			MetaWritten meta;
+			using (Step("meta written ahead"))
+				meta = WriteAhead(assetPath, exported, lodCount, s_ModelVersions);
 			var write = new WrittenModel
 			{
 				OutputPath      = outputPath,
 				DestinationPath = destinationPath,
 				AssetPath       = assetPath,
 				Materials       = modelMaterials,
-				Meta            = WriteAhead(assetPath, exported, lodCount, s_ModelVersions),
+				Meta            = meta,
 			};
 			if (write.Meta == null)
 			{
-				AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
-				ConfigureImportedModel(assetPath, exported, ModelVersion, AnimationVersion);
+				using (Step("imported the slow way"))
+				{
+					AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+					ConfigureImportedModel(assetPath, exported, ModelVersion, AnimationVersion);
+				}
 			}
 
 			// Whatever animation this model shares with others goes into its own file, once, rather
 			// than being baked into every model that references it.
-			ImportIncludedAnimations(gameResources, model);
+			using (Step("shared animations"))
+				ImportIncludedAnimations(gameResources, model);
 			return write;
 		}
 
@@ -1781,9 +1874,15 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			var requests = new List<MaterialImporter.Request>();
 			foreach (var model in models)
-				requests.AddRange(MaterialRequestsOf(gameResources, model));
+			{
+				using (Step("material requests"))
+					requests.AddRange(MaterialRequestsOf(gameResources, model));
+			}
 			if (requests.Count > 0)
-				MaterialImporter.ImportAll(gameResources, requests, progress);
+			{
+				using (Step("materials and their textures"))
+					MaterialImporter.ImportAll(gameResources, requests, progress);
+			}
 		}
 
 		/// <summary>
