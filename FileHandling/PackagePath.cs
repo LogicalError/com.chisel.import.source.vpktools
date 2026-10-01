@@ -7,7 +7,36 @@ namespace Chisel.Import.Source.VPKTools
 {
 	public static class PackagePath
 	{
-		public const string OutputPath = "import"; // TODO: make this configurable
+		/// <summary>The folder under Assets this importer writes into, unless <see cref="OutputRoot"/> is set to another.</summary>
+		public const string OutputPath = "import";
+
+		static string s_OutputRoot;
+
+		/// <summary>
+		/// The folder under Assets everything this importer writes goes into - the textures, materials and models, and each
+		/// map's own assets - as a path from Assets ("import"). It is <see cref="OutputPath"/> until set to another; null or
+		/// empty sets it back.
+		/// <para>
+		/// An import into a folder of its own finds nothing an earlier import wrote, so it converts everything it uses, as the
+		/// first import into a new project does, and it leaves the other folders alone. Set it between imports: an import
+		/// keeps what it has found for as long as it runs, wherever that was.
+		/// </para>
+		/// </summary>
+		/// <exception cref="ArgumentException">A folder that is not under Assets: a rooted path, or one with ".." in it.</exception>
+		public static string OutputRoot
+		{
+			get => s_OutputRoot ?? OutputPath;
+			set
+			{
+				if (string.IsNullOrEmpty(value))
+					value = null;
+				else if (Path.IsPathRooted(value) || Array.IndexOf(value.Replace('\\', '/').Split('/'), "..") >= 0)
+					throw new ArgumentException($"The output root has to be a folder under Assets, not '{value}'", nameof(value));
+				s_OutputRoot = value;
+				// The .meta files written before an asset's first import are made from the assets of its kind in this folder
+				GeneratedMeta.ForgetTemplates();
+			}
+		}
 
 		public const string ExtensionVPK = "vpk";
 		public const string ExtensionVPK_Dir = "_dir.vpk";
@@ -23,7 +52,7 @@ namespace Chisel.Import.Source.VPKTools
 		public static readonly string[] DefaultSkyBoxMaterialPaths = new string[] { "materials/", "materials/skybox/" };
 		public static readonly string[] DefaultMaterialPaths = new string[] { "materials/" };
 
-		public static string GetImportPath(string fullname) { return Path.Combine(OutputPath, fullname); }
+		public static string GetImportPath(string fullname) { return Path.Combine(OutputRoot, fullname); }
 
 		/// <summary>
 		/// Where a model's shared animation goes, which is deliberately NOT alongside the models.

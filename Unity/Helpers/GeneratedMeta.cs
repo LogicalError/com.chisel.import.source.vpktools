@@ -34,9 +34,9 @@ namespace Chisel.Import.Source.VPKTools
 			Model,
 		}
 
-		// Where the templates are looked for: the assets of that kind this importer wrote before
+		// Where the templates are looked for: the assets of that kind this importer wrote before, in the folder it writes to
 		static string FolderOf(Kind kind) => TemplateFolderOverride ??
-			Path.Combine(Application.dataPath, PackagePath.OutputPath, kind == Kind.Model ? kModelSubPath : PackagePath.TextureSubPath);
+			Path.Combine(Application.dataPath, PackagePath.OutputRoot, kind == Kind.Model ? kModelSubPath : PackagePath.TextureSubPath);
 
 		static string PatternOf(Kind kind) => kind == Kind.Model ? "*.fbx.meta" : "*.png.meta";
 
