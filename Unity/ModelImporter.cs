@@ -1511,11 +1511,56 @@ namespace Chisel.Import.Source.VPKTools
 
 		private static MdlModelMaterials ImportModelTextures(GameResources gameResources, SourceModel model)
 		{
+			// The model's materials are written together (MaterialImporter.ImportAll): one refresh between them where each
+			// took one of its own. A reused model asks for them too, so after a material version bump every material of
+			// every model a map uses is rebuilt here - unless they were asked for first, with every other model's
+			// (PrepareMaterials), and are current by now.
+			var asked = FindMaterials(gameResources, model);
+			return MaterialsOf(model, asked, MaterialImporter.ImportAll(gameResources, asked.Requests));
+		}
+
+		/// <summary>
+		/// Imports the materials of these models together, as each model's import asks for its own (ImportModelTextures): one
+		/// MaterialImporter.ImportAll for all of them - one refresh for their textures and one for themselves, where each
+		/// model took its own. The models' imports then find them current. a map's first import took 90
+		/// refreshes for one material and some 100 for a few textures, most of them a model's.
+		/// </summary>
+		/// <param name="progress">Told the index of each material it builds and the count, for a progress bar.</param>
+		public static void PrepareMaterials(GameResources gameResources, IReadOnlyList<SourceModel> models, Action<int, int> progress = null)
+		{
+			var requests = new List<MaterialImporter.Request>();
+			foreach (var model in models)
+				requests.AddRange(MaterialRequestsOf(gameResources, model));
+			if (requests.Count > 0)
+				MaterialImporter.ImportAll(gameResources, requests, progress);
+		}
+
+		/// <summary>
+		/// The requests a model's import imports its materials by (ImportModelTextures), in its order: for asking for a map's
+		/// models' materials together, first (GameResources.PrepareModels).
+		/// </summary>
+		internal static List<MaterialImporter.Request> MaterialRequestsOf(GameResources gameResources, SourceModel model)
+		{
+			return (model?.MDL?.TextureFilenames != null) ? FindMaterials(gameResources, model).Requests : new List<MaterialImporter.Request>();
+		}
+
+		/// <summary>
+		/// The materials a model names, as its import finds them (FindMaterials): the VMT of each of the MDL's texture names,
+		/// or null, and the request each one found is imported by, with the index of the texture it is for.
+		/// </summary>
+		sealed class ModelMaterialRequests
+		{
+			internal VMT[] SourceMaterials;
+			internal List<MaterialImporter.Request> Requests;
+			internal List<int> Requested;
+		}
+
+		static ModelMaterialRequests FindMaterials(GameResources gameResources, SourceModel model)
+		{
 			var mdlHeader = model.MDL;
 
 			var sourceMaterials = new VMT[mdlHeader.TextureFilenames.Length];
 			var outputPaths = new string[mdlHeader.TextureFilenames.Length];
-			var unityMaterials = new Material[mdlHeader.TextureFilenames.Length];
 			for (var i = 0; i < mdlHeader.TextureFilenames.Length; i++)
 			{
 				outputPaths[i] = default;
@@ -1562,9 +1607,6 @@ namespace Chisel.Import.Source.VPKTools
 				}
 			}
 
-			// The model's materials are written together (MaterialImporter.ImportAll): one refresh between them where each
-			// took one of its own. A reused model asks for them too, so after a material version bump every material of
-			// every model a map uses is rebuilt here.
 			var requests = new List<MaterialImporter.Request>(sourceMaterials.Length);
 			var requested = new List<int>(sourceMaterials.Length);
 			for (var i = 0; i < sourceMaterials.Length; i++)
@@ -1574,16 +1616,22 @@ namespace Chisel.Import.Source.VPKTools
 
 				var entry = gameResources.GetEntry(outputPaths[i], PackagePath.DefaultMaterialPaths);
 				if (entry == null)
-				{
-					unityMaterials[i] = null;
 					continue;
-				}
 				requests.Add(new MaterialImporter.Request(sourceMaterials[i], PackagePath.GetOutputPath(entry.keyname)));
 				requested.Add(i);
 			}
-			var imported = MaterialImporter.ImportAll(gameResources, requests);
-			for (int k = 0; k < requested.Count; k++)
-				unityMaterials[requested[k]] = imported[k];
+			return new ModelMaterialRequests { SourceMaterials = sourceMaterials, Requests = requests, Requested = requested };
+		}
+
+		// A model's materials as its import hands them on: the materials imported for the requests, at the texture each is
+		// for, and each skin's table of them
+		static MdlModelMaterials MaterialsOf(SourceModel model, ModelMaterialRequests asked, Material[] imported)
+		{
+			var mdlHeader = model.MDL;
+			var sourceMaterials = asked.SourceMaterials;
+			var unityMaterials = new Material[sourceMaterials.Length];
+			for (int k = 0; k < asked.Requested.Count; k++)
+				unityMaterials[asked.Requested[k]] = imported[k];
 
 			MdlMaterialTable[] skins = null;
 

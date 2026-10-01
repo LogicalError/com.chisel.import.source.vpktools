@@ -783,11 +783,71 @@ namespace Chisel.Import.Source.VPKTools
 		public GameObject ImportModel(string entryName, string[] searchPaths = null, int skin = 0)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
-			var sourceModel = LoadSourceModel(entryName, searchPaths);
-			if (sourceModel == null)
-				return null;
-			var outputPath = PackagePath.GetOutputPath(sourceModel.MDLEntry.keyname);
-			return ModelImporter.Import(this, sourceModel, outputPath, skin);
+			// A map places the same model again and again - a map with 170 entities over 64 models - and each one
+			// read the model's files out of the VPKs again, and asked for its materials and files again, only to arrive at
+			// the prefab it already had
+			var entry = GetEntry(entryName, searchPaths);
+			if (entry != null && importedModels.TryGetValue((entry, skin), out var cached))
+				return cached;
+			// One PrepareModels found does not read is not read again, nor said again
+			var sourceModel = (entry != null && unreadableModels.Contains(entry)) ? null : LoadSourceModel(entryName, searchPaths);
+			// Cached even when null, as importedMaterials is: what failed fails identically next time
+			var prefab = (sourceModel == null) ? null
+					   : ModelImporter.Import(this, sourceModel, PackagePath.GetOutputPath(sourceModel.MDLEntry.keyname), skin);
+			if (entry != null)
+				importedModels[(entry, skin)] = prefab;
+			return prefab;
+		}
+
+		// The models imported so far, by file and skin: one import's, like importedMaterials
+		readonly Dictionary<(GameEntry entry, int skin), GameObject> importedModels = new();
+
+		// The model files PrepareModels could not read
+		readonly HashSet<GameEntry> unreadableModels = new();
+
+		/// <summary>
+		/// Lets go of the models imported so far. They are one import's, as the materials are
+		/// (<see cref="ReleaseImportedMaterials"/>).
+		/// </summary>
+		public void ReleaseImportedModels()
+		{
+			importedModels.Clear();
+			unreadableModels.Clear();
+		}
+
+		/// <summary>
+		/// Imports the materials of the models these requests name together, as each model's import asks for its own
+		/// (ModelImporter.MaterialRequestsOf): one refresh for their textures and one for themselves, where each model took
+		/// its own as an entity asked for it. Asked first, with what a map's entities are going to ask for
+		/// (VmfEntityConverter.ModelRequests), ImportModel then finds their materials current.
+		/// </summary>
+		/// <param name="progress">Told the index of each material it builds and the count, for a progress bar.</param>
+		public void PrepareModels(IEnumerable<(string entryName, int skin)> requests, Action<int, int> progress = null)
+		{
+			// Each file once: one imported already, under any skin, has had its materials asked for
+			var asked = new HashSet<GameEntry>();
+			foreach (var key in importedModels.Keys)
+				asked.Add(key.entry);
+			var materials = new List<MaterialImporter.Request>();
+			foreach (var (entryName, _) in requests)
+			{
+				if (string.IsNullOrEmpty(entryName))
+					continue;
+				var entry = GetEntry(entryName, null);
+				if (entry == null || !asked.Add(entry) || unreadableModels.Contains(entry))
+					continue;
+				// Read as its import reads it - one whose files do not read imports none of its materials either - and let go
+				// of: kept, every model of a map would be in memory at once. ImportModel reads it again, once.
+				var model = LoadSourceModel(entryName);
+				if (model == null)
+				{
+					unreadableModels.Add(entry);
+					continue;
+				}
+				materials.AddRange(ModelImporter.MaterialRequestsOf(this, model));
+			}
+			if (materials.Count > 0)
+				MaterialImporter.ImportAll(this, materials, progress);
 		}
 
 		public T Import<T>(GameEntry entry) where T : UnityEngine.Object
