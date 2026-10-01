@@ -1562,19 +1562,28 @@ namespace Chisel.Import.Source.VPKTools
 				}
 			}
 
+			// The model's materials are written together (MaterialImporter.ImportAll): one refresh between them where each
+			// took one of its own. A reused model asks for them too, so after a material version bump every material of
+			// every model a map uses is rebuilt here.
+			var requests = new List<MaterialImporter.Request>(sourceMaterials.Length);
+			var requested = new List<int>(sourceMaterials.Length);
 			for (var i = 0; i < sourceMaterials.Length; i++)
 			{
 				if (sourceMaterials[i] == null)
 					continue;
 
 				var entry = gameResources.GetEntry(outputPaths[i], PackagePath.DefaultMaterialPaths);
-				if (entry != null)
+				if (entry == null)
 				{
-					var outputPath = PackagePath.GetOutputPath(entry.keyname);
-					unityMaterials[i] = MaterialImporter.Import(gameResources, sourceMaterials[i], outputPath);
-				} else
 					unityMaterials[i] = null;
+					continue;
+				}
+				requests.Add(new MaterialImporter.Request(sourceMaterials[i], PackagePath.GetOutputPath(entry.keyname)));
+				requested.Add(i);
 			}
+			var imported = MaterialImporter.ImportAll(gameResources, requests);
+			for (int k = 0; k < requested.Count; k++)
+				unityMaterials[requested[k]] = imported[k];
 
 			MdlMaterialTable[] skins = null;
 
