@@ -246,11 +246,12 @@ namespace Chisel.Import.Source.VPKTools
 		}
 
 		/// <summary>
-		/// Turn raw DXT3 bytes to a Color array that can be used in a Texture2D.
+		/// Turn raw DXT3 bytes to a Color array that can be used in a Texture2D: sixteen bytes a block, its alpha - sixteen
+		/// four-bit values, row by row, the low nibble first - then its colour, a block as DXT5 has it, always of four colours.
 		/// </summary>
 		/// <remarks>
-		/// It reads eight bytes a block, as DXT1, where a DXT3 block is sixteen - its alpha, then its colour - so what it
-		/// decodes is not the image. Kept as it was, here where only the speed of the reading changes.
+		/// It read eight bytes a block, as DXT1, and so decoded the first half of the image's alpha and colour as colour: 122
+		/// of Black Mesa's textures are DXT3, its Xen glass among them.
 		/// </remarks>
 		/// <param name="data">Raw image byte data</param>
 		/// <param name="width">Expected width of the image</param>
@@ -258,10 +259,60 @@ namespace Chisel.Import.Source.VPKTools
 		/// <returns>Pixel color data</returns>
 		public static Color[] DecompressDXT3( Stream data, ushort width, ushort height, uint dataSize)
 		{
-            Color[] texture2DColors = new Color[width * height];
-            DecompressColorBlocks( data, width, height, texture2DColors );
-            return texture2DColors;
-        }
+			int blockCountX = (width + 3) / 4;
+			int blockCountY = (height + 3) / 4;
+			var bytes = ReadImageBytes(data, (long)blockCountX * blockCountY * 16, 0, out _);
+			var pixels = new Color[width * height];
+			int offset = 0;
+			for (int j = 0; j < blockCountY; j++)
+			{
+				for (int i = 0; i < blockCountX; i++)
+				{
+					DecompressBlockDXT3(i * 4, j * 4, width, height, bytes.AsSpan(offset, 16), pixels);
+					offset += 16;
+				}
+			}
+			return pixels;
+		}
+
+		// One DXT3 block: its explicit alpha, a nibble a pixel scaled to 0..255 (n * 17), over the colours DXT5 decodes
+		internal static void DecompressBlockDXT3(int x, int y, int width, int height, Span<byte> blockStorage, Color[] image)
+		{
+			ushort color0 = (ushort)((ushort)blockStorage[ 8] | ((ushort)blockStorage[ 9] << 8));
+			ushort color1 = (ushort)((ushort)blockStorage[10] | ((ushort)blockStorage[11] << 8));
+
+			uint temp = (uint)(color0 >> 11) * 255 + 16;
+			byte r0 = (byte)((temp/32 + temp)/32);
+			temp = (uint)((color0 & 0x07E0) >> 5) * 255 + 32;
+			byte g0 = (byte)((temp/64 + temp)/64);
+			temp = (uint)(color0 & 0x001F) * 255 + 16;
+			byte b0 = (byte)((temp/32 + temp)/32);
+
+			temp = (uint)(color1 >> 11) * 255 + 16;
+			byte r1 = (byte)((temp/32 + temp)/32);
+			temp = (uint)((color1 & 0x07E0) >> 5) * 255 + 32;
+			byte g1 = (byte)((temp/64 + temp)/64);
+			temp = (uint)(color1 & 0x001F) * 255 + 16;
+			byte b1 = (byte)((temp/32 + temp)/32);
+
+			uint code = (uint)blockStorage[12] | ((uint)blockStorage[13] << 8) | ((uint)blockStorage[14] << 16) | ((uint)blockStorage[15] << 24);
+
+			Span<float> reds   = stackalloc float[4] { r0 / 255.0f, r1 / 255.0f, ((2 * r0 + r1) / 3) / 255.0f, ((r0 + 2 * r1) / 3) / 255.0f };
+			Span<float> greens = stackalloc float[4] { g0 / 255.0f, g1 / 255.0f, ((2 * g0 + g1) / 3) / 255.0f, ((g0 + 2 * g1) / 3) / 255.0f };
+			Span<float> blues  = stackalloc float[4] { b0 / 255.0f, b1 / 255.0f, ((2 * b0 + b1) / 3) / 255.0f, ((b0 + 2 * b1) / 3) / 255.0f };
+
+			for (int j = 0; j < 4; j++)
+			{
+				for (int i = 0; i < 4; i++)
+				{
+					int pixel = 4 * j + i;
+					int alpha = ((blockStorage[pixel / 2] >> ((pixel & 1) * 4)) & 0x0F) * 17;
+					int colorCode = (int)((code >> 2 * pixel) & 0x03);
+					if (x + i < width && y + j < height)
+						image[(y + j) * width + (x + i)] = new Color(reds[colorCode], greens[colorCode], blues[colorCode], alpha / 255.0f);
+				}
+			}
+		}
 
         // DXT1's colour blocks, eight bytes each in rows of blocks: two RGB565 end points and sixteen two-bit indices. The
         // end points widen by shifting, and the colours between them round as (2a + b + 1) / 3, or (a + b) / 2 when the

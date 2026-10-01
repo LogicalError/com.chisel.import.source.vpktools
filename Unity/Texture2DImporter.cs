@@ -55,7 +55,8 @@ namespace Chisel.Import.Source.VPKTools
 		/// <see cref="GeneratedAssetVersion"/>.
 		/// </summary>
 		// 2: I8, A8 and IA88 textures read as Direct3D 9 samples them (they were (I, 1, 1) and (I, A, 1))
-		public static readonly (string generator, int version) GeneratedVersion = ("texture", 5);
+		// 6: DXT3 decoded as it is stored, sixteen bytes a block (it read eight, as DXT1: 122 of Black Mesa's textures)
+		public static readonly (string generator, int version) GeneratedVersion = ("texture", 6);
 
 		/// <summary>
 		/// What every texture's anisotropy is set to, matching Black Mesa's own <c>mat_forceaniso "16"</c>.
