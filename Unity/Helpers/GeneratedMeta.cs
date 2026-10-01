@@ -192,5 +192,28 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			File.WriteAllText(Path.GetFullPath(assetPath) + ".meta", metaText);
 		}
+
+		/// <summary>
+		/// Puts this userData into the .meta beside the asset, as the .meta stands on disk, and returns whether it had a
+		/// userData line to put it in.
+		/// <para>
+		/// For an asset Unity has written but not imported yet: CreateAsset inside an asset-editing block writes the file
+		/// and a .meta of its own at once, and leaves the import to the end of the block. The asset has no importer to set
+		/// the userData on until then (a .meta written before CreateAsset is ignored), so the one import there is has to
+		/// find it in the file.
+		/// </para>
+		/// </summary>
+		internal static bool SetUserData(string assetPath, string userData)
+		{
+			var metaPath = Path.GetFullPath(assetPath) + ".meta";
+			if (!File.Exists(metaPath))
+				return false;
+			var text = File.ReadAllText(metaPath);
+			var line = new Regex(@"(?m)^(  userData:).*?(\r?)$");
+			if (!line.IsMatch(text))
+				return false;
+			File.WriteAllText(metaPath, line.Replace(text, m => m.Groups[1].Value + " " + userData + m.Groups[2].Value, 1));
+			return true;
+		}
 	}
 }

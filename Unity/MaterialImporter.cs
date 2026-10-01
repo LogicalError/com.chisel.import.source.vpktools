@@ -59,9 +59,56 @@ namespace Chisel.Import.Source.VPKTools
 			}
 
 			foundAsset = CreateMaterial(gameResources, sourceMaterial, materialName, isSprite);
-			UnityAssets.Save(foundAsset, destinationPath);
-			StampCurrent(foundAsset);
+			if (foundAsset == null)
+				return null;
+			PackagePath.EnsureDirectoriesExist(destinationPath);
+			CreateStamped(foundAsset, PackagePath.GetAssetPath(destinationPath));
 			return foundAsset;
+		}
+
+		// Said once per editor session, whatever the number of materials it happens to
+		static bool s_SaidStampedTheSlowWay;
+
+		/// <summary>
+		/// Writes a material this importer has just built as a new asset, stamped current, with ONE import.
+		/// <para>
+		/// It used to take three, each its own refresh: CreateAsset imports the file it writes, UnityAssets.Save imported
+		/// it again, and the stamp - importer userData - took a third (SaveAndReimport). A .meta written before
+		/// CreateAsset does not help: CreateAsset writes its own. What does: CreateAsset inside an asset-editing block,
+		/// which writes the .mat and its .meta at once and leaves the import to the end of the block, and the stamp put
+		/// into that .meta on disk before the block ends (<see cref="GeneratedMeta.SetUserData"/>), where the one import
+		/// reads it. The file is byte for byte what CreateAsset writes on its own.
+		/// </para>
+		/// <para>
+		/// Should the import not have read the stamp, it is stamped the slow way, through the importer, and said once.
+		/// </para>
+		/// </summary>
+		internal static void CreateStamped(Material built, string assetPath)
+		{
+			assetPath = assetPath.Replace('\\', '/');
+			var userData = GeneratedAssetVersion.Stamp(null, GeneratedVersion, Texture2DImporter.GeneratedVersion);
+			UnityEditor.AssetDatabase.StartAssetEditing();
+			try
+			{
+				UnityEditor.AssetDatabase.CreateAsset(built, assetPath);
+				GeneratedMeta.SetUserData(assetPath, userData);
+			}
+			finally
+			{
+				UnityEditor.AssetDatabase.StopAssetEditing();
+			}
+
+			var importer = UnityEditor.AssetImporter.GetAtPath(assetPath);
+			if (importer != null && !GeneratedAssetVersion.IsCurrentUserData(importer.userData, GeneratedVersion, Texture2DImporter.GeneratedVersion))
+			{
+				if (!s_SaidStampedTheSlowWay)
+				{
+					s_SaidStampedTheSlowWay = true;
+					Debug.LogWarning($"{assetPath}: the import did not read the stamp put into its .meta, so it was stamped with an import of its own. " +
+									 "Every material written this way takes two imports instead of one until this is looked into.");
+				}
+				StampCurrent(built);
+			}
 		}
 
 		/// <summary>
@@ -99,19 +146,38 @@ namespace Chisel.Import.Source.VPKTools
 		/// Only the main object is written, so sub-assets of the .mat, such as ChiselSurfaceMetadata,
 		/// survive.
 		/// </para>
+		/// <para>
+		/// The save and the stamp go in with one import: both are written inside an asset-editing block, whose end
+		/// imports the asset once (saving it, then stamping it with SaveAndReimport, took two).
+		/// </para>
 		/// </summary>
 		internal static void Overwrite(Material existing, Material rebuilt)
 		{
 			try
 			{
-				// The name is not taken from the build: it is the asset's identity, and CreateMaterial
-				// appends "_nocull" to the one it builds.
-				var name = existing.name;
-				UnityEditor.EditorUtility.CopySerialized(rebuilt, existing);
-				existing.name = name;
-				UnityEditor.EditorUtility.SetDirty(existing);
-				UnityEditor.AssetDatabase.SaveAssetIfDirty(existing);
-				StampCurrent(existing);
+				var assetPath = UnityEditor.AssetDatabase.GetAssetPath(existing);
+				UnityEditor.AssetDatabase.StartAssetEditing();
+				try
+				{
+					// The name is not taken from the build: it is the asset's identity, and CreateMaterial
+					// appends "_nocull" to the one it builds.
+					var name = existing.name;
+					UnityEditor.EditorUtility.CopySerialized(rebuilt, existing);
+					existing.name = name;
+					UnityEditor.EditorUtility.SetDirty(existing);
+					UnityEditor.AssetDatabase.SaveAssetIfDirty(existing);
+
+					var importer = UnityEditor.AssetImporter.GetAtPath(assetPath);
+					if (importer != null)
+					{
+						importer.userData = GeneratedAssetVersion.Stamp(importer.userData, GeneratedVersion, Texture2DImporter.GeneratedVersion);
+						UnityEditor.AssetDatabase.WriteImportSettingsIfDirty(assetPath);
+					}
+				}
+				finally
+				{
+					UnityEditor.AssetDatabase.StopAssetEditing();
+				}
 			}
 			finally
 			{
@@ -196,8 +262,7 @@ namespace Chisel.Import.Source.VPKTools
 				return foundAsset;
 			}
 
-			UnityAssets.Save(skybox, destinationPath);
-			StampCurrent(skybox);
+			CreateStamped(skybox, PackagePath.GetAssetPath(destinationPath));
 			return skybox;
 		}
 
@@ -1907,10 +1972,7 @@ namespace Chisel.Import.Source.VPKTools
 					built = existing;
 				}
 				else
-				{
-					UnityEditor.AssetDatabase.CreateAsset(built, path);
-					StampCurrent(built);
-				}
+					CreateStamped(built, path);
 			}
 			_skyFaceSource = skybox;
 			_skyFaceMaterial = built;
