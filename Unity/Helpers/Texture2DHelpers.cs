@@ -48,15 +48,16 @@ namespace Chisel.Import.Source.VPKTools
         /// <returns>Flipped texture color array</returns>
         public static void FlipVertical( Color[] colors, ushort width, ushort height )
         {
-            for( uint col = 0; col < width; col++ )
+            // Row by row, a row at a time
+            var swap = new Color[width];
+            for( int row = 0; row < ( height / 2 ); row++ )
             {
-                for( uint row = 0; row < ( height / 2 ); row++ )
-                {
-                    uint  currentRowIndex  = row                  * width;
-                    uint  oppositeRowIndex = ( height - row - 1 ) * width;
-					(colors[oppositeRowIndex + col], colors[currentRowIndex  + col]) = (colors[currentRowIndex  + col], colors[oppositeRowIndex + col]);
-				}
-			}
+                int currentRowIndex  = row                  * width;
+                int oppositeRowIndex = ( height - row - 1 ) * width;
+                Array.Copy( colors, currentRowIndex, swap, 0, width );
+                Array.Copy( colors, oppositeRowIndex, colors, currentRowIndex, width );
+                Array.Copy( swap, 0, colors, oppositeRowIndex, width );
+            }
         }
 
         /// <summary>
@@ -97,6 +98,32 @@ namespace Chisel.Import.Source.VPKTools
 		}
 
 		/// <summary>
+		/// The bytes of an image, read at once. The decoders below read a field, or a byte, at a time, each read a call
+		/// through the VPK's stream and, for a byte, an array of its own (Stream.ReadByte): the texture reads took about
+		/// 10 s of a map's 67 s first import. A stream that ends early leaves the rest as
+		/// <paramref name="fill"/>, which is what the reads gave there: 0 where a field was read into a new array
+		/// (DataParser), 255 where a byte was (ReadByte's -1, as a byte).
+		/// </summary>
+		static byte[] ReadImageBytes(Stream data, long count, byte fill, out long read)
+		{
+			var bytes = new byte[count];
+			read = 0;
+			while (read < count)
+			{
+				var n = data.Read(bytes, (int)read, (int)(count - read));
+				if (n <= 0)
+					break;
+				read += n;
+			}
+			if (fill != 0)
+			{
+				for (var i = read; i < count; i++)
+					bytes[i] = fill;
+			}
+			return bytes;
+		}
+
+		/// <summary>
 		/// Turn raw one-byte pixels to a Color array, as Direct3D 9 samples them, which is how Source's textures are made to
 		/// be read: I8 is luminance, (I, I, I, 1), and A8 is alpha alone, (0, 0, 0, A).
 		/// </summary>
@@ -108,9 +135,10 @@ namespace Chisel.Import.Source.VPKTools
 		public static Color[] DecompressOneByte(Stream data, ushort width, ushort height, bool alpha)
 		{
 			Color[] texture2DColors = new Color[width * height];
+			var bytes = ReadImageBytes(data, texture2DColors.Length, 255, out _);
 			for (int i = 0; i < texture2DColors.Length; i++)
 			{
-				float value = data.ReadValueByte() / (float)byte.MaxValue;
+				float value = bytes[i] / (float)byte.MaxValue;
 				texture2DColors[i] = alpha ? new Color(0, 0, 0, value) : new Color(value, value, value, 1);
 			}
 			return texture2DColors;
@@ -128,10 +156,11 @@ namespace Chisel.Import.Source.VPKTools
 		public static Color[] DecompressTwoBytes(Stream data, ushort width, ushort height, bool luminanceAlpha)
 		{
 			Color[] texture2DColors = new Color[width * height];
+			var bytes = ReadImageBytes(data, texture2DColors.Length * 2L, 255, out _);
 			for (int i = 0; i < texture2DColors.Length; i++)
 			{
-				float first = data.ReadValueByte() / (float)byte.MaxValue;
-				float second = data.ReadValueByte() / (float)byte.MaxValue;
+				float first = bytes[i * 2] / (float)byte.MaxValue;
+				float second = bytes[i * 2 + 1] / (float)byte.MaxValue;
 				texture2DColors[i] = luminanceAlpha ? new Color(first, first, first, second) : new Color(first, second, 1, 1);
 			}
 			return texture2DColors;
@@ -147,31 +176,14 @@ namespace Chisel.Import.Source.VPKTools
 		public static Color[] DecompressBGR888( Stream data, ushort width, ushort height )
         {
             Color[] texture2DColors = new Color[width * height];
-
-            bool exceededArray = false;
-            for( int row = 0; row < height; row++ )
+            var bytes = ReadImageBytes( data, texture2DColors.Length * 3L, 255, out _ );
+            for( int i = 0; i < texture2DColors.Length; i++ )
             {
-                for( int col = 0; col < width; col++ )
-                {
-                    byte blue  = data.ReadValueByte();
-                    byte green = data.ReadValueByte();
-                    byte red   = data.ReadValueByte();
-
-                    int flattenedIndex = row * width + col;
-                    if( flattenedIndex < texture2DColors.Length )
-                        texture2DColors[flattenedIndex] = new Color( ( (float) red ) / byte.MaxValue, ( (float) green ) / byte.MaxValue, ( (float) blue ) / byte.MaxValue );
-                    else
-                    {
-                        Debug.LogError( "BGR888: Exceeded expected texture size" );
-                        exceededArray = true;
-                        break;
-                    }
-                }
-
-                if( exceededArray )
-                    break;
+                byte blue  = bytes[i * 3];
+                byte green = bytes[i * 3 + 1];
+                byte red   = bytes[i * 3 + 2];
+                texture2DColors[i] = new Color( ( (float) red ) / byte.MaxValue, ( (float) green ) / byte.MaxValue, ( (float) blue ) / byte.MaxValue );
             }
-
             return texture2DColors;
         }
 
@@ -185,33 +197,16 @@ namespace Chisel.Import.Source.VPKTools
         public static Color[] DecompressBGRA8888( Stream data, ushort width, ushort height )
         {
             Color[] texture2DColors = new Color[width * height];
-
-            bool exceededArray = false;
-            for( int row = 0; row < height; row++ )
+            var bytes = ReadImageBytes( data, texture2DColors.Length * 4L, 255, out _ );
+            for( int i = 0; i < texture2DColors.Length; i++ )
             {
-                for( int col = 0; col < width; col++ )
-                {
-                    byte blue  = data.ReadValueByte();
-                    byte green = data.ReadValueByte();
-                    byte red   = data.ReadValueByte();
-                    byte alpha = data.ReadValueByte();
-
-                    int flattenedIndex = row * width + col;
-                    if( flattenedIndex < texture2DColors.Length )
-                        texture2DColors[flattenedIndex] = new Color( ( (float) red )   / byte.MaxValue, ( (float) green ) / byte.MaxValue, ( (float) blue ) / byte.MaxValue,
-                                                                     ( (float) alpha ) / byte.MaxValue );
-                    else
-                    {
-                        Debug.LogError( "BGRA8888: Exceeded expected texture size" );
-                        exceededArray = true;
-                        break;
-                    }
-                }
-
-                if( exceededArray )
-                    break;
+                byte blue  = bytes[i * 4];
+                byte green = bytes[i * 4 + 1];
+                byte red   = bytes[i * 4 + 2];
+                byte alpha = bytes[i * 4 + 3];
+                texture2DColors[i] = new Color( ( (float) red )   / byte.MaxValue, ( (float) green ) / byte.MaxValue, ( (float) blue ) / byte.MaxValue,
+                                                ( (float) alpha ) / byte.MaxValue );
             }
-
             return texture2DColors;
         }
 
@@ -222,16 +217,16 @@ namespace Chisel.Import.Source.VPKTools
         public static Color[] DecompressRGBA16161616F( Stream data, ushort width, ushort height )
         {
             var texture2DColors = new Color[width * height];
-            var bytes = new byte[8];
+            var bytes = ReadImageBytes( data, texture2DColors.Length * 8L, 0, out var read );
             for( int i = 0; i < texture2DColors.Length; i++ )
             {
-                if( data.Read( bytes, 0, 8 ) != 8 )
+                if( ( i + 1 ) * 8L > read )
                 {
                     Debug.LogError( "RGBA16161616F: the data ended before the image did" );
                     break;
                 }
-                texture2DColors[i] = new Color( Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, 0 ) ), Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, 2 ) ),
-                                                Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, 4 ) ), Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, 6 ) ) );
+                texture2DColors[i] = new Color( Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, i * 8 ) ), Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, i * 8 + 2 ) ),
+                                                Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, i * 8 + 4 ) ), Mathf.HalfToFloat( BitConverter.ToUInt16( bytes, i * 8 + 6 ) ) );
             }
             return texture2DColors;
         }
@@ -246,52 +241,17 @@ namespace Chisel.Import.Source.VPKTools
         public static Color[] DecompressDXT1(Stream data, ushort width, ushort height, uint dataSize)
 		{
             Color[] texture2DColors = new Color[width * height];
-
-            for( int row = 0; row < height; row += 4 )
-            {
-                for( int col = 0; col < width; col += 4 )
-                {
-                    var color0Data = DataParser.ReadUShort( data );
-					var color1Data = DataParser.ReadUShort( data );
-					var bitmask    = DataParser.ReadUInt( data );
-
-                    int[] colors0 = new int[] { ( ( color0Data >> 11 ) & 0x1F ) << 3, ( ( color0Data >> 5 ) & 0x3F ) << 2, ( color0Data & 0x1F ) << 3 };
-                    int[] colors1 = new int[] { ( ( color1Data >> 11 ) & 0x1F ) << 3, ( ( color1Data >> 5 ) & 0x3F ) << 2, ( color1Data & 0x1F ) << 3 };
-
-                    Color[] colorPalette = new Color[]
-                    {
-                        new( colors0[0]                                  / 255f, colors0[1]                                  / 255f, colors0[2]                                  / 255f ),
-                        new( colors1[0]                                  / 255f, colors1[1]                                  / 255f, colors1[2]                                  / 255f ),
-                        new( ( ( colors0[0] * 2 + colors1[0] + 1 ) / 3 ) / 255f, ( ( colors0[1] * 2 + colors1[1] + 1 ) / 3 ) / 255f, ( ( colors0[2] * 2 + colors1[2] + 1 ) / 3 ) / 255f ),
-                        new( ( ( colors1[0] * 2 + colors0[0] + 1 ) / 3 ) / 255f, ( ( colors1[1] * 2 + colors0[1] + 1 ) / 3 ) / 255f, ( ( colors1[2] * 2 + colors0[2] + 1 ) / 3 ) / 255f )
-                    };
-
-                    if( color0Data < color1Data )
-                    {
-                        colorPalette[2] = new Color( ( ( colors0[0] + colors1[0] ) / 2 ) / 255f, ( ( colors0[1] + colors1[1] ) / 2 ) / 255f, ( ( colors0[2] + colors1[2] ) / 2 ) / 255f );
-                        colorPalette[3] = new Color( ( ( colors1[0] * 2 + colors0[0] + 1 ) / 3 ) / 255f, ( ( colors1[1] * 2 + colors0[1] + 1 ) / 3 ) / 255f,
-                                                     ( ( colors1[2] * 2 + colors0[2] + 1 ) / 3 ) / 255f );
-                    }
-
-                    int blockIndex = 0;
-                    for( int blockY = 0; blockY < 4; blockY++ )
-                    {
-                        for( int blockX = 0; blockX < 4; blockX++ )
-                        {
-                            Color colorInBlock = colorPalette[( bitmask & ( 0x03 << blockIndex * 2 ) ) >> blockIndex * 2];
-                            texture2DColors[( ( row * width ) + col ) + ( ( blockY * width ) + blockX )] = colorInBlock;
-                            blockIndex++;
-                        }
-                    }
-                }
-            }
-
-            return texture2DColors.ToArray();
+            DecompressColorBlocks( data, width, height, texture2DColors );
+            return texture2DColors;
 		}
 
 		/// <summary>
 		/// Turn raw DXT3 bytes to a Color array that can be used in a Texture2D.
 		/// </summary>
+		/// <remarks>
+		/// It reads eight bytes a block, as DXT1, where a DXT3 block is sixteen - its alpha, then its colour - so what it
+		/// decodes is not the image. Kept as it was, here where only the speed of the reading changes.
+		/// </remarks>
 		/// <param name="data">Raw image byte data</param>
 		/// <param name="width">Expected width of the image</param>
 		/// <param name="height">Expected height of the image</param>
@@ -299,48 +259,55 @@ namespace Chisel.Import.Source.VPKTools
 		public static Color[] DecompressDXT3( Stream data, ushort width, ushort height, uint dataSize)
 		{
             Color[] texture2DColors = new Color[width * height];
+            DecompressColorBlocks( data, width, height, texture2DColors );
+            return texture2DColors;
+        }
 
+        // DXT1's colour blocks, eight bytes each in rows of blocks: two RGB565 end points and sixteen two-bit indices. The
+        // end points widen by shifting, and the colours between them round as (2a + b + 1) / 3, or (a + b) / 2 when the
+        // first is below the second - and are opaque either way.
+        static void DecompressColorBlocks( Stream data, ushort width, ushort height, Color[] texture2DColors )
+        {
+            long blocks = (long)( ( width + 3 ) / 4 ) * ( ( height + 3 ) / 4 );
+            var bytes = ReadImageBytes( data, blocks * 8, 0, out _ );
+            int offset = 0;
             for( int row = 0; row < height; row += 4 )
             {
                 for( int col = 0; col < width; col += 4 )
                 {
-                    //data.Seek(8, SeekOrigin.Current); //not sure if this is correct or not, had it before, but I think I never got to test a DXT3 image. I commented it out because it looks wrong
-                    var color0Data = DataParser.ReadUShort( data );
-                    var color1Data = DataParser.ReadUShort( data );
-                    var bitmask    = DataParser.ReadUInt( data );
+                    int color0Data = bytes[offset] | ( bytes[offset + 1] << 8 );
+                    int color1Data = bytes[offset + 2] | ( bytes[offset + 3] << 8 );
+                    uint bitmask   = (uint)( bytes[offset + 4] | ( bytes[offset + 5] << 8 ) | ( bytes[offset + 6] << 16 ) | ( bytes[offset + 7] << 24 ) );
+                    offset += 8;
 
-                    int[] colors0 = new int[] { ( ( color0Data >> 11 ) & 0x1F ) << 3, ( ( color0Data >> 5 ) & 0x3F ) << 2, ( color0Data & 0x1F ) << 3 };
-                    int[] colors1 = new int[] { ( ( color1Data >> 11 ) & 0x1F ) << 3, ( ( color1Data >> 5 ) & 0x3F ) << 2, ( color1Data & 0x1F ) << 3 };
+                    int r0 = ( ( color0Data >> 11 ) & 0x1F ) << 3, g0 = ( ( color0Data >> 5 ) & 0x3F ) << 2, b0 = ( color0Data & 0x1F ) << 3;
+                    int r1 = ( ( color1Data >> 11 ) & 0x1F ) << 3, g1 = ( ( color1Data >> 5 ) & 0x3F ) << 2, b1 = ( color1Data & 0x1F ) << 3;
 
-                    Color[] colorPalette = new Color[]
-                    {
-                        new( colors0[0]                                  / 255f, colors0[1]                                  / 255f, colors0[2]                                  / 255f ),
-                        new( colors1[0]                                  / 255f, colors1[1]                                  / 255f, colors1[2]                                  / 255f ),
-                        new( ( ( colors0[0] * 2 + colors1[0] + 1 ) / 3 ) / 255f, ( ( colors0[1] * 2 + colors1[1] + 1 ) / 3 ) / 255f, ( ( colors0[2] * 2 + colors1[2] + 1 ) / 3 ) / 255f ),
-                        new( ( ( colors1[0] * 2 + colors0[0] + 1 ) / 3 ) / 255f, ( ( colors1[1] * 2 + colors0[1] + 1 ) / 3 ) / 255f, ( ( colors1[2] * 2 + colors0[2] + 1 ) / 3 ) / 255f )
-                    };
-
-                    if( color0Data < color1Data )
-                    {
-                        colorPalette[2] = new Color( ( ( colors0[0] + colors1[0] ) / 2 ) / 255f, ( ( colors0[1] + colors1[1] ) / 2 ) / 255f, ( ( colors0[2] + colors1[2] ) / 2 ) / 255f );
-                        colorPalette[3] = new Color( ( ( colors1[0] * 2 + colors0[0] + 1 ) / 3 ) / 255f, ( ( colors1[1] * 2 + colors0[1] + 1 ) / 3 ) / 255f,
-                                                     ( ( colors1[2] * 2 + colors0[2] + 1 ) / 3 ) / 255f );
-                    }
+                    var palette0 = new Color( r0 / 255f, g0 / 255f, b0 / 255f );
+                    var palette1 = new Color( r1 / 255f, g1 / 255f, b1 / 255f );
+                    var palette2 = ( color0Data < color1Data )
+                        ? new Color( ( ( r0 + r1 ) / 2 ) / 255f, ( ( g0 + g1 ) / 2 ) / 255f, ( ( b0 + b1 ) / 2 ) / 255f )
+                        : new Color( ( ( r0 * 2 + r1 + 1 ) / 3 ) / 255f, ( ( g0 * 2 + g1 + 1 ) / 3 ) / 255f, ( ( b0 * 2 + b1 + 1 ) / 3 ) / 255f );
+                    var palette3 = new Color( ( ( r1 * 2 + r0 + 1 ) / 3 ) / 255f, ( ( g1 * 2 + g0 + 1 ) / 3 ) / 255f, ( ( b1 * 2 + b0 + 1 ) / 3 ) / 255f );
 
                     int blockIndex = 0;
                     for( int blockY = 0; blockY < 4; blockY++ )
                     {
                         for( int blockX = 0; blockX < 4; blockX++ )
                         {
-                            Color colorInBlock = colorPalette[( bitmask & ( 0x03 << blockIndex * 2 ) ) >> blockIndex * 2];
+                            var colorInBlock = ( ( bitmask >> ( blockIndex * 2 ) ) & 0x03 ) switch
+                            {
+                                0 => palette0,
+                                1 => palette1,
+                                2 => palette2,
+                                _ => palette3,
+                            };
                             texture2DColors[( ( row * width ) + col ) + ( ( blockY * width ) + blockX )] = colorInBlock;
                             blockIndex++;
                         }
                     }
                 }
             }
-
-            return texture2DColors.ToArray();
         }
 
 		// from: https://github.com/Benjamin-Dobell/s3tc-dxt-decompression by Benjamin Dobell
@@ -381,6 +348,41 @@ namespace Chisel.Import.Source.VPKTools
 
 			uint code = (uint)blockStorage[12] | ((uint)blockStorage[13] << 8) | ((uint)blockStorage[14] << 16) | ((uint)blockStorage[15] << 24);
 
+			// The block's eight alphas and four colours, each worked out once rather than for every pixel that has it
+			Span<float> alphas = stackalloc float[8];
+			for (uint alphaCode = 0; alphaCode < 8; alphaCode++)
+			{
+				byte finalAlpha;
+				if (alphaCode == 0)
+				{
+					finalAlpha = alpha0;
+				}
+				else if (alphaCode == 1)
+				{
+					finalAlpha = alpha1;
+				}
+				else
+				{
+					if (alpha0 > alpha1)
+					{
+						finalAlpha = (byte)(((8 - alphaCode) * alpha0 + (alphaCode - 1) * alpha1) / 7);
+					}
+					else
+					{
+						if (alphaCode == 6)
+							finalAlpha = 0;
+						else if (alphaCode == 7)
+							finalAlpha = 255;
+						else
+							finalAlpha = (byte)(((6 - alphaCode) * alpha0 + (alphaCode - 1) * alpha1) / 5);
+					}
+				}
+				alphas[(int)alphaCode] = finalAlpha / 255.0f;
+			}
+			Span<float> reds   = stackalloc float[4] { r0 / 255.0f, r1 / 255.0f, ((2 * r0 + r1) / 3) / 255.0f, ((r0 + 2 * r1) / 3) / 255.0f };
+			Span<float> greens = stackalloc float[4] { g0 / 255.0f, g1 / 255.0f, ((2 * g0 + g1) / 3) / 255.0f, ((g0 + 2 * g1) / 3) / 255.0f };
+			Span<float> blues  = stackalloc float[4] { b0 / 255.0f, b1 / 255.0f, ((2 * b0 + b1) / 3) / 255.0f, ((b0 + 2 * b1) / 3) / 255.0f };
+
             for (int j = 0; j < 4; j++)
             {
                 for (int i = 0; i < 4; i++)
@@ -401,53 +403,10 @@ namespace Chisel.Import.Source.VPKTools
                         alphaCode = (alphaCode1 >> (alphaCodeIndex - 16)) & 0x07;
                     }
 
-					byte finalAlpha;
-                    if (alphaCode == 0)
-                    {
-                        finalAlpha = alpha0;
-                    }
-                    else if (alphaCode == 1)
-                    {
-                        finalAlpha = alpha1;
-                    }
-                    else
-                    {
-                        if (alpha0 > alpha1)
-                        {
-                            finalAlpha = (byte)(((8 - alphaCode) * alpha0 + (alphaCode - 1) * alpha1) / 7);
-                        }
-                        else
-                        {
-                            if (alphaCode == 6)
-                                finalAlpha = 0;
-                            else if (alphaCode == 7)
-                                finalAlpha = 255;
-                            else
-                                finalAlpha = (byte)(((6 - alphaCode) * alpha0 + (alphaCode - 1) * alpha1) / 5);
-                        }
-                    }
-
-                    byte colorCode = (byte)((code >> 2 * (4 * j + i)) & 0x03);
-
-                    Color finalColor = Color.black;
-                    switch (colorCode)
-                    {
-                        case 0:
-                            finalColor = new Color(r0 / 255.0f, g0 / 255.0f, b0 / 255.0f, finalAlpha / 255.0f);
-                            break;
-                        case 1:
-                            finalColor = new Color(r1 / 255.0f, g1 / 255.0f, b1 / 255.0f, finalAlpha / 255.0f);
-                            break;
-                        case 2:
-                            finalColor = new Color(((2 * r0 + r1) / 3) / 255.0f, ((2 * g0 + g1) / 3) / 255.0f, ((2 * b0 + b1) / 3) / 255.0f, finalAlpha / 255.0f);
-                            break;
-                        case 3:
-                            finalColor = new Color(((r0 + 2 * r1) / 3) / 255.0f, ((g0 + 2 * g1) / 3) / 255.0f, ((b0 + 2 * b1) / 3) / 255.0f, finalAlpha / 255.0f);
-                            break;
-                    }
+                    int colorCode = (int)((code >> 2 * (4 * j + i)) & 0x03);
 
                     if (x + i < width)
-                        image[(y + j)*width + (x + i)] = finalColor;
+                        image[(y + j)*width + (x + i)] = new Color(reds[colorCode], greens[colorCode], blues[colorCode], alphas[(int)alphaCode]);
                 }
             }
         }
@@ -461,8 +420,8 @@ namespace Chisel.Import.Source.VPKTools
         /// <returns>Pixel color data</returns>
         public static Color[] DecompressDXT5( Stream data, int width, int height, uint dataSize)
 		{
-			var byteBuffer = new byte[dataSize];
-			data.Read(byteBuffer, 0, byteBuffer.Length);
+			// All of it: one Read may hand over less than asked for, and what it left was decoded as zeros
+			var byteBuffer = ReadImageBytes(data, dataSize, 0, out _);
 
 			int blockCountX = (width + 3) / 4;
 			int blockCountY = (height + 3) / 4;
