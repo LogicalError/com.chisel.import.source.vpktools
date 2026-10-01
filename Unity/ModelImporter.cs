@@ -382,9 +382,10 @@ namespace Chisel.Import.Source.VPKTools
 		/// of them first, in one MaterialImporter.ImportAll (one refresh for their textures, one for themselves); then every
 		/// model file that has to be written is written with its .meta (ImportOnce's writing) and all of them are imported in
 		/// ONE asset-editing block, where each took a refresh of its own;
-		/// then what follows a model file's import: its skins' variants. The animation a model shares with others is written
-		/// before the block, which a refresh it takes may import a model file early for, as written: one imported since is
-		/// not imported twice.
+		/// then what follows a model file's import: its skins' variants, all of them saved in one block more
+		/// (<see cref="SaveSkinVariants"/>; 73 refreshes of their own on that map). The animation a model shares with others is
+		/// written before the block, which a refresh it takes may import a model file early for, as written: one imported
+		/// since is not imported twice.
 		/// <para>
 		/// A model is read where it is needed and let go of again: kept, every model of a map would be in memory at once. One
 		/// whose files do not read comes back null; one current and still as written comes back as it is.
@@ -454,8 +455,21 @@ namespace Chisel.Import.Source.VPKTools
 			}
 			ImportWritten(aheads);
 
+			// What every model file imported comes out as, its skins' variants saved together
+			var files = new List<SkinnedFile>();
 			foreach (var write in written)
-				results[write.Index] = SkinVariantsOf(write);
+			{
+				var imported = UnityAssets.Load<GameObject>(write.DestinationPath);
+				if (imported == null)
+				{
+					Debug.LogError($"Failed to import the model written to {write.AssetPath}");
+					continue;
+				}
+				files.Add(new SkinnedFile(imported, write.OutputPath, write.Materials, write.Index));
+			}
+			var skinned = SaveSkinVariants(files);
+			for (int f = 0; f < files.Count; f++)
+				results[files[f].Index] = skinned[f];
 			return results;
 		}
 
@@ -612,41 +626,83 @@ namespace Chisel.Import.Source.VPKTools
 			return write;
 		}
 
-		// The prefabs of a model file just imported: the file's, then a variant over it for each further skin
-		static GameObject[] SkinVariantsOf(WrittenModel write)
+		/// <summary>An imported model file whose skins' variants <see cref="SaveSkinVariants"/> saves: where it was written,
+		/// and the materials of its skins.</summary>
+		internal readonly struct SkinnedFile
 		{
-			var imported = UnityAssets.Load<GameObject>(write.DestinationPath);
-			if (imported == null)
+			internal readonly GameObject        Imported;
+			internal readonly string            OutputPath;
+			internal readonly MdlModelMaterials Materials;
+			/// <summary>Which of ImportAll's requests it is for.</summary>
+			internal readonly int               Index;
+
+			internal SkinnedFile(GameObject imported, string outputPath, MdlModelMaterials materials, int index = 0)
 			{
-				Debug.LogError($"Failed to import the model written to {write.AssetPath}");
-				return null;
+				Imported   = imported;
+				OutputPath = outputPath;
+				Materials  = materials;
+				Index      = index;
 			}
+		}
 
-			var modelMaterials = write.Materials;
-			var haveMultipleSkins = modelMaterials.skins != null && modelMaterials.skins.Length > 0;
-			if (!haveMultipleSkins)
-				return new GameObject[1] { imported };
-			var defaultSkin = (modelMaterials.skins[0] == null) ? modelMaterials : modelMaterials.skins[0];
-
-			// One file, one mesh - the skins differ only in which materials the renderers use, so the
-			// rest become prefab variants over the imported model instead of copies of it.
-			var results = new GameObject[modelMaterials.skins.Length];
-			results[0] = imported;
-			for (int i = 1; i < modelMaterials.skins.Length; i++)
+		/// <summary>
+		/// The prefabs of model files just imported: each file's, then a variant over it for each further skin - every variant
+		/// of every file saved in ONE asset-editing block, where each SaveAsPrefabAsset was a refresh of its own
+		///. Inside the block a variant is written, not imported, so each
+		/// is loaded once the block has ended. A skin a variant could not be made for is null, as before.
+		/// </summary>
+		internal static GameObject[][] SaveSkinVariants(IReadOnlyList<SkinnedFile> files)
+		{
+			var results = new GameObject[files.Count][];
+			var saved = new List<(int file, int skin, string assetPath)>();
+			AssetDatabase.StartAssetEditing();
+			try
 			{
-				if (modelMaterials.skins[i] == null)
-					continue;
+				for (int f = 0; f < files.Count; f++)
+				{
+					var imported = files[f].Imported;
+					var modelMaterials = files[f].Materials;
+					var haveMultipleSkins = modelMaterials?.skins != null && modelMaterials.skins.Length > 0;
+					if (imported == null || !haveMultipleSkins)
+					{
+						results[f] = (imported == null) ? null : new GameObject[1] { imported };
+						continue;
+					}
+					var defaultSkin = (modelMaterials.skins[0] == null) ? modelMaterials : modelMaterials.skins[0];
 
-				var instance = PrefabUtility.InstantiatePrefab(imported) as GameObject;
-				if (instance == null)
-					continue;
+					// One file, one mesh - the skins differ only in which materials the renderers use, so the
+					// rest become prefab variants over the imported model instead of copies of it.
+					results[f] = new GameObject[modelMaterials.skins.Length];
+					results[f][0] = imported;
+					for (int i = 1; i < modelMaterials.skins.Length; i++)
+					{
+						if (modelMaterials.skins[i] == null)
+							continue;
 
-				ApplySkinVariant(instance, defaultSkin, modelMaterials.skins[i]);
-				var skinPath = SkinVariantPath(write.OutputPath, i);
-				PrefabUtility.SaveAsPrefabAsset(instance, UnityAssets.GetAssetPath(skinPath));
-				GameObject.DestroyImmediate(instance);
-				results[i] = UnityAssets.Load<GameObject>(skinPath);
+						var instance = PrefabUtility.InstantiatePrefab(imported) as GameObject;
+						if (instance == null)
+							continue;
+
+						try
+						{
+							ApplySkinVariant(instance, defaultSkin, modelMaterials.skins[i]);
+							var assetPath = UnityAssets.GetAssetPath(SkinVariantPath(files[f].OutputPath, i)).Replace('\\', '/');
+							PrefabUtility.SaveAsPrefabAsset(instance, assetPath);
+							saved.Add((f, i, assetPath));
+						}
+						finally
+						{
+							GameObject.DestroyImmediate(instance);
+						}
+					}
+				}
 			}
+			finally
+			{
+				AssetDatabase.StopAssetEditing();
+			}
+			foreach (var (f, i, assetPath) in saved)
+				results[f][i] = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
 			return results;
 		}
 
