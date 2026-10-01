@@ -223,10 +223,11 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// Starts a texture census, which ends when it is disposed. Until then, a texture ImportVTF is asked for that has to be
-		/// written is written ahead of its import (Texture2DImporter.WriteAhead) and the asker is handed stand-ins for it;
-		/// ending the census imports every one of them in ONE refresh, where each took one of its own as it was asked for
-		/// (about 0.12 s apiece in this project). MaterialImporter.ImportAll builds its materials once under a census, for the
-		/// textures they ask for, and then again for real.
+		/// written is written ahead of its import (Texture2DImporter.WriteAhead) and the asker is handed stand-ins for it, and
+		/// so is a mask ImportAlphaMask has to write (Texture2DImporter.WriteAlphaMaskAhead); ending the census imports every
+		/// one of them in ONE refresh, where each took one of its own as it was asked for (about 0.12 s apiece in this
+		/// project). MaterialImporter.ImportAll builds its materials once under a census, for the textures they ask for, and
+		/// then again for real.
 		/// </summary>
 		internal TextureCensus BeginTextureCensus()
 		{
@@ -243,6 +244,8 @@ namespace Chisel.Import.Source.VPKTools
 			readonly GameResources owner;
 			readonly List<Texture2DImporter.Ahead> written = new();
 			readonly Dictionary<GameEntry, (TextureClaim claim, Texture2DImporter.Ahead ahead)> byEntry = new();
+			// The masks written ahead, by the texture whose alpha they are
+			readonly Dictionary<GameEntry, Texture2DImporter.Ahead> alphaMasks = new();
 
 			internal TextureCensus(GameResources owner) => this.owner = owner;
 
@@ -282,12 +285,32 @@ namespace Chisel.Import.Source.VPKTools
 				return ahead.StandIns;
 			}
 
-			/// <summary>Imports every texture written ahead so far, in one refresh.</summary>
+			/// <summary>A mask written ahead earlier in this census, from this texture's alpha: its stand-in.</summary>
+			internal bool TryTakeAlphaMask(GameEntry entry, out Texture2D standIn)
+			{
+				standIn = alphaMasks.TryGetValue(entry, out var ahead) ? ahead.StandIns[0] : null;
+				return standIn != null;
+			}
+
+			/// <summary>Writes a mask of the texture's alpha ahead, and returns its stand-in; null when it cannot be (the asker
+			/// imports it now, or there is no alpha to take).</summary>
+			internal Texture2D WriteAlphaMaskAhead(GameEntry entry, VTF sourceTexture, string outputPath)
+			{
+				var ahead = Texture2DImporter.WriteAlphaMaskAhead(sourceTexture, outputPath);
+				if (ahead == null)
+					return null;
+				written.Add(ahead);
+				alphaMasks[entry] = ahead;
+				return ahead.StandIns[0];
+			}
+
+			/// <summary>Imports every texture and mask written ahead so far, in one refresh.</summary>
 			internal void ImportWritten()
 			{
 				var aheads = written.ToArray();
 				written.Clear();
 				byEntry.Clear();
+				alphaMasks.Clear();
 				Texture2DImporter.ImportAhead(aheads);
 			}
 
@@ -384,7 +407,19 @@ namespace Chisel.Import.Source.VPKTools
 			var reusable = Texture2DImporter.ReusableAlphaMask(outputPath);
 			if (reusable != null)
 				return reusable;
-			return Texture2DImporter.ImportAlphaMask(LoadVTF(entry), outputPath);
+			// Written ahead earlier in a texture census: its stand-in
+			if (textureCensus != null && textureCensus.TryTakeAlphaMask(entry, out var standIn))
+				return standIn;
+			var sourceTexture = LoadVTF(entry);
+			// In a texture census it is written now and imported with the textures when the census ends; without a template
+			// yet, it is imported now, and is the template for the next
+			if (textureCensus != null)
+			{
+				standIn = textureCensus.WriteAlphaMaskAhead(entry, sourceTexture, outputPath);
+				if (standIn != null)
+					return standIn;
+			}
+			return Texture2DImporter.ImportAlphaMask(sourceTexture, outputPath);
 		}
 
 

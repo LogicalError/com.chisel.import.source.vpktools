@@ -32,13 +32,24 @@ namespace Chisel.Import.Source.VPKTools
 			NormalMap,
 			/// <summary>A model file (.fbx) owned by Unity's ModelImporter: a model or a shared animation.</summary>
 			Model,
+			/// <summary>
+			/// A mask written from a texture's alpha (Texture2DImporter.WriteAlphaMask), a .png owned by Unity's TextureImporter:
+			/// its defaults but for what makes it data. Every one has the same .meta but for its GUID
+			/// .
+			/// </summary>
+			AlphaMask,
 		}
 
 		// Where the templates are looked for: the assets of that kind this importer wrote before, in the folder it writes to
 		static string FolderOf(Kind kind) => TemplateFolderOverride ??
 			Path.Combine(Application.dataPath, PackagePath.OutputRoot, kind == Kind.Model ? kModelSubPath : PackagePath.TextureSubPath);
 
-		static string PatternOf(Kind kind) => kind == Kind.Model ? "*.fbx.meta" : "*.png.meta";
+		static string PatternOf(Kind kind) => kind switch
+		{
+			Kind.Model     => "*.fbx.meta",
+			Kind.AlphaMask => "*" + Texture2DImporter.kAlphaMaskSuffix + ".png.meta",
+			_              => "*.png.meta",
+		};
 
 		// Where Source's models land: their entry names all begin with "models/"
 		const string kModelSubPath = "models";
@@ -114,6 +125,12 @@ namespace Chisel.Import.Source.VPKTools
 					return metaText.Contains("\nModelImporter:") &&
 						   (metaText.Contains(GeneratedAssetVersion.Token(ModelImporter.ModelVersion.generator, ModelImporter.ModelVersion.version)) ||
 							metaText.Contains(GeneratedAssetVersion.Token(ModelImporter.AnimationVersion.generator, ModelImporter.AnimationVersion.version)));
+				case Kind.AlphaMask:
+					// As Texture2DImporter.AlphaMaskImportedAsWritten holds a mask to: data, never claimed as anything else
+					return metaText.Contains("\nTextureImporter:") &&
+						   metaText.Contains(GeneratedAssetVersion.Token(Texture2DImporter.AlphaMaskVersion.generator, Texture2DImporter.AlphaMaskVersion.version)) &&
+						   Regex.IsMatch(metaText, @"(?m)^  textureType: 0\r?$") && Regex.IsMatch(metaText, @"(?m)^    sRGBTexture: 0\r?$") &&
+						   Regex.IsMatch(metaText, @"(?m)^  alphaUsage: 0\r?$") && Regex.IsMatch(metaText, @"(?m)^  alphaIsTransparency: 0\r?$");
 				default:
 					return false;
 			}

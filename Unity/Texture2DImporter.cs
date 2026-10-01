@@ -247,6 +247,9 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			internal string[] AssetPaths;
 			internal TextureClaim Claim;
+			/// <summary>A mask written from another texture's alpha (<see cref="WriteAlphaMaskMeta"/>): one frame, data.</summary>
+			internal bool IsAlphaMask;
+			internal string AlphaMaskUserData;
 			internal string NormalUserData;
 			internal GeneratedMeta.NormalMapSampling NormalSampling;
 			internal GeneratedMeta.SourceTextureSettings[] SourceSettings;
@@ -257,7 +260,7 @@ namespace Chisel.Import.Source.VPKTools
 			internal bool IsNormalMap(int frame) => frame == 0 && Claim.NormalMap;
 
 			/// <summary>The userData frame <paramref name="frame"/>'s .meta was written with, which its import reads.</summary>
-			internal string UserData(int frame) => IsNormalMap(frame) ? NormalUserData : SourceUserData[frame];
+			internal string UserData(int frame) => IsAlphaMask ? AlphaMaskUserData : IsNormalMap(frame) ? NormalUserData : SourceUserData[frame];
 
 			/// <summary>
 			/// Frame <paramref name="frame"/> has been imported since it was written, as written: its importer holds the
@@ -273,7 +276,9 @@ namespace Chisel.Import.Source.VPKTools
 			/// <summary>Frame <paramref name="frame"/>'s import came out as its .meta said, or is made to.</summary>
 			internal void Repair(int frame)
 			{
-				if (IsNormalMap(frame))
+				if (IsAlphaMask)
+					RepairAlphaMask(AssetPaths[frame], AlphaMaskUserData);
+				else if (IsNormalMap(frame))
 					RepairNormalMap(AssetPaths[frame], NormalUserData, NormalSampling);
 				else
 					RepairSourceTexture(AssetPaths[frame], SourceSettings[frame], SourceUserData[frame]);
@@ -432,8 +437,9 @@ namespace Chisel.Import.Source.VPKTools
 		}
 
 		/// <summary>
-		/// Imports the textures written ahead (<see cref="WriteAhead"/>) in ONE asset-editing block, puts right what did not
-		/// come out as written (as ImportOnce does), lets the stand-ins go, and returns each one's imported frames.
+		/// Imports the textures written ahead (<see cref="WriteAhead"/>, <see cref="WriteAlphaMaskAhead"/>) in ONE asset-editing
+		/// block, puts right what did not come out as written (as ImportOnce does), lets the stand-ins go, and returns each
+		/// one's imported frames.
 		/// <para>
 		/// A refresh in between - a build importing a cubemap or an alpha mask, say - imports whatever new files it comes
 		/// across, a texture written ahead among them, as written, its .meta being there: one that has been imported since
@@ -650,13 +656,42 @@ namespace Chisel.Import.Source.VPKTools
 		/// </summary>
 		public static Texture2D ImportAlphaMask(VTF sourceTexture, string outputPath)
 		{
-			if (sourceTexture == null || !sourceTexture.HasAlpha ||
-				sourceTexture.Frames == null || sourceTexture.Frames.Length == 0 ||
-				sourceTexture.Frames[0].Pixels == null)
+			if (!HasAlphaMask(sourceTexture))
 				return null;
 
 			return WriteAlphaMask(AlphaAsMask(sourceTexture.Frames[0].Pixels),
 								  sourceTexture.Width, sourceTexture.Height, outputPath);
+		}
+
+		/// <summary>Whether the texture has an alpha channel to write a mask from (<see cref="ImportAlphaMask"/>).</summary>
+		internal static bool HasAlphaMask(VTF sourceTexture)
+		{
+			return sourceTexture != null && sourceTexture.HasAlpha &&
+				   sourceTexture.Frames != null && sourceTexture.Frames.Length > 0 && sourceTexture.Frames[0].Pixels != null;
+		}
+
+		/// <summary>
+		/// Writes a texture's alpha as a mask as <see cref="ImportAlphaMask"/> would - its .png and its .meta - without importing
+		/// it, for <see cref="ImportAhead"/> to import with the textures written ahead: in a texture census, a build that asks
+		/// for a mask (a phong or environment-map mask in a normal map's alpha) took two refreshes of its own for it
+		///. Its stand-in is a texture that is no asset: a build only asks
+		/// whether there is a mask. Null when it cannot be written ahead - no alpha, or no template yet for its .meta - with
+		/// nothing written; ImportAlphaMask then takes it, now.
+		/// </summary>
+		internal static Ahead WriteAlphaMaskAhead(VTF sourceTexture, string outputPath)
+		{
+			if (!ImportOnceEnabled || !HasAlphaMask(sourceTexture) || GeneratedMeta.Template(GeneratedMeta.Kind.AlphaMask) == null)
+				return null;
+			var assetPath = WriteAlphaMaskFile(AlphaAsMask(sourceTexture.Frames[0].Pixels), sourceTexture.Width, sourceTexture.Height, outputPath);
+			var written = WriteAlphaMaskMeta(assetPath);
+			if (written == null)
+				return null;
+			var standIn = new Texture2D(4, 4, TextureFormat.RGBA32, mipChain: false, linear: true)
+			{
+				name      = Path.GetFileNameWithoutExtension(assetPath),
+				hideFlags = HideFlags.HideAndDontSave,
+			};
+			return new Ahead { Written = written, StandIns = new[] { standIn } };
 		}
 
 		/// <summary>
@@ -697,33 +732,88 @@ namespace Chisel.Import.Source.VPKTools
 			return null;
 		}
 
-		/// <summary>Writes mask pixels beside the texture they came from, and imports them as data.</summary>
+		/// <summary>
+		/// Writes mask pixels beside the texture they came from, and imports them as data: ONCE, its .meta written first
+		/// (<see cref="WriteAlphaMaskMeta"/>), where the slow way takes two imports, each its own refresh - Unity's defaults,
+		/// then <see cref="ConfigureAlphaMask"/>'s - which it still does while there is no mask yet to write the .meta from.
+		/// </summary>
 		internal static Texture2D WriteAlphaMask(Color[] pixels, int width, int height, string outputPath)
 		{
 			var reusable = ReusableAlphaMask(outputPath);
 			if (reusable != null)
 				return reusable;
 
+			var assetPath = WriteAlphaMaskFile(pixels, width, height, outputPath);
+			var written = WriteAlphaMaskMeta(assetPath);
+			if (written != null)
+			{
+				AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+				written.Repair(0);
+				return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+			}
+
+			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUncompressedImport);
+			ConfigureAlphaMask(assetPath);
+			return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+		}
+
+		// The mask's pixels as a .png beside the texture they came from - over the one written before, which keeps its .meta
+		// and so its GUID; its asset path
+		static string WriteAlphaMaskFile(Color[] pixels, int width, int height, string outputPath)
+		{
 			var destinationPath = Path.ChangeExtension(outputPath, null) + kAlphaMaskSuffix + ".png";
 			PackagePath.EnsureDirectoriesExist(destinationPath);
 			File.WriteAllBytes(destinationPath, ImageConversion.EncodeArrayToPNG(
 				pixels, UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat, (uint)width, (uint)height));
+			return UnityAssets.GetAssetPath(destinationPath).Replace('\\', '/');
+		}
 
-			var assetPath = UnityAssets.GetAssetPath(destinationPath);
-			AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUncompressedImport);
-			if (AssetImporter.GetAtPath(assetPath) is TextureImporter textureImporter)
+		/// <summary>
+		/// The .meta of a mask just written, before its import: a template Unity wrote for another mask
+		/// (<see cref="GeneratedMeta.Kind.AlphaMask"/>), with this one's GUID and stamp, so the one import is the last one.
+		/// Null, with nothing written, when there is no template yet.
+		/// </summary>
+		static Written WriteAlphaMaskMeta(string assetPath)
+		{
+			if (!ImportOnceEnabled)
+				return null;
+			var template = GeneratedMeta.Template(GeneratedMeta.Kind.AlphaMask);
+			if (template == null)
+				return null;
+			var existing = AssetImporter.GetAtPath(assetPath);
+			var userData = GeneratedAssetVersion.Stamp(existing?.userData, GeneratedVersion, AlphaMaskVersion);
+			GeneratedMeta.Write(assetPath, GeneratedMeta.Fill(template, GeneratedMeta.GuidFor(assetPath), userData));
+			return new Written
 			{
-				// A mask is data, not colour: read as sRGB, every value but 0 and 1 comes out wrong. It
-				// carries no alpha of its own - the mask is in the colour channels - and it is never a normal
-				// map, whichever slot ends up naming it.
-				textureImporter.textureType         = TextureImporterType.Default;
-				textureImporter.sRGBTexture         = false;
-				textureImporter.alphaSource         = TextureImporterAlphaSource.None;
-				textureImporter.alphaIsTransparency = false;
-				textureImporter.userData = GeneratedAssetVersion.Stamp(textureImporter.userData, GeneratedVersion, AlphaMaskVersion);
-				textureImporter.SaveAndReimport();
-			}
-			return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+				AssetPaths        = new[] { assetPath },
+				IsAlphaMask       = true,
+				AlphaMaskUserData = userData,
+				PreviousUserData  = new[] { existing?.userData },
+			};
+		}
+
+		// A mask's import came out as its .meta said - data, stamped - or is made to, through the importer
+		static void RepairAlphaMask(string assetPath, string userData)
+		{
+			if (AlphaMaskImportedAsWritten(assetPath) && AssetImporter.GetAtPath(assetPath).userData == userData)
+				return;
+			SayRepaired(assetPath, "an alpha mask's settings");
+			ConfigureAlphaMask(assetPath);
+		}
+
+		// What makes a mask imported with Unity's defaults data, and its stamp; imported again
+		static void ConfigureAlphaMask(string assetPath)
+		{
+			if (AssetImporter.GetAtPath(assetPath) is not TextureImporter textureImporter)
+				return;
+			// A mask is data, not colour: read as sRGB, every value but 0 and 1 comes out wrong. It carries no alpha of its
+			// own - the mask is in the colour channels - and it is never a normal map, whichever slot ends up naming it.
+			textureImporter.textureType         = TextureImporterType.Default;
+			textureImporter.sRGBTexture         = false;
+			textureImporter.alphaSource         = TextureImporterAlphaSource.None;
+			textureImporter.alphaIsTransparency = false;
+			textureImporter.userData = GeneratedAssetVersion.Stamp(textureImporter.userData, GeneratedVersion, AlphaMaskVersion);
+			textureImporter.SaveAndReimport();
 		}
 
 		public static Cubemap ImportSkybox(VTF frontVTF, VTF backVTF, VTF upVTF, VTF downVTF, VTF leftVTF, VTF rightVTF, string outputPath)
