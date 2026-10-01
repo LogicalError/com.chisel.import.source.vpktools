@@ -120,21 +120,10 @@ namespace Chisel.Import.Source.VPKTools
 				texture.SetPixelData(levels[level], level);
 			texture.Apply(updateMipmaps: false, makeNoLongerReadable: false);
 
-			if (compress)
-			{
-				// Alpha decides the format exactly as Unity's own importer would: a texture with no alpha
-				// spends half the memory in DXT1. Every level is compressed, not just level 0.
-				bool hasAlpha = false;
-				foreach (var texel in levels[0])
-				{
-					if (texel.a == 255)
-						continue;
-					hasAlpha = true;
-					break;
-				}
-				EditorUtility.CompressTexture(texture, hasAlpha ? TextureFormat.DXT5 : TextureFormat.DXT1,
-											  TextureCompressionQuality.Normal);
-			}
+			// Every level is compressed, not just level 0
+			var format = FormatOf(levels[0], width, height, compress);
+			if (format != TextureFormat.RGBA32)
+				EditorUtility.CompressTexture(texture, format, TextureCompressionQuality.Normal);
 
 			texture.name       = Path.GetFileNameWithoutExtension(ctx.assetPath);
 			texture.filterMode = filterMode;
@@ -145,6 +134,28 @@ namespace Chisel.Import.Source.VPKTools
 
 			ctx.AddObjectToAsset("texture", texture);
 			ctx.SetMainObject(texture);
+		}
+
+		/// <summary>
+		/// The format a texture is imported in. Compressed, alpha decides it exactly as Unity's own importer would: DXT5 with
+		/// alpha, and DXT1, half the memory, without. But DXT works in blocks of 4x4 texels, and a texture whose sides are not
+		/// both a multiple of 4 cannot be compressed: it stays RGBA32. Compressing it anyway failed with an error on every
+		/// import (2x2 textures such as hand_dryer_button) and left it RGBA32 just the same.
+		/// <para>
+		/// Texture2DImporter's texture census asks this of a texture it has written but not yet imported, so a material built
+		/// meanwhile reads the format the import is going to make.
+		/// </para>
+		/// </summary>
+		internal static TextureFormat FormatOf(Color32[] level0, int width, int height, bool compress)
+		{
+			if (!compress || width % 4 != 0 || height % 4 != 0)
+				return TextureFormat.RGBA32;
+			foreach (var texel in level0)
+			{
+				if (texel.a != 255)
+					return TextureFormat.DXT5;
+			}
+			return TextureFormat.DXT1;
 		}
 	}
 }

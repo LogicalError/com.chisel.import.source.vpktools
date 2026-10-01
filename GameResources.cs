@@ -190,6 +190,9 @@ namespace Chisel.Import.Source.VPKTools
 			if (entry.extension != PackagePath.ExtensionVTF)
 				return null;
 			var outputPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname));
+			// Written ahead earlier in a texture census: its stand-ins, or for another claim the texture itself
+			if (textureCensus != null && textureCensus.TryTake(entry, claim, out var taken))
+				return taken;
 			// A texture imported earlier is taken on its header alone; the pixels are only read to write it. Every material
 			// that is built reads its textures, and most of them are current: a version bump rebuilds every material.
 			var header = LoadVTFHeader(entry);
@@ -201,7 +204,111 @@ namespace Chisel.Import.Source.VPKTools
 			var sourceTexture = LoadVTF(entry);
 			if (sourceTexture == null)
 				return null;
+			// In a texture census it is written now and imported with every other one when the census ends
+			if (textureCensus != null)
+			{
+				var standIns = textureCensus.WriteAhead(entry, sourceTexture, outputPath, claim);
+				if (standIns != null)
+					return standIns;
+			}
 			return Texture2DImporter.Import(sourceTexture, outputPath, claim);
+		}
+
+		// While a texture census runs (BeginTextureCensus), what ImportVTF has to write it writes ahead of the import
+		TextureCensus textureCensus;
+
+		/// <summary>
+		/// Starts a texture census, which ends when it is disposed. Until then, a texture ImportVTF is asked for that has to be
+		/// written is written ahead of its import (Texture2DImporter.WriteAhead) and the asker is handed stand-ins for it;
+		/// ending the census imports every one of them in ONE refresh, where each took one of its own as it was asked for
+		/// (about 0.12 s apiece in this project). MaterialImporter.ImportAll builds its materials once under a census, for the
+		/// textures they ask for, and then again for real.
+		/// </summary>
+		internal TextureCensus BeginTextureCensus()
+		{
+			if (textureCensus != null)
+				throw new InvalidOperationException("a texture census is running already");
+			// What a build claims of a texture is left for the build made for real afterwards (Texture2DImporter.ClaimsDeferred)
+			Texture2DImporter.ClaimsDeferred = true;
+			return textureCensus = new TextureCensus(this);
+		}
+
+		/// <summary>See <see cref="BeginTextureCensus"/>.</summary>
+		internal sealed class TextureCensus : IDisposable
+		{
+			readonly GameResources owner;
+			readonly List<Texture2DImporter.Ahead> written = new();
+			readonly Dictionary<GameEntry, (TextureClaim claim, Texture2DImporter.Ahead ahead)> byEntry = new();
+
+			internal TextureCensus(GameResources owner) => this.owner = owner;
+
+			/// <summary>How many textures it has written ahead that are not imported yet.</summary>
+			internal int Pending => written.Count;
+
+			/// <summary>
+			/// A texture written ahead earlier in this census, as a build asking for it now would meet it: as written, its
+			/// claim comes after (Texture2DImporter.ClaimsDeferred) - its stand-ins, which answer what the import of what was
+			/// written is going to answer. Except one written as a normal map, whose import is Unity's own importer's and whose
+			/// stand-in answers nothing: asked for with another claim, it is imported now, as written.
+			/// </summary>
+			internal bool TryTake(GameEntry entry, TextureClaim claim, out Texture2D[] textures)
+			{
+				textures = null;
+				if (!byEntry.TryGetValue(entry, out var found))
+					return false;
+				if (SameClaim(found.claim, claim) || !found.claim.NormalMap)
+				{
+					textures = found.ahead.StandIns;
+					return true;
+				}
+				byEntry.Remove(entry);
+				written.Remove(found.ahead);
+				textures = Texture2DImporter.ImportAhead(new[] { found.ahead })[0];
+				return true;
+			}
+
+			/// <summary>Writes the texture ahead, and returns its stand-ins; null when it cannot be (the asker imports it now).</summary>
+			internal Texture2D[] WriteAhead(GameEntry entry, VTF sourceTexture, string outputPath, TextureClaim claim)
+			{
+				var ahead = Texture2DImporter.WriteAhead(sourceTexture, outputPath, claim);
+				if (ahead == null)
+					return null;
+				written.Add(ahead);
+				byEntry[entry] = (claim, ahead);
+				return ahead.StandIns;
+			}
+
+			/// <summary>Imports every texture written ahead so far, in one refresh.</summary>
+			internal void ImportWritten()
+			{
+				var aheads = written.ToArray();
+				written.Clear();
+				byEntry.Clear();
+				Texture2DImporter.ImportAhead(aheads);
+			}
+
+			// What was written is imported however the census ends: a .png left behind would be imported by whichever
+			// refresh came across it next
+			public void Dispose()
+			{
+				try
+				{
+					if (written.Count > 0)
+						ImportWritten();
+				}
+				finally
+				{
+					if (owner.textureCensus == this)
+					{
+						owner.textureCensus = null;
+						Texture2DImporter.ClaimsDeferred = false;
+					}
+				}
+			}
+
+			static bool SameClaim(TextureClaim a, TextureClaim b) =>
+				a.Color == b.Color && a.NormalMap == b.NormalMap && a.SelfShadowed == b.SelfShadowed &&
+				a.AlphaTestReference == b.AlphaTestReference;
 		}
 
 

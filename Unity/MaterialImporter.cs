@@ -242,7 +242,14 @@ namespace Chisel.Import.Source.VPKTools
 		/// written in ONE asset-editing block: one refresh between them, where Import takes one each. In this project a
 		/// refresh costs about 0.12 s besides the import itself
 		/// , and a material version bump rebuilds every material a map uses at its next import,
-		/// over a thousand for the larger maps. The textures a material is built with are imported as it asks for them.
+		/// over a thousand for the larger maps.
+		/// <para>
+		/// The textures they are built with that have to be written are written first, and imported together too: the
+		/// materials are built once under a texture census (<see cref="GameResources.BeginTextureCensus"/>), which writes each
+		/// such texture ahead of its import and hands the build stand-ins for it, then the census imports them in one refresh,
+		/// and the materials are built again, for real, from the textures as imported. A map's first import wrote ~475
+		/// textures one refresh each.
+		/// </para>
 		/// <para>
 		/// The first request for a file decides it, as the first of two Import calls would. A material that cannot be
 		/// written comes back null and is said, so whoever asks for it next tries again on its own.
@@ -254,11 +261,10 @@ namespace Chisel.Import.Source.VPKTools
 			var results = new Material[requests.Count];
 			var first = new Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase);
 			var sameFile = new List<(int index, int firstIndex)>();
-			var created = new List<(int index, Material built, string assetPath)>();
-			var rebuilt = new List<(int index, Material existing, Material rebuilt)>();
+			// What each request comes to is decided first, so the census builds exactly what is built for real
+			var builds = new List<(int index, Material existing, string materialName, string destinationPath)>();
 			for (int i = 0; i < requests.Count; i++)
 			{
-				progress?.Invoke(i, requests.Count);
 				var request = requests[i];
 				if (request.SourceMaterial == null || string.IsNullOrEmpty(request.OutputPath))
 					continue;
@@ -271,7 +277,6 @@ namespace Chisel.Import.Source.VPKTools
 				}
 				first[file] = i;
 
-				var materialName = Path.GetFileNameWithoutExtension(destinationPath);
 				var foundAsset = UnityAssets.Load<Material>(destinationPath);
 				if (foundAsset != null)
 				{
@@ -281,18 +286,31 @@ namespace Chisel.Import.Source.VPKTools
 						continue;
 					if (current)
 						Debug.Log($"{UnityEditor.AssetDatabase.GetAssetPath(foundAsset)} was changed after it was written, so it is written again.");
-					var build = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
-					if (build != null)
-						rebuilt.Add((i, foundAsset, build));
+				}
+				builds.Add((i, foundAsset, Path.GetFileNameWithoutExtension(destinationPath), destinationPath));
+			}
+
+			if (TextureCensusEnabled && builds.Count > 0)
+				CensusTextures(gameResources, requests, builds, progress);
+
+			var created = new List<(int index, Material built, string assetPath)>();
+			var rebuilt = new List<(int index, Material existing, Material rebuilt)>();
+			foreach (var (i, existing, materialName, destinationPath) in builds)
+			{
+				if (!TextureCensusEnabled)
+					progress?.Invoke(i, requests.Count);
+				var request = requests[i];
+				var build = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
+				if (build == null)
+					continue;
+				if (existing != null)
+				{
+					rebuilt.Add((i, existing, build));
 					continue;
 				}
-
-				var built = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
-				if (built == null)
-					continue;
 				PackagePath.EnsureDirectoriesExist(destinationPath);
-				results[i] = built;
-				created.Add((i, built, PackagePath.GetAssetPath(destinationPath).Replace('\\', '/')));
+				results[i] = build;
+				created.Add((i, build, PackagePath.GetAssetPath(destinationPath).Replace('\\', '/')));
 			}
 
 			if (created.Count > 0 || rebuilt.Count > 0)
@@ -338,6 +356,51 @@ namespace Chisel.Import.Source.VPKTools
 			foreach (var (index, firstIndex) in sameFile)
 				results[index] = results[firstIndex];
 			return results;
+		}
+
+		/// <summary>
+		/// Off, <see cref="ImportAll"/> imports the textures as the builds ask for them, one refresh each: what the texture
+		/// census is compared against.
+		/// </summary>
+		public static bool TextureCensusEnabled = true;
+
+		// The builds ImportAll is about to make, made once under a texture census for the textures they ask for, and thrown
+		// away; the census then imports the textures it wrote, all in one refresh
+		static void CensusTextures(GameResources gameResources, IReadOnlyList<Request> requests,
+								   List<(int index, Material existing, string materialName, string destinationPath)> builds,
+								   System.Action<int, int> progress)
+		{
+			using var census = gameResources.BeginTextureCensus();
+			// What a build has to say it says again when it is built for real: once is enough
+			var logging = Debug.unityLogger.logEnabled;
+			Debug.unityLogger.logEnabled = false;
+			try
+			{
+				foreach (var (index, _, materialName, _) in builds)
+				{
+					progress?.Invoke(index, requests.Count);
+					var request = requests[index];
+					Material build = null;
+					try
+					{
+						build = CreateMaterial(gameResources, request.SourceMaterial, materialName, request.IsSprite);
+					}
+					catch (System.Exception)
+					{
+						// built for real, it throws again, and that is said
+					}
+					finally
+					{
+						if (build != null)
+							UnityEngine.Object.DestroyImmediate(build);
+					}
+				}
+			}
+			finally
+			{
+				Debug.unityLogger.logEnabled = logging;
+			}
+			census.ImportWritten();
 		}
 
 		static bool IsCurrent(Material material)

@@ -220,53 +220,236 @@ namespace Chisel.Import.Source.VPKTools
 		/// names frame 0, and the others take the claim as <see cref="TextureClaim.OfOtherFrame"/> gives it.</param>
 		static bool ImportOnce(VTF sourceTexture, string[] assetPaths, TextureClaim claim)
 		{
-			if (!ImportOnceEnabled || assetPaths == null || assetPaths.Length == 0)
+			var written = WriteMetas(sourceTexture, assetPaths, claim);
+			if (written == null)
 				return false;
-			// Frame 0 is a normal map when claimed as one, every other frame a Source texture
+			for (int i = 0; i < assetPaths.Length; i++)
+			{
+				AssetDatabase.ImportAsset(assetPaths[i], ImportAssetOptions.ForceSynchronousImport);
+				written.Repair(i);
+			}
+			return true;
+		}
+
+		// Frame 0 is a normal map when claimed as one, every other frame a Source texture: whether there are templates for
+		// what a texture with this many frames needs
+		static bool HaveTemplates(TextureClaim claim, int frames)
+		{
+			return (!claim.NormalMap || GeneratedMeta.Template(GeneratedMeta.Kind.NormalMap) != null) &&
+				   ((claim.NormalMap && frames <= 1) || GeneratedMeta.Template(GeneratedMeta.Kind.SourceTexture) != null);
+		}
+
+		/// <summary>
+		/// A texture's frames written with their .meta, before their import (<see cref="WriteMetas"/>): what each import has
+		/// to come out as, which it is put right to if it did not (<see cref="Repair"/>).
+		/// </summary>
+		internal sealed class Written
+		{
+			internal string[] AssetPaths;
+			internal TextureClaim Claim;
+			internal string NormalUserData;
+			internal GeneratedMeta.NormalMapSampling NormalSampling;
+			internal GeneratedMeta.SourceTextureSettings[] SourceSettings;
+			internal string[] SourceUserData;
+			/// <summary>What each frame's importer held before: null for a new one.</summary>
+			internal string[] PreviousUserData;
+
+			internal bool IsNormalMap(int frame) => frame == 0 && Claim.NormalMap;
+
+			/// <summary>The userData frame <paramref name="frame"/>'s .meta was written with, which its import reads.</summary>
+			internal string UserData(int frame) => IsNormalMap(frame) ? NormalUserData : SourceUserData[frame];
+
+			/// <summary>
+			/// Frame <paramref name="frame"/> has been imported since it was written, as written: its importer holds the
+			/// userData written for it, and held another before (a texture written again with the same userData cannot tell).
+			/// </summary>
+			internal bool ImportedSince(int frame)
+			{
+				var userData = UserData(frame);
+				return userData != PreviousUserData[frame] &&
+					   AssetImporter.GetAtPath(AssetPaths[frame]) is AssetImporter importer && importer.userData == userData;
+			}
+
+			/// <summary>Frame <paramref name="frame"/>'s import came out as its .meta said, or is made to.</summary>
+			internal void Repair(int frame)
+			{
+				if (IsNormalMap(frame))
+					RepairNormalMap(AssetPaths[frame], NormalUserData, NormalSampling);
+				else
+					RepairSourceTexture(AssetPaths[frame], SourceSettings[frame], SourceUserData[frame]);
+			}
+		}
+
+		/// <summary>
+		/// ImportOnce's writing: the .meta of each of a texture's frames, just written as .png, with the importer and every
+		/// setting it ends up with; a normal map's pixels converted. Null when it cannot be done - no template yet, or a normal
+		/// map that does not convert - with nothing written; the slow way then takes the texture.
+		/// </summary>
+		static Written WriteMetas(VTF sourceTexture, string[] assetPaths, TextureClaim claim)
+		{
+			if (!ImportOnceEnabled || assetPaths == null || assetPaths.Length == 0 || !HaveTemplates(claim, assetPaths.Length))
+				return null;
 			var normalTemplate = claim.NormalMap ? GeneratedMeta.Template(GeneratedMeta.Kind.NormalMap) : null;
 			var sourceTemplate = (!claim.NormalMap || assetPaths.Length > 1) ? GeneratedMeta.Template(GeneratedMeta.Kind.SourceTexture) : null;
-			if ((claim.NormalMap && normalTemplate == null) || ((!claim.NormalMap || assetPaths.Length > 1) && sourceTemplate == null))
-				return false;
 
 			// Every frame's .meta goes down before any of them is imported: an import may notice the other new files, and
 			// one noticed without its .meta would be imported with Unity's defaults
-			var normalUserData = (string)null;
-			var normalSampling = NormalMapSamplingOf(sourceTexture);
-			var sourceSettings = new GeneratedMeta.SourceTextureSettings[assetPaths.Length];
-			var sourceUserData = new string[assetPaths.Length];
+			var written = new Written
+			{
+				AssetPaths     = assetPaths,
+				Claim          = claim,
+				NormalSampling = NormalMapSamplingOf(sourceTexture),
+				SourceSettings = new GeneratedMeta.SourceTextureSettings[assetPaths.Length],
+				SourceUserData = new string[assetPaths.Length],
+				PreviousUserData = new string[assetPaths.Length],
+			};
 			for (int i = 0; i < assetPaths.Length; i++)
 			{
 				var assetPath = assetPaths[i];
 				var frameClaim = i == 0 ? claim : claim.OfOtherFrame();
 				var existing = AssetImporter.GetAtPath(assetPath);
+				written.PreviousUserData[i] = existing?.userData;
 				var guid = GeneratedMeta.GuidFor(assetPath);
 				if (frameClaim.NormalMap)                  // frame 0 only, so nothing is written yet
 				{
 					// As MarkAsNormalMap stamps it: pixels written from the VTF, converted; sampled as the VTF says
-					normalUserData = UserDataForRewrittenPixels(existing?.userData) + ";" + kNormalMapStamp;
-					var normalMeta = GeneratedMeta.FillNormalMap(normalTemplate, guid, normalUserData, normalSampling);
+					written.NormalUserData = UserDataForRewrittenPixels(existing?.userData) + ";" + kNormalMapStamp;
+					var normalMeta = GeneratedMeta.FillNormalMap(normalTemplate, guid, written.NormalUserData, written.NormalSampling);
 					// The .meta is made before the pixels are converted: the slow way would convert them again
 					if (normalMeta == null || !ConvertSourceNormalMapFile(assetPath, frameClaim.SelfShadowed))
-						return false;                       // the slow way takes it, as before
+						return null;                        // the slow way takes it, as before
 					GeneratedMeta.Write(assetPath, normalMeta);
 				}
 				else
 				{
-					sourceSettings[i] = SourceSettings(sourceTexture, frameClaim, existing as SourceTextureImporter);
-					sourceUserData[i] = UserDataForRewrittenPixels(existing?.userData);
-					GeneratedMeta.Write(assetPath, GeneratedMeta.Fill(sourceTemplate, guid, sourceUserData[i], sourceSettings[i]));
+					written.SourceSettings[i] = SourceSettings(sourceTexture, frameClaim, existing as SourceTextureImporter);
+					written.SourceUserData[i] = UserDataForRewrittenPixels(existing?.userData);
+					GeneratedMeta.Write(assetPath, GeneratedMeta.Fill(sourceTemplate, guid, written.SourceUserData[i], written.SourceSettings[i]));
 				}
 			}
+			return written;
+		}
 
+		/// <summary>
+		/// While a texture census runs (GameResources.BeginTextureCensus), what a build claims of a texture (MarkAsColor,
+		/// MarkAsNormalMap, MarkAsAlphaTested) is left for the build that is made for real afterwards: the builds then meet
+		/// each texture claimed in the order they would have without a census, and so are built the same.
+		/// </summary>
+		internal static bool ClaimsDeferred;
+
+		/// <summary>
+		/// A texture written ahead of its import for a texture census (<see cref="WriteAhead"/>), and stand-ins for its frames:
+		/// textures that are no asset, in the format the import is going to give each frame (SourceTextureImporter.FormatOf),
+		/// which is all a material build reads of a texture it is handed.
+		/// </summary>
+		internal sealed class Ahead
+		{
+			internal Written Written;
+			internal Texture2D[] StandIns;
+		}
+
+		/// <summary>
+		/// Writes a texture as <see cref="Import"/> would - its frames as .png, each with its .meta - without importing it, for
+		/// <see cref="ImportAhead"/> to import together with every other one written so: one refresh between them all, where
+		/// Import takes one each. Null when it cannot be written ahead - there is no template yet for its .meta, or a normal
+		/// map does not convert - with nothing written; Import then takes it, now.
+		/// </summary>
+		internal static Ahead WriteAhead(VTF sourceTexture, string outputPath, TextureClaim claim)
+		{
+			if (!ImportOnceEnabled || sourceTexture?.Frames == null || sourceTexture.Frames.Length == 0 ||
+				!HaveTemplates(claim, sourceTexture.Frames.Length))
+				return null;
+			var frameNames = SaveFramesAsPNG(sourceTexture, Path.ChangeExtension(outputPath, ".png"));
+			if (frameNames == null || frameNames.Length == 0)
+				return null;
+			var assetPaths = new string[frameNames.Length];
+			for (int i = 0; i < frameNames.Length; i++)
+				assetPaths[i] = UnityAssets.GetAssetPath(frameNames[i]).Replace('\\', '/');
+			var written = WriteMetas(sourceTexture, assetPaths, claim);
+			if (written == null)
+				return null;
+
+			var standIns = new Texture2D[assetPaths.Length];
 			for (int i = 0; i < assetPaths.Length; i++)
+				standIns[i] = StandInFor(written, i);
+			return new Ahead { Written = written, StandIns = standIns };
+		}
+
+		// A texture in the format frame's import is going to have: what SourceTextureImporter decides from the .png, read the
+		// way it reads it; a normal map's is Unity's own importer's, which no build asks about
+		static Texture2D StandInFor(Written written, int frame)
+		{
+			var format = TextureFormat.RGBA32;
+			var linear = true;
+			if (!written.IsNormalMap(frame))
 			{
-				AssetDatabase.ImportAsset(assetPaths[i], ImportAssetOptions.ForceSynchronousImport);
-				if (i == 0 && claim.NormalMap)
-					RepairNormalMap(assetPaths[i], normalUserData, normalSampling);
-				else
-					RepairSourceTexture(assetPaths[i], sourceSettings[i], sourceUserData[i]);
+				var settings = written.SourceSettings[frame];
+				linear = !settings.sRGB;
+				var source = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false, linear: true);
+				try
+				{
+					if (source.LoadImage(File.ReadAllBytes(Path.GetFullPath(written.AssetPaths[frame])), markNonReadable: false))
+						format = SourceTextureImporter.FormatOf(source.GetPixels32(), source.width, source.height, settings.compress);
+				}
+				finally
+				{
+					Object.DestroyImmediate(source);
+				}
 			}
-			return true;
+			return new Texture2D(4, 4, format, mipChain: false, linear: linear)
+			{
+				name      = Path.GetFileNameWithoutExtension(written.AssetPaths[frame]),
+				hideFlags = HideFlags.HideAndDontSave,
+			};
+		}
+
+		/// <summary>
+		/// Imports the textures written ahead (<see cref="WriteAhead"/>) in ONE asset-editing block, puts right what did not
+		/// come out as written (as ImportOnce does), lets the stand-ins go, and returns each one's imported frames.
+		/// <para>
+		/// A refresh in between - a build importing a cubemap or an alpha mask, say - imports whatever new files it comes
+		/// across, a texture written ahead among them, as written, its .meta being there: one that has been imported since
+		/// (<see cref="Written.ImportedSince"/>) is not imported twice.
+		/// </para>
+		/// </summary>
+		internal static Texture2D[][] ImportAhead(IReadOnlyList<Ahead> aheads)
+		{
+			var imported = new Texture2D[aheads.Count][];
+			if (aheads.Count == 0)
+				return imported;
+			AssetDatabase.StartAssetEditing();
+			try
+			{
+				foreach (var ahead in aheads)
+				{
+					for (int i = 0; i < ahead.Written.AssetPaths.Length; i++)
+					{
+						if (!ahead.Written.ImportedSince(i))
+							AssetDatabase.ImportAsset(ahead.Written.AssetPaths[i], ImportAssetOptions.ForceSynchronousImport);
+					}
+				}
+			}
+			finally
+			{
+				AssetDatabase.StopAssetEditing();
+			}
+			for (int a = 0; a < aheads.Count; a++)
+			{
+				var ahead = aheads[a];
+				imported[a] = new Texture2D[ahead.Written.AssetPaths.Length];
+				for (int i = 0; i < ahead.Written.AssetPaths.Length; i++)
+				{
+					ahead.Written.Repair(i);
+					imported[a][i] = AssetDatabase.LoadAssetAtPath<Texture2D>(ahead.Written.AssetPaths[i]);
+				}
+				foreach (var standIn in ahead.StandIns)
+				{
+					if (standIn != null)
+						Object.DestroyImmediate(standIn);
+				}
+				ahead.StandIns = null;
+			}
+			return imported;
 		}
 
 		/// <summary>
@@ -915,7 +1098,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// </remarks>
 		public static void MarkAsColor(Texture texture)
 		{
-			if (texture == null)
+			if (texture == null || ClaimsDeferred)
 				return;
 
 			var assetPath = AssetDatabase.GetAssetPath(texture);
@@ -977,6 +1160,8 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			if (texture == null)
 				return null;
+			if (ClaimsDeferred)
+				return texture;
 
 			var assetPath = AssetDatabase.GetAssetPath(texture);
 			if (string.IsNullOrEmpty(assetPath))
@@ -1164,7 +1349,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// </remarks>
 		public static void MarkAsAlphaTested(Texture texture, float reference)
 		{
-			if (texture == null || !(reference > 0.0f))
+			if (texture == null || !(reference > 0.0f) || ClaimsDeferred)
 				return;
 
 			var assetPath = AssetDatabase.GetAssetPath(texture);
