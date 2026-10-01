@@ -67,8 +67,13 @@ namespace Chisel.Import.Source.VPKTools
 			return GeneratedAssetVersion.IsCurrent(AssetDatabase.GetAssetPath(texture), GeneratedVersion);
 		}
 
-		/// <param name="claim">How the material asking for it reads it; see <see cref="TextureClaim"/>.</param>
-		public static Texture2D[] Import(VTF sourceTexture, string outputPath, TextureClaim claim = default)
+		/// <summary>
+		/// The texture, or its frames, written earlier from this VTF, when it is current and still imported as written; null
+		/// when it has to be written (again), by <see cref="Import"/>. All this takes of the VTF is its header
+		/// (<see cref="VTF.ReadHeader"/>), so a caller can ask before reading the pixels: a material rebuilt over textures
+		/// that are current reads none of them.
+		/// </summary>
+		public static Texture2D[] Reusable(VTF sourceTexture, string outputPath)
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, ".png");
 			var foundAsset = UnityAssets.Load<Texture2D>(destinationPath);
@@ -93,6 +98,16 @@ namespace Chisel.Import.Source.VPKTools
 				if (asWritten)
 					return frameTextureList.ToArray();
 			}
+			return null;
+		}
+
+		/// <param name="claim">How the material asking for it reads it; see <see cref="TextureClaim"/>.</param>
+		public static Texture2D[] Import(VTF sourceTexture, string outputPath, TextureClaim claim = default)
+		{
+			var reusable = Reusable(sourceTexture, outputPath);
+			if (reusable != null)
+				return reusable;
+			var destinationPath = Path.ChangeExtension(outputPath, ".png");
 
 			// Write texture as a png file - over the outdated one, if there is one, which keeps its .meta
 			// and so its GUID and every reference to it
@@ -414,8 +429,12 @@ namespace Chisel.Import.Source.VPKTools
 			return mask;
 		}
 
-		/// <summary>Writes mask pixels beside the texture they came from, and imports them as data.</summary>
-		internal static Texture2D WriteAlphaMask(Color[] pixels, int width, int height, string outputPath)
+		/// <summary>
+		/// The mask written earlier from the alpha of the texture at <paramref name="outputPath"/>, when it is current and
+		/// still imported as written; null when it has to be written (again), or there is none because the texture has no
+		/// alpha - which only its pixels tell. Takes nothing of the texture itself.
+		/// </summary>
+		public static Texture2D ReusableAlphaMask(string outputPath)
 		{
 			var destinationPath = Path.ChangeExtension(outputPath, null) + kAlphaMaskSuffix + ".png";
 			var foundAsset = UnityAssets.Load<Texture2D>(destinationPath);
@@ -423,7 +442,17 @@ namespace Chisel.Import.Source.VPKTools
 				GeneratedAssetVersion.IsCurrent(AssetDatabase.GetAssetPath(foundAsset), GeneratedVersion, AlphaMaskVersion) &&
 				AlphaMaskImportedAsWritten(AssetDatabase.GetAssetPath(foundAsset)))
 				return foundAsset;
+			return null;
+		}
 
+		/// <summary>Writes mask pixels beside the texture they came from, and imports them as data.</summary>
+		internal static Texture2D WriteAlphaMask(Color[] pixels, int width, int height, string outputPath)
+		{
+			var reusable = ReusableAlphaMask(outputPath);
+			if (reusable != null)
+				return reusable;
+
+			var destinationPath = Path.ChangeExtension(outputPath, null) + kAlphaMaskSuffix + ".png";
 			PackagePath.EnsureDirectoriesExist(destinationPath);
 			File.WriteAllBytes(destinationPath, ImageConversion.EncodeArrayToPNG(
 				pixels, UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat, (uint)width, (uint)height));
@@ -475,6 +504,20 @@ namespace Chisel.Import.Source.VPKTools
 		/// environment map without an sRGB conversion when it renders in HDR (LoadCubeMap), and HDR ones are floats.
 		/// </para>
 		/// </summary>
+		/// <summary>
+		/// The cubemap written earlier from this environment map, when it is current; null when it has to be written (again),
+		/// by <see cref="ImportCubemap"/>, or the VTF is not a square environment map. Takes only the VTF's header
+		/// (<see cref="VTF.ReadHeader"/>): the pixels are six faces.
+		/// </summary>
+		public static Cubemap ReusableCubemap(VTF sourceTexture, string outputPath)
+		{
+			if (sourceTexture == null || (sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ENVMAP) == 0 ||
+				sourceTexture.Width != sourceTexture.Height)
+				return null;
+			var foundAsset = UnityAssets.Load<Cubemap>(Path.ChangeExtension(outputPath, ".cubemap"));
+			return (foundAsset != null && IsCurrent(foundAsset)) ? foundAsset : null;
+		}
+
 		public static Cubemap ImportCubemap(VTF sourceTexture, string outputPath)
 		{
 			var faces = (sourceTexture?.Frames != null && sourceTexture.Frames.Length > 0) ? sourceTexture.Frames[0].Faces : null;

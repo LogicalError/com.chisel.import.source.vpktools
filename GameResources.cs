@@ -163,6 +163,19 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceTexture;
 		}
 
+		/// <summary>The texture's header alone (<see cref="VTF.ReadHeader"/>): what telling whether it is current takes.</summary>
+		public VTF LoadVTFHeader(GameEntry entry)
+		{
+			if (entry == null) return null;
+			VTF header = null;
+			if (!LoadFileAsStream(entry, delegate (Stream stream)
+			{
+				header = VTF.ReadHeader(stream);
+				return true;
+			})) return null;
+			return header;
+		}
+
 		/// <param name="claim">How the material asking for it reads it, so a texture written now is imported once, already
 		/// as that (<see cref="TextureClaim"/>).</param>
 		public Texture2D[] ImportVTF(string entryName, string[] searchPaths = null, TextureClaim claim = default)
@@ -176,10 +189,18 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			if (entry.extension != PackagePath.ExtensionVTF)
 				return null;
+			var outputPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname));
+			// A texture imported earlier is taken on its header alone; the pixels are only read to write it. Every material
+			// that is built reads its textures, and most of them are current: a version bump rebuilds every material.
+			var header = LoadVTFHeader(entry);
+			if (header == null)
+				return null;
+			var reusable = Texture2DImporter.Reusable(header, outputPath);
+			if (reusable != null)
+				return reusable;
 			var sourceTexture = LoadVTF(entry);
 			if (sourceTexture == null)
-				return null;			
-			var outputPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname));
+				return null;
 			return Texture2DImporter.Import(sourceTexture, outputPath, claim);
 		}
 
@@ -221,10 +242,18 @@ namespace Chisel.Import.Source.VPKTools
 						GetEntry(name + "." + PackagePath.ExtensionVTF, searchPaths);
 			if (entry == null)
 				return null;
+			var outputPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname));
+			// Taken on its header alone when it is current: the pixels are six faces
+			var header = LoadVTFHeader(entry);
+			if (header == null || (header.Flags & VTFImageFlag.TEXTUREFLAGS_ENVMAP) == 0)
+				return null;
+			var reusable = Texture2DImporter.ReusableCubemap(header, outputPath);
+			if (reusable != null)
+				return reusable;
 			var sourceTexture = LoadVTF(entry);
 			if (sourceTexture == null || (sourceTexture.Flags & VTFImageFlag.TEXTUREFLAGS_ENVMAP) == 0)
 				return null;
-			return Texture2DImporter.ImportCubemap(sourceTexture, PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname)));
+			return Texture2DImporter.ImportCubemap(sourceTexture, outputPath);
 		}
 
 		/// <summary>
@@ -239,7 +268,12 @@ namespace Chisel.Import.Source.VPKTools
 			GameEntry entry = GetEntry(entryName, searchPaths);
 			if (entry == null || entry.extension != PackagePath.ExtensionVTF)
 				return null;
-			return Texture2DImporter.ImportAlphaMask(LoadVTF(entry), PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname)));
+			var outputPath = PackagePath.GetOutputPath(PackagePath.GetTextureEntryName(entry.keyname));
+			// A mask written earlier is taken without reading the texture at all
+			var reusable = Texture2DImporter.ReusableAlphaMask(outputPath);
+			if (reusable != null)
+				return reusable;
+			return Texture2DImporter.ImportAlphaMask(LoadVTF(entry), outputPath);
 		}
 
 

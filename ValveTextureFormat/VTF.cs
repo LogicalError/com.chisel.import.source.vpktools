@@ -54,6 +54,29 @@ namespace Chisel.Import.Source.VPKTools
 			};
         }
 
+        /// <summary>
+        /// The texture as <see cref="Read"/> gives it but for its pixels: size, flags, mip count and whether it is HDR, with
+        /// no <see cref="Frames"/>, and <see cref="HasAlpha"/> false, since only the pixels tell. Null when the header is not
+        /// a texture's. Whether a texture imported earlier is still current takes no more than this
+        /// (Texture2DImporter.Reusable), where Read decodes every frame's largest mip: a million colours at 1024x1024.
+        /// </summary>
+        public static VTF ReadHeader( Stream stream )
+        {
+			LoadVTFFile(stream, out int width, out int height, out var flags, out _, out var isHDR, out var mipmapCount, headerOnly: true);
+			if (width == 0 || height == 0)
+				return null;
+			return new VTF
+			{
+				Frames   = null,
+				Width    = width,
+				Height   = height,
+				Flags    = flags,
+				HasAlpha = false,
+				MipmapCount = mipmapCount,
+				IsHDR    = isHDR
+			};
+        }
+
 #if false
         public static Color[] DecreaseTextureSize( Color[] pixels, int origWidth, int origHeight, int maxSize, out int decreasedWidth, out int decreasedHeight )
         {
@@ -143,7 +166,8 @@ namespace Chisel.Import.Source.VPKTools
         }
 #endif
 
-        public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha, out bool isHDR, out int mipmapCount)
+        /// <param name="headerOnly">Stop once the header is read: no frames (null), and hasAlpha false (<see cref="ReadHeader"/>).</param>
+        public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha, out bool isHDR, out int mipmapCount, bool headerOnly = false)
 		{
 			width = 0;
 			height = 0;
@@ -250,6 +274,8 @@ namespace Chisel.Import.Source.VPKTools
 						width = vtfHeader.width;
 						height = vtfHeader.height;
 						isHDR = vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_RGBA16161616F;
+						if (headerOnly)
+							return null;
 						// The largest mip comes last, frame after frame and face after face
 						for (int i = 0; i < vtfHeader.frames; i++)
                         {
