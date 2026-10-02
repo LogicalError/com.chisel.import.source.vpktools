@@ -30,5 +30,8 @@ namespace Chisel.Import.Source.VPKTools
                     
             return m_Parser.LoadFileAsStream(filePath, streamActions);
 		}
+
+		/// <summary>Closes the archives no read is using (<see cref="VPKParser.CloseArchives"/>).</summary>
+		public void CloseArchives() => m_Parser.CloseArchives();
 	}
 }

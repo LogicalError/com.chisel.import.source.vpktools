@@ -973,6 +973,17 @@ namespace Chisel.Import.Source.VPKTools
 		}
 
 		/// <summary>
+		/// Closes the game's archives that no read is using. A read keeps its archive open for the next one (VPKParser), so a
+		/// map's thousands of reads open each archive about once; a map import closes them when it ends, so the game's files
+		/// are not held open between imports. The next read opens its archive again.
+		/// </summary>
+		public void CloseArchives()
+		{
+			foreach (var resource in resourceLookup.Values)
+				resource?.CloseArchives();
+		}
+
+		/// <summary>
 		/// The entity classes the configured game's FGDs declare. Entities such as NPCs and items store no model path in
 		/// the .vmf - the model comes from the entity class - and the kind of class an entity is decides how the game
 		/// gives it collision, so this is the only place either exists outside game code. Hammer reads the same files

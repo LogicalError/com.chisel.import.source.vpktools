@@ -54,6 +54,7 @@ namespace Chisel.Import.Source.VPKTools
             preloadStream?.Dispose();
             foreach (var streamWrapper in openStreams)
                 streamWrapper.stream?.Dispose();
+            CloseArchives();
 
             archivesNotFound?.Clear();
             archivesNotFound = null;
@@ -205,22 +206,25 @@ namespace Chisel.Import.Source.VPKTools
 			PackagePath.CleanPath(ref directory, ref fileName, ref extension);
             if (GetEntry(directory, fileName, extension, out VPKDirectoryEntry entry))
             {
-                // A step of the import batch running, if one is (ImportSteps): every file a map's import reads opens its
-                // archive again
+                // A step of the import batch running, if one is (ImportSteps)
                 Stream currentStream;
                 using (ImportSteps.Step("vpk: archives opened"))
-                    currentStream = GetStream(entry.ArchiveIndex);
+                    currentStream = TakeStream(entry.ArchiveIndex);
                 if (currentStream != null)
                 {
                     try
                     {
                         currentStream.Position = 0;
-                        return streamActions(new VPKStream(currentStream, entry.EntryOffset, entry.EntryLength));
+                        return streamActions(new VPKStream(currentStream, entry.EntryOffset, entry.EntryLength, leaveOpen: true));
                     }
                     catch (Exception ex)
                     {
                         UnityEngine.Debug.LogException(ex);
                         throw ex;
+                    }
+                    finally
+                    {
+                        GiveBack(entry.ArchiveIndex, currentStream);
                     }
                 }
                 return true;
@@ -229,6 +233,40 @@ namespace Chisel.Import.Source.VPKTools
                 UnityEngine.Debug.LogError($"VPKParser: Could not find entry {directory}/{fileName}.{extension}");
                 return false;
             }
+        }
+
+        // The streams onto each archive that no read is using. A read takes one, or opens one, and gives it back when it is
+        // done (LoadFileAsStream), so a read made inside another - a model's, which reads its other files as it goes - gets
+        // one of its own. Every file read opened its archive again, and only a reader that disposed its stream closed it:
+        // the rest stayed open until the garbage collector came to them. CloseArchives closes the idle ones.
+        private readonly Dictionary<ushort, Stack<Stream>> idleStreams = new();
+
+        private Stream TakeStream( ushort archiveIndex )
+        {
+            if (idleStreams.TryGetValue(archiveIndex, out var idle) && idle.Count > 0)
+                return idle.Pop();
+            return GetStream(archiveIndex);
+        }
+
+        private void GiveBack( ushort archiveIndex, Stream stream )
+        {
+            if (!idleStreams.TryGetValue(archiveIndex, out var idle))
+                idleStreams[archiveIndex] = idle = new Stack<Stream>();
+            idle.Push(stream);
+        }
+
+        /// <summary>
+        /// Closes the archives no read is using. A map import closes them when it ends (GameResources.CloseArchives), so the
+        /// game's files are not held open between imports.
+        /// </summary>
+        public void CloseArchives()
+        {
+            foreach (var idle in idleStreams.Values)
+            {
+                while (idle.Count > 0)
+                    idle.Pop().Dispose();
+            }
+            idleStreams.Clear();
         }
 
         private Stream GetStream( ushort archiveIndex )

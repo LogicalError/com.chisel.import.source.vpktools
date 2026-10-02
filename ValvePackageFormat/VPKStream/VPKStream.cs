@@ -6,8 +6,11 @@ public class VPKStream : Stream
 	private Stream baseStream;
 	private readonly long length;
 	private readonly long baseOffset;
-	public VPKStream(Stream baseStream, long offset, long length)
+	// Disposing it leaves the archive's stream open: VPKParser keeps that for the next file it reads from the archive
+	private readonly bool leaveOpen;
+	public VPKStream(Stream baseStream, long offset, long length, bool leaveOpen = false)
 	{
+		this.leaveOpen = leaveOpen;
 		if (baseStream == null) throw new ArgumentNullException("baseStream");
 		if (!baseStream.CanRead) throw new ArgumentException("can't read base stream");
 		if (offset < 0) throw new ArgumentOutOfRangeException("offset");
@@ -74,8 +77,11 @@ public class VPKStream : Stream
 		{
 			if (baseStream != null)
 			{
-				try { baseStream.Dispose(); }
-				catch { }
+				if (!leaveOpen)
+				{
+					try { baseStream.Dispose(); }
+					catch { }
+				}
 				baseStream = null;
 			}
 		}
