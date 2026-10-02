@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace Chisel.Import.Source.VPKTools
 {
@@ -289,9 +290,10 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>
 		/// ImportOnce's writing: the .meta of each of a texture's frames, just written as .png, with the importer and every
 		/// setting it ends up with; a normal map's pixels converted. Null when it cannot be done - no template yet, or a normal
-		/// map that does not convert - with nothing written; the slow way then takes the texture.
+		/// map that does not convert - with nothing written; the slow way then takes the texture. With
+		/// <paramref name="unwritten"/>, what it writes is left to it (<see cref="WriteAhead"/>).
 		/// </summary>
-		static Written WriteMetas(VTF sourceTexture, string[] assetPaths, TextureClaim claim)
+		static Written WriteMetas(VTF sourceTexture, string[] assetPaths, TextureClaim claim, Unwritten unwritten = null)
 		{
 			if (!ImportOnceEnabled || assetPaths == null || assetPaths.Length == 0 || !HaveTemplates(claim, assetPaths.Length))
 				return null;
@@ -324,15 +326,16 @@ namespace Chisel.Import.Source.VPKTools
 					// The .meta is made before the pixels are converted: the slow way would convert them again. They are
 					// converted as written, from the pixels (WriteSourceNormalMap: the file the .png converted made)
 					if (normalMeta == null ||
-						!WriteSourceNormalMap(assetPath, sourceTexture.Frames[i].Pixels, sourceTexture.Width, sourceTexture.Height, frameClaim.SelfShadowed))
+						!WriteSourceNormalMap(assetPath, sourceTexture.Frames[i].Pixels, sourceTexture.Width, sourceTexture.Height, frameClaim.SelfShadowed,
+											  unwritten))
 						return null;                        // the slow way takes it, as before
-					GeneratedMeta.Write(assetPath, normalMeta);
+					WriteMeta(assetPath, normalMeta, unwritten);
 				}
 				else
 				{
 					written.SourceSettings[i] = SourceSettings(sourceTexture, frameClaim, existing as SourceTextureImporter);
 					written.SourceUserData[i] = UserDataForRewrittenPixels(existing?.userData);
-					GeneratedMeta.Write(assetPath, GeneratedMeta.Fill(sourceTemplate, guid, written.SourceUserData[i], written.SourceSettings[i]));
+					WriteMeta(assetPath, GeneratedMeta.Fill(sourceTemplate, guid, written.SourceUserData[i], written.SourceSettings[i]), unwritten);
 				}
 			}
 			return written;
@@ -382,12 +385,99 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			internal Written Written;
 			internal Texture2D[] StandIns;
+			/// <summary>What it has still to write, which <see cref="ImportAhead"/> writes first; null for nothing.</summary>
+			internal Unwritten Unwritten;
+		}
+
+		/// <summary>
+		/// What a texture written ahead has still to write (<see cref="WriteAhead"/>): its .pngs, each encoded meanwhile on a
+		/// worker thread into a file of the project's Temp folder, and its .metas, all put in place when it is imported
+		/// (<see cref="ImportAhead"/>). Encoding them one after another, a normal map's conversion with it, was about 7 of the
+		/// 57 s of a map's first import. Until then
+		/// neither is where a refresh in between could come across it: one that found a .png without its .meta would import it
+		/// with Unity's defaults, and one that found a .meta without its .png would delete it.
+		/// </summary>
+		internal sealed class Unwritten
+		{
+			readonly List<(string path, string temporary, System.Func<byte[]> encode, Task encoding)> pngs = new();
+			readonly List<(string assetPath, string text)> metas = new();
+
+			/// <summary>The .png at <paramref name="path"/> (a full path), as <paramref name="encode"/> makes it, which a worker
+			/// thread starts on now (ImageConversion's EncodeArrayTo* are thread safe).</summary>
+			internal void Png(string path, System.Func<byte[]> encode)
+			{
+				var temporary = Path.GetFullPath(FileUtil.GetUniqueTempPathInProject());
+				pngs.Add((path, temporary, encode, Task.Run(() => File.WriteAllBytes(temporary, encode()))));
+			}
+
+			/// <summary>The .meta of the asset at <paramref name="assetPath"/>, as <see cref="GeneratedMeta.Write"/> writes it.</summary>
+			internal void Meta(string assetPath, string text) => metas.Add((assetPath, text));
+
+			/// <summary>Whether every .png has been encoded by now, or has failed to be.</summary>
+			internal bool Encoded => pngs.TrueForAll(png => png.encoding.IsCompleted);
+
+			/// <summary>
+			/// Puts every .png in place, over the one written before (which keeps its .meta, and so its GUID), then every .meta.
+			/// A .png a worker thread did not encode is encoded here, as it was before, and said.
+			/// </summary>
+			internal void WriteAll()
+			{
+				foreach (var (path, temporary, encode, encoding) in pngs)
+				{
+					PackagePath.EnsureDirectoriesExist(path);
+					try
+					{
+						encoding.Wait();
+					}
+					catch (System.AggregateException exception)
+					{
+						Debug.LogWarning($"{Path.GetFileName(path)} was not encoded on a worker thread, so it is encoded now: " +
+										 exception.InnerException?.Message);
+						File.WriteAllBytes(path, encode());
+						continue;
+					}
+					if (File.Exists(path))
+						File.Delete(path);
+					File.Move(temporary, path);
+				}
+				pngs.Clear();
+				foreach (var (assetPath, text) in metas)
+					GeneratedMeta.Write(assetPath, text);
+				metas.Clear();
+			}
+		}
+
+		// A .meta written now, or left to what is left unwritten
+		static void WriteMeta(string assetPath, string text, Unwritten unwritten)
+		{
+			if (unwritten != null)
+				unwritten.Meta(assetPath, text);
+			else
+				GeneratedMeta.Write(assetPath, text);
+		}
+
+		// A texture with a NaN among its pixels has its .pngs written at once, as before: what a .png makes of a NaN is only
+		// known from the .png (FormatOfPng, ConvertSourceNormalMapFile)
+		static bool WrittenAtOnce(VTF sourceTexture)
+		{
+			foreach (var frame in sourceTexture.Frames)
+			{
+				if (frame.Pixels == null)
+					return true;
+				foreach (var pixel in frame.Pixels)
+				{
+					if (float.IsNaN(pixel.r) || float.IsNaN(pixel.g) || float.IsNaN(pixel.b) || float.IsNaN(pixel.a))
+						return true;
+				}
+			}
+			return false;
 		}
 
 		/// <summary>
 		/// Writes a texture as <see cref="Import"/> would - its frames as .png, each with its .meta - without importing it, for
 		/// <see cref="ImportAhead"/> to import together with every other one written so: one refresh between them all, where
-		/// Import takes one each. Null when it cannot be written ahead - there is no template yet for its .meta, or a normal
+		/// Import takes one each. What it writes is written when it is imported, its .pngs encoded meanwhile on worker threads
+		/// (<see cref="Unwritten"/>). Null when it cannot be written ahead - there is no template yet for its .meta, or a normal
 		/// map does not convert - with nothing written; Import then takes it, now.
 		/// </summary>
 		internal static Ahead WriteAhead(VTF sourceTexture, string outputPath, TextureClaim claim)
@@ -395,18 +485,22 @@ namespace Chisel.Import.Source.VPKTools
 			if (!ImportOnceEnabled || sourceTexture?.Frames == null || sourceTexture.Frames.Length == 0 ||
 				!HaveTemplates(claim, sourceTexture.Frames.Length))
 				return null;
+			var unwritten = WrittenAtOnce(sourceTexture) ? null : new Unwritten();
+			var pngPath = Path.ChangeExtension(outputPath, ".png");
 			string[] frameNames;
 			using (ImportSteps.Step("pngs written"))
 			{
 				// A normal map of one frame is written by WriteMetas, converted (WriteSourceNormalMap), once
 				if (claim.NormalMap && sourceTexture.Frames.Length == 1)
 				{
-					var pngPath = Path.ChangeExtension(outputPath, ".png");
-					PackagePath.EnsureDirectoriesExist(pngPath);
+					if (unwritten == null)
+						PackagePath.EnsureDirectoriesExist(pngPath);
 					frameNames = new[] { pngPath };
 				}
+				else if (unwritten != null)
+					frameNames = FramePaths(pngPath, sourceTexture.Frames.Length);
 				else
-					frameNames = SaveFramesAsPNG(sourceTexture, Path.ChangeExtension(outputPath, ".png"));
+					frameNames = SaveFramesAsPNG(sourceTexture, pngPath);
 			}
 			if (frameNames == null || frameNames.Length == 0)
 				return null;
@@ -415,9 +509,22 @@ namespace Chisel.Import.Source.VPKTools
 				assetPaths[i] = UnityAssets.GetAssetPath(frameNames[i]).Replace('\\', '/');
 			Written written;
 			using (ImportSteps.Step("metas written ahead"))
-				written = WriteMetas(sourceTexture, assetPaths, claim);
+				written = WriteMetas(sourceTexture, assetPaths, claim, unwritten);
 			if (written == null)
 				return null;
+			if (unwritten != null)
+			{
+				// Every frame as SaveFramesAsPNG writes it, but a normal map's, which WriteMetas has converted
+				using (ImportSteps.Step("pngs written"))
+				{
+					for (int i = claim.NormalMap ? 1 : 0; i < frameNames.Length; i++)
+					{
+						var pixels = sourceTexture.Frames[i].Pixels;
+						int width = sourceTexture.Width, height = sourceTexture.Height;
+						unwritten.Png(frameNames[i], () => EncodeFrame(pixels, width, height));
+					}
+				}
+			}
 
 			var standIns = new Texture2D[assetPaths.Length];
 			using (ImportSteps.Step("stand-ins"))
@@ -425,7 +532,7 @@ namespace Chisel.Import.Source.VPKTools
 				for (int i = 0; i < assetPaths.Length; i++)
 					standIns[i] = StandInFor(written, i, sourceTexture);
 			}
-			return new Ahead { Written = written, StandIns = standIns };
+			return new Ahead { Written = written, StandIns = standIns, Unwritten = unwritten };
 		}
 
 		// A texture in the format frame's import is going to have: what SourceTextureImporter decides from the .png, taken from
@@ -450,12 +557,12 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// Imports the textures written ahead (<see cref="WriteAhead"/>, <see cref="WriteAlphaMaskAhead"/>) in ONE asset-editing
-		/// block, puts right what did not come out as written (as ImportOnce does), lets the stand-ins go, and returns each
-		/// one's imported frames.
+		/// block, what they have still to write written first (<see cref="Unwritten"/>), puts right what did not come out as
+		/// written (as ImportOnce does), lets the stand-ins go, and returns each one's imported frames.
 		/// <para>
 		/// A refresh in between - a build importing a cubemap or an alpha mask, say - imports whatever new files it comes
-		/// across, a texture written ahead among them, as written, its .meta being there: one that has been imported since
-		/// (<see cref="Written.ImportedSince"/>) is not imported twice.
+		/// across, a texture written at once among them (one with a NaN, see <see cref="WrittenAtOnce"/>), as written, its
+		/// .meta being there: one that has been imported since (<see cref="Written.ImportedSince"/>) is not imported twice.
 		/// </para>
 		/// </summary>
 		internal static Texture2D[][] ImportAhead(IReadOnlyList<Ahead> aheads)
@@ -463,6 +570,14 @@ namespace Chisel.Import.Source.VPKTools
 			var imported = new Texture2D[aheads.Count][];
 			if (aheads.Count == 0)
 				return imported;
+			using (ImportSteps.Step("pngs put in place"))
+			{
+				foreach (var ahead in aheads)
+				{
+					ahead.Unwritten?.WriteAll();
+					ahead.Unwritten = null;
+				}
+			}
 			AssetDatabase.StartAssetEditing();
 			try
 			{
@@ -694,16 +809,22 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			if (!ImportOnceEnabled || !HasAlphaMask(sourceTexture) || GeneratedMeta.Template(GeneratedMeta.Kind.AlphaMask) == null)
 				return null;
-			var assetPath = WriteAlphaMaskFile(AlphaAsMask(sourceTexture.Frames[0].Pixels), sourceTexture.Width, sourceTexture.Height, outputPath);
-			var written = WriteAlphaMaskMeta(assetPath);
+			// Written when it is imported, encoded meanwhile on a worker thread (Unwritten); nothing reads it back
+			var unwritten = new Unwritten();
+			var destinationPath = AlphaMaskFilePath(outputPath);
+			var assetPath = UnityAssets.GetAssetPath(destinationPath).Replace('\\', '/');
+			var written = WriteAlphaMaskMeta(assetPath, unwritten);
 			if (written == null)
 				return null;
+			var pixels = sourceTexture.Frames[0].Pixels;
+			int width = sourceTexture.Width, height = sourceTexture.Height;
+			unwritten.Png(destinationPath, () => EncodeFrame(AlphaAsMask(pixels), width, height));
 			var standIn = new Texture2D(4, 4, TextureFormat.RGBA32, mipChain: false, linear: true)
 			{
 				name      = Path.GetFileNameWithoutExtension(assetPath),
 				hideFlags = HideFlags.HideAndDontSave,
 			};
-			return new Ahead { Written = written, StandIns = new[] { standIn } };
+			return new Ahead { Written = written, StandIns = new[] { standIn }, Unwritten = unwritten };
 		}
 
 		/// <summary>
@@ -773,19 +894,21 @@ namespace Chisel.Import.Source.VPKTools
 		// and so its GUID; its asset path
 		static string WriteAlphaMaskFile(Color[] pixels, int width, int height, string outputPath)
 		{
-			var destinationPath = Path.ChangeExtension(outputPath, null) + kAlphaMaskSuffix + ".png";
+			var destinationPath = AlphaMaskFilePath(outputPath);
 			PackagePath.EnsureDirectoriesExist(destinationPath);
-			File.WriteAllBytes(destinationPath, ImageConversion.EncodeArrayToPNG(
-				pixels, UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat, (uint)width, (uint)height));
+			File.WriteAllBytes(destinationPath, EncodeFrame(pixels, width, height));
 			return UnityAssets.GetAssetPath(destinationPath).Replace('\\', '/');
 		}
+
+		// Where the mask of the texture at outputPath is written
+		static string AlphaMaskFilePath(string outputPath) => Path.ChangeExtension(outputPath, null) + kAlphaMaskSuffix + ".png";
 
 		/// <summary>
 		/// The .meta of a mask just written, before its import: a template Unity wrote for another mask
 		/// (<see cref="GeneratedMeta.Kind.AlphaMask"/>), with this one's GUID and stamp, so the one import is the last one.
-		/// Null, with nothing written, when there is no template yet.
+		/// Null, with nothing written, when there is no template yet. With <paramref name="unwritten"/>, it is left to it.
 		/// </summary>
-		static Written WriteAlphaMaskMeta(string assetPath)
+		static Written WriteAlphaMaskMeta(string assetPath, Unwritten unwritten = null)
 		{
 			if (!ImportOnceEnabled)
 				return null;
@@ -794,7 +917,7 @@ namespace Chisel.Import.Source.VPKTools
 				return null;
 			var existing = AssetImporter.GetAtPath(assetPath);
 			var userData = GeneratedAssetVersion.Stamp(existing?.userData, GeneratedVersion, AlphaMaskVersion);
-			GeneratedMeta.Write(assetPath, GeneratedMeta.Fill(template, GeneratedMeta.GuidFor(assetPath), userData));
+			WriteMeta(assetPath, GeneratedMeta.Fill(template, GeneratedMeta.GuidFor(assetPath), userData), unwritten);
 			return new Written
 			{
 				AssetPaths        = new[] { assetPath },
@@ -1130,33 +1253,31 @@ namespace Chisel.Import.Source.VPKTools
 
 			PackagePath.EnsureDirectoriesExist(destinationPath);
 
-			var frameNames = new string[texture.Frames.Length];
-			if (texture.Frames.Length == 1)
-			{
-				// TODO: support both rgba8 and rgba float textures
-				var bytes = ImageConversion.EncodeArrayToPNG(texture.Frames[0].Pixels,
-					//UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm, 
-					UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
-					(uint)texture.Width, (uint)texture.Height);
-
-				frameNames[0] = destinationPath;
-				File.WriteAllBytes(destinationPath, bytes);
-				return frameNames;
-			}
-
-			for (int i = 0; i < texture.Frames.Length; i++)
-			{
-				var bytes = ImageConversion.EncodeArrayToPNG(texture.Frames[i].Pixels,
-					//UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm, 
-					UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
-					(uint)texture.Width, (uint)texture.Height);
-
-				var filePath = Path.Combine(Path.GetDirectoryName(destinationPath), Path.GetFileNameWithoutExtension(destinationPath) + $"[{i}].png");
-				frameNames[i] = filePath;
-				File.WriteAllBytes(filePath, bytes);
-			}
+			var frameNames = FramePaths(destinationPath, texture.Frames.Length);
+			for (int i = 0; i < frameNames.Length; i++)
+				File.WriteAllBytes(frameNames[i], EncodeFrame(texture.Frames[i].Pixels, texture.Width, texture.Height));
 			return frameNames;
 		}
+
+		/// <summary>Where <see cref="SaveFramesAsPNG"/> writes a texture's frames: one at the path, more each with its number.</summary>
+		internal static string[] FramePaths(string destinationPath, int frames)
+		{
+			if (frames == 1)
+				return new[] { destinationPath };
+			var frameNames = new string[frames];
+			for (int i = 0; i < frames; i++)
+				frameNames[i] = Path.Combine(Path.GetDirectoryName(destinationPath), Path.GetFileNameWithoutExtension(destinationPath) + $"[{i}].png");
+			return frameNames;
+		}
+
+		/// <summary>
+		/// A frame's .png, as <see cref="SaveFramesAsPNG"/> writes it: an 8-bit RGBA .png, each float (v * 255 + 0.5), clamped
+		/// (<see cref="PngByteOf"/>). Thread safe, as ImageConversion.EncodeArrayToPNG is.
+		/// </summary>
+		// TODO: support both rgba8 and rgba float textures
+		internal static byte[] EncodeFrame(Color[] pixels, int width, int height) =>
+			ImageConversion.EncodeArrayToPNG(pixels, UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
+											 (uint)width, (uint)height);
 		
 		public static void ConfigureCubemapTextureImporter(string destinationPath)
 		{
@@ -1399,17 +1520,26 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>
 		/// A normal map written ahead, as SaveFramesAsPNG and then ConvertSourceNormalMapFile write it - the same file - from the
 		/// pixels it is written from, as the .png would hold them (<see cref="PngPixelsOf"/>): without the unconverted .png
-		/// written first and read back. With a NaN among them, the way it was.
+		/// written first and read back. With a NaN among them, the way it was. With <paramref name="unwritten"/>, it is left to
+		/// it, converted and encoded on a worker thread (<see cref="EncodeNormalMap"/>); with a NaN then, it is not written.
 		/// </summary>
-		internal static bool WriteSourceNormalMap(string assetPath, Color[] pixels, int width, int height, bool selfShadowed)
+		internal static bool WriteSourceNormalMap(string assetPath, Color[] pixels, int width, int height, bool selfShadowed,
+												  Unwritten unwritten = null)
 		{
 			var fullPath = Path.GetFullPath(assetPath);
 			var converted = PngPixelsOf(pixels);
 			if (converted == null)
 			{
+				if (unwritten != null)
+					return false;
 				File.WriteAllBytes(fullPath, ImageConversion.EncodeArrayToPNG(pixels, UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
 																			 (uint)width, (uint)height));
 				return ConvertSourceNormalMapFile(assetPath, selfShadowed);
+			}
+			if (unwritten != null)
+			{
+				unwritten.Png(fullPath, () => EncodeNormalMap(converted, width, height, selfShadowed));
+				return true;
 			}
 			ConvertSourceNormalMapPixels(converted, selfShadowed);
 			Texture2D scratch = null;
@@ -1431,6 +1561,18 @@ namespace Chisel.Import.Source.VPKTools
 				if (scratch != null)
 					Object.DestroyImmediate(scratch);
 			}
+		}
+
+		/// <summary>
+		/// A normal map's .png, converted from the bytes a .png of its pixels holds (<see cref="PngPixelsOf"/>), as
+		/// <see cref="WriteSourceNormalMap"/> writes it through a texture of its own, which only the main thread can make:
+		/// encoded from the converted bytes as they are, which any thread can (ImageConversion.EncodeArrayToPNG).
+		/// </summary>
+		internal static byte[] EncodeNormalMap(Color32[] converted, int width, int height, bool selfShadowed)
+		{
+			ConvertSourceNormalMapPixels(converted, selfShadowed);
+			return ImageConversion.EncodeArrayToPNG(converted, UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm,
+													(uint)width, (uint)height);
 		}
 
 		/// <summary>
