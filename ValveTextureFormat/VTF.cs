@@ -16,6 +16,13 @@ namespace Chisel.Import.Source.VPKTools
 		public VTFImageFlag Flags   { get; private set; }
 		public bool HasAlpha        { get; private set; }
 		/// <summary>
+		/// Every texel of every frame has an alpha of exactly 1, as <see cref="HasAlpha"/> found looking at every one of a format
+		/// with an alpha channel. False for a format it does not look at - one without alpha, whose decoded alpha need not be 1
+		/// (BGRX8888's X) - and when a texel's alpha is anything else. What a texture written ahead is imported as takes it
+		/// (Texture2DImporter.FormatOfWritten) instead of looking at every texel again.
+		/// </summary>
+		public bool AlphaIsOne      { get; private set; }
+		/// <summary>
 		/// How many mip levels the file actually holds. NOT the same question as TEXTUREFLAGS_NOMIP: vtex
 		/// sets that flag from a `nomip` line in the texture's .txt compile config and writes the full
 		/// chain anyway, so 1028 of the 1309 textures carrying it in this game ship every level. Whether a
@@ -41,7 +48,7 @@ namespace Chisel.Import.Source.VPKTools
 
         public static VTF Read( Stream stream )
         {
-			var frames = LoadVTFFile(stream, out int width, out int height, out var flags, out var hasAlpha, out var isHDR, out var mipmapCount);
+			var frames = LoadVTFFile(stream, out int width, out int height, out var flags, out var hasAlpha, out var alphaIsOne, out var isHDR, out var mipmapCount);
 			return new VTF
 			{
 				Frames   = frames,
@@ -49,6 +56,7 @@ namespace Chisel.Import.Source.VPKTools
 				Height   = height,
 				Flags    = flags,
 				HasAlpha = hasAlpha,
+				AlphaIsOne = alphaIsOne,
 				MipmapCount = mipmapCount,
 				IsHDR    = isHDR
 			};
@@ -62,7 +70,7 @@ namespace Chisel.Import.Source.VPKTools
         /// </summary>
         public static VTF ReadHeader( Stream stream )
         {
-			LoadVTFFile(stream, out int width, out int height, out var flags, out _, out var isHDR, out var mipmapCount, headerOnly: true);
+			LoadVTFFile(stream, out int width, out int height, out var flags, out _, out _, out var isHDR, out var mipmapCount, headerOnly: true);
 			if (width == 0 || height == 0)
 				return null;
 			return new VTF
@@ -166,13 +174,14 @@ namespace Chisel.Import.Source.VPKTools
         }
 #endif
 
-        /// <param name="headerOnly">Stop once the header is read: no frames (null), and hasAlpha false (<see cref="ReadHeader"/>).</param>
-        public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha, out bool isHDR, out int mipmapCount, bool headerOnly = false)
+        /// <param name="headerOnly">Stop once the header is read: no frames (null), and hasAlpha and alphaIsOne false (<see cref="ReadHeader"/>).</param>
+        public static Frame[] LoadVTFFile(Stream stream, out int width, out int height, out VTFImageFlag flags, out bool hasAlpha, out bool alphaIsOne, out bool isHDR, out int mipmapCount, bool headerOnly = false)
 		{
 			width = 0;
 			height = 0;
 			flags = (VTFImageFlag)0;
             hasAlpha = false;
+            alphaIsOne = false;
             isHDR = false;
 			mipmapCount = 1;
 			Frame[] frames = null;
@@ -320,6 +329,7 @@ namespace Chisel.Import.Source.VPKTools
                                     }
                                 }
                             }
+                            alphaIsOne = !hasAlpha;
                         }
 					} else
                         Debug.LogError( "SourceTexture: Image format given was none" );

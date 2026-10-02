@@ -68,10 +68,13 @@ namespace Chisel.Import.Source.VPKTools
 
 		public override void OnImportAsset(AssetImportContext ctx)
 		{
+			// Each part is a step of the import batch running, if one is (ImportSteps): the textures' imports were 7.5 of
+			// the 30 s a map's models took, with nothing to say which part of them
 			byte[] bytes;
 			try
 			{
-				bytes = File.ReadAllBytes(ctx.assetPath);
+				using (ImportSteps.Step("texture imports: pngs read"))
+					bytes = File.ReadAllBytes(ctx.assetPath);
 			}
 			catch (Exception exception)
 			{
@@ -79,18 +82,24 @@ namespace Chisel.Import.Source.VPKTools
 				return;
 			}
 
-			// LoadImage needs a texture to load into; its size and format are replaced by the file's.
-			var source = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false, linear: true);
-			if (!source.LoadImage(bytes, markNonReadable: false))
+			int width, height;
+			Color32[] level0;
+			using (ImportSteps.Step("texture imports: pngs decoded"))
 			{
-				UnityEngine.Object.DestroyImmediate(source);
-				ctx.LogImportError($"{Path.GetFileName(ctx.assetPath)} is not a readable image.");
-				return;
-			}
+				// LoadImage needs a texture to load into; its size and format are replaced by the file's.
+				var source = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false, linear: true);
+				if (!source.LoadImage(bytes, markNonReadable: false))
+				{
+					UnityEngine.Object.DestroyImmediate(source);
+					ctx.LogImportError($"{Path.GetFileName(ctx.assetPath)} is not a readable image.");
+					return;
+				}
 
-			int width = source.width, height = source.height;
-			var level0 = source.GetPixels32();
-			UnityEngine.Object.DestroyImmediate(source);
+				width = source.width;
+				height = source.height;
+				level0 = source.GetPixels32();
+				UnityEngine.Object.DestroyImmediate(source);
+			}
 
 			// Valve's resampler indexes the source with `& (width - 1)`, which is only a wrap on a power of
 			// two. Rather than produce quietly wrong texels, a texture that is not one keeps a single level.
@@ -104,10 +113,11 @@ namespace Chisel.Import.Source.VPKTools
 			Color32[][] levels;
 			try
 			{
-				levels = wantMips ? SourceMipmaps.Generate(level0, width, height, normalMap: false,
-														   alphaTestReference: preserveAlphaCoverage
-																			 ? alphaTestReference : 0.0f)
-								  : new[] { level0 };
+				using (ImportSteps.Step("texture imports: mipmaps"))
+					levels = wantMips ? SourceMipmaps.Generate(level0, width, height, normalMap: false,
+															   alphaTestReference: preserveAlphaCoverage
+																				 ? alphaTestReference : 0.0f)
+									  : new[] { level0 };
 			}
 			catch (Exception exception)
 			{
@@ -115,25 +125,35 @@ namespace Chisel.Import.Source.VPKTools
 				return;
 			}
 
-			var texture = new Texture2D(width, height, TextureFormat.RGBA32, levels.Length, linear: !sRGB);
-			for (int level = 0; level < levels.Length; level++)
-				texture.SetPixelData(levels[level], level);
-			texture.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+			Texture2D texture;
+			using (ImportSteps.Step("texture imports: levels set"))
+			{
+				texture = new Texture2D(width, height, TextureFormat.RGBA32, levels.Length, linear: !sRGB);
+				for (int level = 0; level < levels.Length; level++)
+					texture.SetPixelData(levels[level], level);
+				texture.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+			}
 
-			// Every level is compressed, not just level 0
-			var format = FormatOf(levels[0], width, height, compress);
-			if (format != TextureFormat.RGBA32)
-				EditorUtility.CompressTexture(texture, format, TextureCompressionQuality.Normal);
+			using (ImportSteps.Step("texture imports: compressed"))
+			{
+				// Every level is compressed, not just level 0
+				var format = FormatOf(levels[0], width, height, compress);
+				if (format != TextureFormat.RGBA32)
+					EditorUtility.CompressTexture(texture, format, TextureCompressionQuality.Normal);
+			}
 
-			texture.name       = Path.GetFileNameWithoutExtension(ctx.assetPath);
-			texture.filterMode = filterMode;
-			texture.anisoLevel = anisoLevel;
-			texture.wrapModeU  = wrapU;
-			texture.wrapModeV  = wrapV;
-			texture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
+			using (ImportSteps.Step("texture imports: finished"))
+			{
+				texture.name       = Path.GetFileNameWithoutExtension(ctx.assetPath);
+				texture.filterMode = filterMode;
+				texture.anisoLevel = anisoLevel;
+				texture.wrapModeU  = wrapU;
+				texture.wrapModeV  = wrapV;
+				texture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
 
-			ctx.AddObjectToAsset("texture", texture);
-			ctx.SetMainObject(texture);
+				ctx.AddObjectToAsset("texture", texture);
+				ctx.SetMainObject(texture);
+			}
 		}
 
 		/// <summary>

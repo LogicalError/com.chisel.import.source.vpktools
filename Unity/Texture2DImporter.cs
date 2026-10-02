@@ -456,19 +456,18 @@ namespace Chisel.Import.Source.VPKTools
 				GeneratedMeta.Write(assetPath, text);
 		}
 
-		// A texture with a NaN among its pixels has its .pngs written at once, as before: what a .png makes of a NaN is only
-		// known from the .png (FormatOfPng, ConvertSourceNormalMapFile)
+		// A texture that may hold a NaN has its .pngs written at once, as before: what a .png makes of a NaN is only known from
+		// the .png (FormatOfPng, ConvertSourceNormalMapFile). Only an HDR texture can: its texels are the one format decoded
+		// as floats (RGBA16161616F); every other is decoded from integers. Looking at every texel for one instead took 2.1 s
+		// of a map's first import.
 		static bool WrittenAtOnce(VTF sourceTexture)
 		{
+			if (sourceTexture.IsHDR)
+				return true;
 			foreach (var frame in sourceTexture.Frames)
 			{
 				if (frame.Pixels == null)
 					return true;
-				foreach (var pixel in frame.Pixels)
-				{
-					if (float.IsNaN(pixel.r) || float.IsNaN(pixel.g) || float.IsNaN(pixel.b) || float.IsNaN(pixel.a))
-						return true;
-				}
 			}
 			return false;
 		}
@@ -546,7 +545,7 @@ namespace Chisel.Import.Source.VPKTools
 				var settings = written.SourceSettings[frame];
 				linear = !settings.sRGB;
 				format = FormatOfWritten(sourceTexture.Frames[frame].Pixels, sourceTexture.Width, sourceTexture.Height, settings.compress,
-										 written.AssetPaths[frame]);
+										 written.AssetPaths[frame], sourceTexture.AlphaIsOne);
 			}
 			return new Texture2D(4, 4, format, mipChain: false, linear: linear)
 			{
@@ -1579,11 +1578,16 @@ namespace Chisel.Import.Source.VPKTools
 		/// What SourceTextureImporter.FormatOf makes of a .png SaveFramesAsPNG wrote, from the pixels it was written from, as
 		/// the .png holds them (<see cref="PngByteOf"/>): only alpha decides it. Reading the .png back for it took 2.4 s of
 		/// a map's first import. A NaN alpha before any other below 255 has the .png read back.
+		/// With <paramref name="alphaIsOne"/> (<see cref="VTF.AlphaIsOne"/>: every alpha is 1, which the .png holds as 255) the
+		/// pixels are not looked at again: that took 1.1 s of the same import.
 		/// </summary>
-		internal static TextureFormat FormatOfWritten(Color[] pixels, int width, int height, bool compress, string assetPath)
+		internal static TextureFormat FormatOfWritten(Color[] pixels, int width, int height, bool compress, string assetPath,
+													  bool alphaIsOne = false)
 		{
 			if (!compress || width % 4 != 0 || height % 4 != 0)
 				return TextureFormat.RGBA32;
+			if (alphaIsOne)
+				return TextureFormat.DXT1;
 			foreach (var pixel in pixels)
 			{
 				if (float.IsNaN(pixel.a))
