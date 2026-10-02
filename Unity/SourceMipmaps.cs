@@ -50,6 +50,13 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>Kernel diameter in DESTINATION pixels, as Valve measures it.</summary>
 		const int kKernelDiameter = 6;
 
+		/// <summary>
+		/// Off resamples every tap through the gamma table, as each level did before (<see cref="ResampleJob"/>): what
+		/// reading level 0 through it once (<see cref="LinearResampleJob"/>) is compared against. The mipmaps were 5.3 of the
+		/// 46 s a map's first import took, the most of any one part.
+		/// </summary>
+		internal static bool LinearSourceEnabled = true;
+
 		static readonly float[] kGammaToLinear = BuildGammaTable(kSourceGamma);
 
 		// ConstructFloatGammaTable( table, srcGamma, 1.0f ): 255 * (i/255)^gamma, kept in 0..255 rather
@@ -107,10 +114,27 @@ namespace Chisel.Import.Source.VPKTools
 			var destinations = new NativeArray<Color32>[levelCount];
 			var kernels = new NativeArray<float>[levelCount];
 			var kernelTotals = new NativeArray<float>[levelCount];
+			var kernelSpans = new NativeArray<int2>[levelCount];
 			var handles = new NativeArray<JobHandle>(levelCount - 1, Allocator.Temp);
+			// Level 0 through the gamma table once, for every level to read (LinearSourceEnabled)
+			var linearSource = LinearSourceEnabled;
+			NativeArray<float4> linear = default;
+			JobHandle linearHandle = default;
 
 			try
 			{
+				if (linearSource)
+				{
+					linear = new NativeArray<float4>(level0.Length, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+					linearHandle = new LinearSourceJob
+					{
+						source = source,
+						gammaToLinear = gamma,
+						linear = linear,
+						normalMap = normalMap,
+					}.Schedule(level0.Length, 1024);
+				}
+
 				for (int level = 1; level < levelCount; level++)
 				{
 					int levelWidth = Mathf.Max(1, width >> level);
@@ -130,6 +154,7 @@ namespace Chisel.Import.Source.VPKTools
 					kernels[level] = new NativeArray<float>(kernelWidth * kernelHeight, Allocator.TempJob,
 														   NativeArrayOptions.UninitializedMemory);
 					kernelTotals[level] = new NativeArray<float>(1, Allocator.TempJob);
+					kernelSpans[level] = new NativeArray<int2>(kernelHeight, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
 					destinations[level] = new NativeArray<Color32>(levelWidth * levelHeight, Allocator.TempJob,
 																   NativeArrayOptions.UninitializedMemory);
 
@@ -145,8 +170,35 @@ namespace Chisel.Import.Source.VPKTools
 					var totalHandle = new KernelTotalJob
 					{
 						kernel = kernels[level],
+						kernelWidth = kernelWidth,
 						total = kernelTotals[level],
+						spans = kernelSpans[level],
 					}.Schedule(kernelHandle);
+
+					if (linearSource)
+					{
+						handles[level - 1] = new LinearResampleJob
+						{
+							source = linear,
+							kernel = kernels[level],
+							kernelSpans = kernelSpans[level],
+							kernelTotal = kernelTotals[level],
+							destination = destinations[level],
+							sourceWidth = width,
+							destinationWidth = levelWidth,
+							widthRatio = widthRatio,
+							heightRatio = heightRatio,
+							kernelWidth = kernelWidth,
+							kernelHeight = kernelHeight,
+							baseX = (widthRatio >> 1) - ((widthRatio * diameter) >> 1),
+							baseY = (heightRatio >> 1) - ((heightRatio * diameter) >> 1),
+							maskX = width - 1,
+							maskY = height - 1,
+							normalMap = normalMap,
+							inverseGamma = 1.0f / kSourceGamma,
+						}.Schedule(destinations[level].Length, 16, JobHandle.CombineDependencies(totalHandle, linearHandle));
+						continue;
+					}
 
 					handles[level - 1] = new ResampleJob
 					{
@@ -180,11 +232,13 @@ namespace Chisel.Import.Source.VPKTools
 				handles.Dispose();
 				if (source.IsCreated) source.Dispose();
 				if (gamma.IsCreated) gamma.Dispose();
+				if (linear.IsCreated) linear.Dispose();
 				for (int level = 1; level < levelCount; level++)
 				{
 					if (destinations[level].IsCreated) destinations[level].Dispose();
 					if (kernels[level].IsCreated) kernels[level].Dispose();
 					if (kernelTotals[level].IsCreated) kernelTotals[level].Dispose();
+					if (kernelSpans[level].IsCreated) kernelSpans[level].Dispose();
 				}
 			}
 
@@ -275,7 +329,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// never divides by it. That is load-bearing, not incidental - centring the taps on the texels
 		/// instead would put a 0/0 in the middle of the kernel.
 		/// </remarks>
-		[BurstCompile]
+		[BurstCompile(CompileSynchronously = true)]
 		struct NiceKernelJob : IJobParallelFor
 		{
 			[WriteOnly] public NativeArray<float> kernel;
@@ -300,11 +354,14 @@ namespace Chisel.Import.Source.VPKTools
 			}
 		}
 
-		[BurstCompile]
+		[BurstCompile(CompileSynchronously = true)]
 		struct KernelTotalJob : IJob
 		{
 			[ReadOnly] public NativeArray<float> kernel;
+			public int kernelWidth;
 			[WriteOnly] public NativeArray<float> total;
+			/// <summary>Each kernel row's first and last column with a weight that is not zero; (0, -1) for none.</summary>
+			[WriteOnly] public NativeArray<int2> spans;
 
 			public void Execute()
 			{
@@ -312,10 +369,89 @@ namespace Chisel.Import.Source.VPKTools
 				for (int i = 0; i < kernel.Length; i++)
 					sum += kernel[i];
 				total[0] = sum == 0.0f ? 1.0f : sum;
+
+				for (int row = 0; row < spans.Length; row++)
+				{
+					int first = 0, last = -1;
+					for (int column = 0; column < kernelWidth; column++)
+					{
+						if (kernel[row * kernelWidth + column] == 0.0f)
+							continue;
+						if (last < first)
+							first = column;
+						last = column;
+					}
+					spans[row] = new int2(first, last);
+				}
 			}
 		}
 
-		[BurstCompile]
+		/// <summary>Level 0 as every level's taps read it: colour through the gamma table (raw for a normal map), alpha raw.</summary>
+		[BurstCompile(CompileSynchronously = true)]
+		struct LinearSourceJob : IJobParallelFor
+		{
+			[ReadOnly] public NativeArray<Color32> source;
+			[ReadOnly] public NativeArray<float> gammaToLinear;
+			[WriteOnly] public NativeArray<float4> linear;
+			public bool normalMap;
+
+			public void Execute(int index)
+			{
+				var texel = source[index];
+				linear[index] = normalMap
+					? new float4(texel.r, texel.g, texel.b, texel.a)
+					: new float4(gammaToLinear[texel.r], gammaToLinear[texel.g], gammaToLinear[texel.b], texel.a);
+			}
+		}
+
+		/// <summary>
+		/// <see cref="ResampleJob"/>, reading level 0 through the gamma table once (<see cref="LinearSourceJob"/>) and each
+		/// kernel row from its first weight to its last (<see cref="KernelTotalJob"/>'s spans): the same taps added in the
+		/// same order, so the same sums. A zero weight between them adds a zero, which changes no sum: one starts at +0 and
+		/// never becomes -0. What it saves is three table lookups and a test of the weight on every tap.
+		/// </summary>
+		[BurstCompile(CompileSynchronously = true)]
+		struct LinearResampleJob : IJobParallelFor
+		{
+			[ReadOnly] public NativeArray<float4> source;
+			[ReadOnly] public NativeArray<float> kernel;
+			[ReadOnly] public NativeArray<int2> kernelSpans;
+			[ReadOnly] public NativeArray<float> kernelTotal;
+			[WriteOnly] public NativeArray<Color32> destination;
+
+			public int sourceWidth, destinationWidth;
+			public int widthRatio, heightRatio;
+			public int kernelWidth, kernelHeight;
+			public int baseX, baseY;
+			public int maskX, maskY;
+			public bool normalMap;
+			public float inverseGamma;
+
+			public void Execute(int index)
+			{
+				int row = index / destinationWidth;
+				int column = index - (row * destinationWidth);
+
+				float4 sum = float4.zero;
+				int sourceY = (heightRatio * row) + baseY;
+				for (int k = 0; k < kernelHeight; k++, sourceY++)
+				{
+					// Source coordinates WRAP, as in ResampleJob
+					var span = kernelSpans[k];
+					int rowOffset = (sourceY & maskY) * sourceWidth;
+					int kernelRow = k * kernelWidth;
+					int sourceX = (widthRatio * column) + baseX + span.x;
+					for (int l = span.x; l <= span.y; l++, sourceX++)
+						sum += kernel[kernelRow + l] * source[rowOffset + (sourceX & maskX)];
+				}
+
+				float normalise = 1.0f / kernelTotal[0];
+				sum *= normalise;
+				destination[index] = Texels.Of(sum.x, sum.y, sum.z, sum.w, normalMap, inverseGamma);
+			}
+		}
+
+		[BurstCompile(CompileSynchronously = true)]
 		struct ResampleJob : IJobParallelFor
 		{
 			[ReadOnly] public NativeArray<Color32> source;
@@ -371,20 +507,24 @@ namespace Chisel.Import.Source.VPKTools
 				float normalise = 1.0f / kernelTotal[0];
 				red *= normalise; green *= normalise; blue *= normalise; alpha *= normalise;
 
+				destination[index] = Texels.Of(red, green, blue, alpha, normalMap, inverseGamma);
+			}
+		}
+
+		// What both resample jobs make of a destination texel's normalised sums
+		static class Texels
+		{
+			internal static Color32 Of(float red, float green, float blue, float alpha, bool normalMap, float inverseGamma)
+			{
 				if (normalMap)
-				{
-					destination[index] = new Color32(Clamp(red), Clamp(green), Clamp(blue), Clamp(alpha));
-				}
-				else
-				{
-					// A Lanczos kernel has negative lobes, so a hard edge can push the total below zero;
-					// pow() of a negative is NaN, which would reach the texture as garbage.
-					destination[index] = new Color32(
-						Clamp(255.0f * math.pow(math.max(0.0f, red) / 255.0f, inverseGamma)),
-						Clamp(255.0f * math.pow(math.max(0.0f, green) / 255.0f, inverseGamma)),
-						Clamp(255.0f * math.pow(math.max(0.0f, blue) / 255.0f, inverseGamma)),
-						Clamp(alpha));
-				}
+					return new Color32(Clamp(red), Clamp(green), Clamp(blue), Clamp(alpha));
+				// A Lanczos kernel has negative lobes, so a hard edge can push the total below zero;
+				// pow() of a negative is NaN, which would reach the texture as garbage.
+				return new Color32(
+					Clamp(255.0f * math.pow(math.max(0.0f, red) / 255.0f, inverseGamma)),
+					Clamp(255.0f * math.pow(math.max(0.0f, green) / 255.0f, inverseGamma)),
+					Clamp(255.0f * math.pow(math.max(0.0f, blue) / 255.0f, inverseGamma)),
+					Clamp(alpha));
 			}
 
 			static byte Clamp(float value)
