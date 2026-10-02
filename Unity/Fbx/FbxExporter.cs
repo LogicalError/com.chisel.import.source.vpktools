@@ -120,27 +120,37 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			if (root == null) throw new ArgumentNullException(nameof(root));
 			if (string.IsNullOrEmpty(path)) throw new ArgumentException("No output path", nameof(path));
 
+			// Each part timed (ImportSteps): the export took 5.5 s of a map's first import
 			var ids       = new IdSource();
-			var hierarchy = CollectNodes(root, ids);
-			var nodes     = hierarchy.Nodes;
-
-			MarkAnimatedNodesAsBones(hierarchy, takes, ids);
-
+			Hierarchy hierarchy;
 			var materialNames = new List<string>();
 			var materials     = new List<Material>();
 			var materialIds   = new List<long>();
-			var missingMaterial = CollectMaterials(nodes, ids, materialNames, materials, materialIds);
+			int missingMaterial;
+			using (ImportSteps.Step("fbx: collected"))
+			{
+				hierarchy = CollectNodes(root, ids);
+				MarkAnimatedNodesAsBones(hierarchy, takes, ids);
+				missingMaterial = CollectMaterials(hierarchy.Nodes, ids, materialNames, materials, materialIds);
+			}
+			var nodes = hierarchy.Nodes;
 
 			var objects     = new FbxNode("Objects") { AlwaysBlock = true };
 			var connections = new FbxNode("Connections") { AlwaysBlock = true };
 
-			WriteNodeObjects(objects, connections, hierarchy, root.transform);
-			WriteMaterialObjects(objects, materialNames, materialIds);
-			WriteMaterialConnections(connections, nodes, materialNames, materialIds, missingMaterial);
-			WriteSkins(objects, connections, hierarchy, ids);
-			WriteBindPose(objects, nodes, ids);
+			using (ImportSteps.Step("fbx: geometry and skins"))
+			{
+				WriteNodeObjects(objects, connections, hierarchy, root.transform);
+				WriteMaterialObjects(objects, materialNames, materialIds);
+				WriteMaterialConnections(connections, nodes, materialNames, materialIds, missingMaterial);
+				WriteSkins(objects, connections, hierarchy, ids);
+				WriteBindPose(objects, nodes, ids);
+			}
 
-			var takeNames = WriteAnimation(objects, connections, hierarchy, takes, ids, out var longestTakeSeconds);
+			List<string> takeNames;
+			double longestTakeSeconds;
+			using (ImportSteps.Step("fbx: animation"))
+				takeNames = WriteAnimation(objects, connections, hierarchy, takes, ids, out longestTakeSeconds);
 
 			var document = new FbxNode("Root");
 			WriteHeader(document);

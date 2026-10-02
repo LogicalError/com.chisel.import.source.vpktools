@@ -349,23 +349,27 @@ namespace Chisel.Import.Source.VPKTools
 				{
 					foreach (var (index, built, assetPath) in created)
 					{
+						using var step = ImportSteps.Step("material files written");
 						try { WriteNewInBlock(built, assetPath); }
 						catch (System.Exception exception) { failed.Add(index); Debug.LogException(exception); }
 					}
 					foreach (var (index, existing, build) in rebuilt)
 					{
+						using var step = ImportSteps.Step("material files rewritten");
 						try { WriteOverInBlock(existing, build); }
 						catch (System.Exception exception) { failed.Add(index); Debug.LogException(exception); }
 					}
 				}
 				finally
 				{
-					UnityEditor.AssetDatabase.StopAssetEditing();
+					using (ImportSteps.Step("materials imported together"))
+						UnityEditor.AssetDatabase.StopAssetEditing();
 					foreach (var (_, _, build) in rebuilt)
 						UnityEngine.Object.DestroyImmediate(build);
 				}
 				foreach (var (index, built, assetPath) in created)
 				{
+					using var step = ImportSteps.Step("material stamps checked");
 					if (!failed.Contains(index) && UnityEditor.EditorUtility.IsPersistent(built))
 						StampedByItsImport(built, assetPath);
 					else
