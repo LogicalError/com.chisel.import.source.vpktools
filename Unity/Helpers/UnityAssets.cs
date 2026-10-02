@@ -55,32 +55,50 @@ namespace Chisel.Import.Source.VPKTools
 		/// stamp through the importer (SaveAndReimport) took two, each a refresh of its own. The asset is the object given,
 		/// as after CreateAsset. Should the import not have read the stamp, it is stamped the slow way, and that is said once.
 		/// </summary>
-		public static void CreateStamped(UnityEngine.Object asset, string assetPath, params (string generator, int version)[] versions)
+		public static void CreateStamped(UnityEngine.Object asset, string assetPath, params (string generator, int version)[] versions) =>
+			CreateStampedTogether(new[] { (asset, assetPath) }, versions);
+
+		/// <summary>
+		/// Writes new assets as <see cref="CreateStamped"/> writes one, all in the same asset-editing block: ONE refresh between
+		/// them, where each took one of its own - 10 of a map's entities' refreshes for its dust motes' meshes
+		/// alone. A Material Variant among them has to be a variant of a material that is an asset already.
+		/// </summary>
+		public static void CreateStampedTogether(IReadOnlyList<(UnityEngine.Object asset, string assetPath)> assets,
+												 params (string generator, int version)[] versions)
 		{
-			assetPath = assetPath.Replace('\\', '/');
+			if (assets == null || assets.Count == 0)
+				return;
 			var userData = GeneratedAssetVersion.Stamp(null, versions);
+			var assetPaths = new string[assets.Count];
 			UnityEditor.AssetDatabase.StartAssetEditing();
 			try
 			{
-				UnityEditor.AssetDatabase.CreateAsset(asset, assetPath);
-				GeneratedMeta.SetUserData(assetPath, userData);
+				for (int i = 0; i < assets.Count; i++)
+				{
+					assetPaths[i] = assets[i].assetPath.Replace('\\', '/');
+					UnityEditor.AssetDatabase.CreateAsset(assets[i].asset, assetPaths[i]);
+					GeneratedMeta.SetUserData(assetPaths[i], userData);
+				}
 			}
 			finally
 			{
 				UnityEditor.AssetDatabase.StopAssetEditing();
 			}
 
-			var importer = UnityEditor.AssetImporter.GetAtPath(assetPath);
-			if (importer != null && !GeneratedAssetVersion.IsCurrentUserData(importer.userData, versions))
+			foreach (var assetPath in assetPaths)
 			{
-				if (!s_SaidStampedTheSlowWay)
+				var importer = UnityEditor.AssetImporter.GetAtPath(assetPath);
+				if (importer != null && !GeneratedAssetVersion.IsCurrentUserData(importer.userData, versions))
 				{
-					s_SaidStampedTheSlowWay = true;
-					Debug.LogWarning($"{assetPath}: the import did not read the stamp put into its .meta, so it was stamped with an import of its own. " +
-									 "Every asset written this way takes two imports instead of one until this is looked into.");
+					if (!s_SaidStampedTheSlowWay)
+					{
+						s_SaidStampedTheSlowWay = true;
+						Debug.LogWarning($"{assetPath}: the import did not read the stamp put into its .meta, so it was stamped with an import of its own. " +
+										 "Every asset written this way takes two imports instead of one until this is looked into.");
+					}
+					importer.userData = GeneratedAssetVersion.Stamp(importer.userData, versions);
+					importer.SaveAndReimport();
 				}
-				importer.userData = GeneratedAssetVersion.Stamp(importer.userData, versions);
-				importer.SaveAndReimport();
 			}
 		}
 

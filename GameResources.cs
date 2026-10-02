@@ -614,10 +614,20 @@ namespace Chisel.Import.Source.VPKTools
 		public Material ImportSPR(string entryName, string[] searchPaths = null)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
+			return ImportVMT(SpriteMaterialName(entryName), searchPaths, isSprite: true);
+		}
+
+		/// <summary>
+		/// The material a sprite names, as <see cref="ImportSPR"/> imports it: the name cleaned, a .spr reference as the .vmt of
+		/// the same name. Asked for with isSprite in <see cref="PrepareMaterials"/>, ImportSPR then finds it there.
+		/// </summary>
+		public static string SpriteMaterialName(string entryName)
+		{
+			if (string.IsNullOrEmpty(entryName)) return entryName;
 			PackagePath.CleanFullPath(ref entryName);
 			if (entryName.EndsWith($".{PackagePath.ExtensionSPR}"))
 				entryName = entryName.Remove(entryName.Length - (PackagePath.ExtensionSPR.Length + 1));
-			return ImportVMT(entryName, searchPaths, isSprite: true);
+			return entryName;
 		}
 
 		public VTX LoadVTX(string entryName, string[] searchPaths = null)
