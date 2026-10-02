@@ -404,10 +404,14 @@ namespace Chisel.Import.Source.VPKTools
 
 			/// <summary>The .png at <paramref name="path"/> (a full path), as <paramref name="encode"/> makes it, which a worker
 			/// thread starts on now (ImageConversion's EncodeArrayTo* are thread safe).</summary>
-			internal void Png(string path, System.Func<byte[]> encode)
+			internal void Png(string path, System.Func<byte[]> encode) => File(path, encode);
+
+			/// <summary>Any file at <paramref name="path"/> (a full path) as <paramref name="make"/> makes it, on a worker thread
+			/// from now: a model's FBX (FbxExporter.Export).</summary>
+			internal void File(string path, System.Func<byte[]> make)
 			{
 				var temporary = Path.GetFullPath(FileUtil.GetUniqueTempPathInProject());
-				pngs.Add((path, temporary, encode, Task.Run(() => File.WriteAllBytes(temporary, encode()))));
+				pngs.Add((path, temporary, make, Task.Run(() => System.IO.File.WriteAllBytes(temporary, make()))));
 			}
 
 			/// <summary>The .meta of the asset at <paramref name="assetPath"/>, as <see cref="GeneratedMeta.Write"/> writes it.</summary>
@@ -433,12 +437,12 @@ namespace Chisel.Import.Source.VPKTools
 					{
 						Debug.LogWarning($"{Path.GetFileName(path)} was not encoded on a worker thread, so it is encoded now: " +
 										 exception.InnerException?.Message);
-						File.WriteAllBytes(path, encode());
+						System.IO.File.WriteAllBytes(path, encode());
 						continue;
 					}
-					if (File.Exists(path))
-						File.Delete(path);
-					File.Move(temporary, path);
+					if (System.IO.File.Exists(path))
+						System.IO.File.Delete(path);
+					System.IO.File.Move(temporary, path);
 				}
 				pngs.Clear();
 				foreach (var (assetPath, text) in metas)

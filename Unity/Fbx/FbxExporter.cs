@@ -115,7 +115,16 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 
 		#endregion
 
-		public static Result Export(string path, GameObject root, IReadOnlyList<FbxAnimationTake> takes = null)
+		public static Result Export(string path, GameObject root, IReadOnlyList<FbxAnimationTake> takes = null) =>
+			Export(path, root, takes, null);
+
+		/// <summary>
+		/// As <see cref="Export(string, GameObject, IReadOnlyList{FbxAnimationTake})"/>, but with <paramref name="unwritten"/>
+		/// the file's text is made on a worker thread (FbxDocument.Bytes), and the file is written when what is unwritten is
+		/// (Texture2DImporter.Unwritten.WriteAll): the document is plain data, made here, which nothing changes after. Making
+		/// the text was 1.6 s of a map's first import on the main thread.
+		/// </summary>
+		internal static Result Export(string path, GameObject root, IReadOnlyList<FbxAnimationTake> takes, Texture2DImporter.Unwritten unwritten)
 		{
 			if (root == null) throw new ArgumentNullException(nameof(root));
 			if (string.IsNullOrEmpty(path)) throw new ArgumentException("No output path", nameof(path));
@@ -162,7 +171,10 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			document.Add(connections);
 			WriteTakes(document, takeNames);
 
-			FbxDocument.Write(path, document);
+			if (unwritten != null)
+				unwritten.File(path, () => FbxDocument.Bytes(document));
+			else
+				FbxDocument.Write(path, document);
 
 			int meshCount = 0, boneCount = 0;
 			foreach (var node in nodes)

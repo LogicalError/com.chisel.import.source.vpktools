@@ -535,6 +535,9 @@ namespace Chisel.Import.Source.VPKTools
 			internal (string generator, int version)[] Versions;
 			internal string UserData;
 			internal string PreviousUserData;
+			/// <summary>Its file and .meta, when their writing was left to <see cref="ImportWritten"/>; null when they are
+			/// written.</summary>
+			internal Texture2DImporter.Unwritten Unwritten;
 
 			/// <summary>Imported since it was written, as written: a refresh in between came across it.</summary>
 			internal bool ImportedSince() =>
@@ -546,11 +549,22 @@ namespace Chisel.Import.Source.VPKTools
 		/// with every other one written so. Null, with nothing written, when there is no template yet or a material is not
 		/// one this writes.
 		/// </summary>
-		internal static MetaWritten WriteAhead(string assetPath, FbxExporter.Result exported, int lodCount, params (string generator, int version)[] versions)
+		internal static MetaWritten WriteAhead(string assetPath, FbxExporter.Result exported, int lodCount, params (string generator, int version)[] versions) =>
+			WriteAhead(assetPath, exported, lodCount, null, versions);
+
+		/// <summary>
+		/// As <see cref="WriteAhead(string, FbxExporter.Result, int, ValueTuple{string, int}[])"/>, with the .meta left to
+		/// <paramref name="unwritten"/>, which holds the file too (FbxExporter.Export): neither is where a refresh in between
+		/// could come across it until <see cref="ImportWritten"/> puts them in place - one that found a .meta without its file
+		/// would delete it. Null, with nothing written or left to write but the file, as WriteAhead.
+		/// </summary>
+		internal static MetaWritten WriteAhead(string assetPath, FbxExporter.Result exported, int lodCount, Texture2DImporter.Unwritten unwritten,
+											   params (string generator, int version)[] versions)
 		{
-			if (!WriteMeta(assetPath, exported, lodCount, versions, out var userData, out var previousUserData))
+			if (!WriteMeta(assetPath, exported, lodCount, versions, out var userData, out var previousUserData, unwritten))
 				return null;
-			return new MetaWritten { AssetPath = assetPath, Exported = exported, Versions = versions, UserData = userData, PreviousUserData = previousUserData };
+			return new MetaWritten { AssetPath = assetPath, Exported = exported, Versions = versions, UserData = userData, PreviousUserData = previousUserData,
+									 Unwritten = unwritten };
 		}
 
 		/// <summary>
@@ -562,6 +576,14 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			if (written.Count == 0)
 				return;
+			using (Step("fbx files put in place"))
+			{
+				foreach (var write in written)
+				{
+					write.Unwritten?.WriteAll();
+					write.Unwritten = null;
+				}
+			}
 			AssetDatabase.StartAssetEditing();
 			try
 			{
@@ -607,6 +629,9 @@ namespace Chisel.Import.Source.VPKTools
 
 			// The hierarchy exists only long enough to be written out. It is built outside any scene
 			// and destroyed below, so nothing is dirtied and nothing survives the import but the file.
+			// The file's text is made on a worker thread, and the file put in place with its .meta when it is imported
+			// (ImportWritten), or now when it is imported the slow way.
+			var unwritten = (ImportOnceEnabled && FbxOffThreadEnabled) ? new Texture2DImporter.Unwritten() : null;
 			var root = new GameObject(model.MDL.Name);
 			var collisionMeshes = new List<Mesh>();
 			FbxExporter.Result exported;
@@ -629,7 +654,7 @@ namespace Chisel.Import.Source.VPKTools
 				using (Step("animation takes"))
 					takes = BuildAnimationTakes(gameResources, model.MDL, model.MDLEntry, skeleton);
 				using (Step("fbx export"))
-					exported = FbxExporter.Export(destinationPath, root, takes);
+					exported = FbxExporter.Export(destinationPath, root, takes, unwritten);
 			}
 			finally
 			{
@@ -648,7 +673,7 @@ namespace Chisel.Import.Source.VPKTools
 
 			MetaWritten meta;
 			using (Step("meta written ahead"))
-				meta = WriteAhead(assetPath, exported, lodCount, s_ModelVersions);
+				meta = WriteAhead(assetPath, exported, lodCount, unwritten, s_ModelVersions);
 			var write = new WrittenModel
 			{
 				OutputPath      = outputPath,
@@ -661,6 +686,7 @@ namespace Chisel.Import.Source.VPKTools
 			{
 				using (Step("imported the slow way"))
 				{
+					unwritten?.WriteAll();
 					AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
 					ConfigureImportedModel(assetPath, exported, ModelVersion, AnimationVersion);
 				}
@@ -1327,6 +1353,13 @@ namespace Chisel.Import.Source.VPKTools
 		/// </summary>
 		public static bool ImportOnceEnabled = true;
 
+		/// <summary>
+		/// A map's model files have their text made on worker threads while the next models are read and built, and are put in
+		/// place with their .metas when they are imported together (FbxExporter.Export's unwritten, ImportWritten). Off, each
+		/// is written as it is exported, on the main thread.
+		/// </summary>
+		internal static bool FbxOffThreadEnabled = true;
+
 		// Said once per editor session, whatever the number of models it happens to
 		static bool s_SaidRepaired;
 
@@ -1362,7 +1395,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// material is not one this writes; the slow way then takes the file.
 		/// </summary>
 		static bool WriteMeta(string assetPath, FbxExporter.Result exported, int lodCount, (string generator, int version)[] versions,
-							  out string userData, out string previousUserData)
+							  out string userData, out string previousUserData, Texture2DImporter.Unwritten unwritten = null)
 		{
 			userData = previousUserData = null;
 			if (!ImportOnceEnabled || exported == null)
@@ -1398,7 +1431,10 @@ namespace Chisel.Import.Source.VPKTools
 			if (meta == null)
 				return false;
 
-			GeneratedMeta.Write(assetPath, meta);
+			if (unwritten != null)
+				unwritten.Meta(assetPath, meta);
+			else
+				GeneratedMeta.Write(assetPath, meta);
 			userData = stamp;
 			previousUserData = existing?.userData;
 			return true;
