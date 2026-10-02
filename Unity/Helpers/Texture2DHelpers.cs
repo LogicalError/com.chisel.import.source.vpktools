@@ -10,6 +10,12 @@ namespace Chisel.Import.Source.VPKTools
     public static class Texture2DHelpers
     {
         /// <summary>
+        /// Off decodes DXT1, DXT3 and DXT5 in managed code only, as before: what the Burst jobs (<see cref="DxtBlockJobs"/>),
+        /// which take an image whose sides are multiples of 4, are compared against.
+        /// </summary>
+        internal static bool BurstDecodeEnabled = true;
+
+        /// <summary>
         /// Turns a Texture2D object to a Sprite object.
         /// </summary>
         /// <param name="texture">The original image</param>
@@ -243,6 +249,8 @@ namespace Chisel.Import.Source.VPKTools
         /// <returns>Pixel color data</returns>
         public static Color[] DecompressDXT1(Stream data, ushort width, ushort height, uint dataSize)
 		{
+			if (BurstDecodeEnabled && width % 4 == 0 && height % 4 == 0)
+				return DxtBlockJobs.Decode(DxtBlockJobs.Kind.DXT1, ReadImageBytes(data, (long)(width / 4) * (height / 4) * 8, 0, out _), width, height);
             Color[] texture2DColors = new Color[width * height];
             DecompressColorBlocks( data, width, height, texture2DColors );
             return texture2DColors;
@@ -265,6 +273,8 @@ namespace Chisel.Import.Source.VPKTools
 			int blockCountX = (width + 3) / 4;
 			int blockCountY = (height + 3) / 4;
 			var bytes = ReadImageBytes(data, (long)blockCountX * blockCountY * 16, 0, out _);
+			if (BurstDecodeEnabled && width % 4 == 0 && height % 4 == 0)
+				return DxtBlockJobs.Decode(DxtBlockJobs.Kind.DXT3, bytes, width, height);
 			var pixels = new Color[width * height];
 			int offset = 0;
 			for (int j = 0; j < blockCountY; j++)
@@ -479,6 +489,8 @@ namespace Chisel.Import.Source.VPKTools
 
 			int blockCountX = (width + 3) / 4;
 			int blockCountY = (height + 3) / 4;
+			if (BurstDecodeEnabled && width % 4 == 0 && height % 4 == 0 && byteBuffer.Length >= (long)blockCountX * blockCountY * 16)
+				return DxtBlockJobs.Decode(DxtBlockJobs.Kind.DXT5, byteBuffer, width, height);
 			int blockWidth = (width < 4) ? width : 4;
 			int blockHeight = (height < 4) ? height : 4;
 
