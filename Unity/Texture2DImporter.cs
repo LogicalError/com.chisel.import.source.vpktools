@@ -1520,25 +1520,28 @@ namespace Chisel.Import.Source.VPKTools
 		/// A normal map written ahead, as SaveFramesAsPNG and then ConvertSourceNormalMapFile write it - the same file - from the
 		/// pixels it is written from, as the .png would hold them (<see cref="PngPixelsOf"/>): without the unconverted .png
 		/// written first and read back. With a NaN among them, the way it was. With <paramref name="unwritten"/>, it is left to
-		/// it, converted and encoded on a worker thread (<see cref="EncodeNormalMap"/>); with a NaN then, it is not written.
+		/// it, its pixels taken as the .png holds them, converted and encoded on a worker thread (<see cref="EncodeNormalMap"/>):
+		/// a texture written ahead holds no NaN (<see cref="WrittenAtOnce"/>), and one that did would not be written, but said.
+		/// Taking them on the main thread was most of the 1.2 s the metas written ahead took of a map's first
+		/// import.
 		/// </summary>
 		internal static bool WriteSourceNormalMap(string assetPath, Color[] pixels, int width, int height, bool selfShadowed,
 												  Unwritten unwritten = null)
 		{
 			var fullPath = Path.GetFullPath(assetPath);
+			if (unwritten != null)
+			{
+				unwritten.Png(fullPath, () => EncodeNormalMap(PngPixelsOf(pixels) ?? throw new System.InvalidOperationException(
+					$"{assetPath} holds a NaN, so what its .png makes of it is only known from the .png: it is written at once, not ahead"),
+															  width, height, selfShadowed));
+				return true;
+			}
 			var converted = PngPixelsOf(pixels);
 			if (converted == null)
 			{
-				if (unwritten != null)
-					return false;
 				File.WriteAllBytes(fullPath, ImageConversion.EncodeArrayToPNG(pixels, UnityEngine.Experimental.Rendering.GraphicsFormat.R32G32B32A32_SFloat,
 																			 (uint)width, (uint)height));
 				return ConvertSourceNormalMapFile(assetPath, selfShadowed);
-			}
-			if (unwritten != null)
-			{
-				unwritten.Png(fullPath, () => EncodeNormalMap(converted, width, height, selfShadowed));
-				return true;
 			}
 			ConvertSourceNormalMapPixels(converted, selfShadowed);
 			Texture2D scratch = null;
