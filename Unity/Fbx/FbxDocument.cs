@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Chisel.Import.Source.VPKTools.Fbx
@@ -9,37 +10,76 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 	/// <summary>
 	/// The value of a single FBX property. FBX ASCII distinguishes quoted strings from bare
 	/// identifiers and from numbers, and it writes large numeric runs in its own array syntax, so a
-	/// plain <c>object</c> is not enough to know how to print one.
+	/// plain <c>object</c> is not enough to know how to print one. The binary form types every value
+	/// exactly - a 32 or 64 bit integer, a float or a double, a bool - so the kinds say that too, and
+	/// the ASCII form prints each the way it always did.
 	/// </summary>
 	internal readonly struct FbxProperty
 	{
-		public enum Kind { Int, Long, Double, String, Raw, IntArray, DoubleArray }
+		public enum Kind { Int, Long, Double, String, Raw, Bool, ObjectName, IntArray, DoubleArray, LongArray, FloatArray }
 
 		public readonly Kind     PropertyKind;
 		public readonly long     Integer;
 		public readonly double   Number;
+		/// <summary>A string's text; an object name's name.</summary>
 		public readonly string   Text;
+		/// <summary>An object name's class.</summary>
+		public readonly string   Class;
 		public readonly int[]    Integers;
+		/// <summary>A double array's values; a float array's as the ASCII form prints them.</summary>
 		public readonly double[] Numbers;
+		public readonly long[]   Longs;
+		/// <summary>A float array's values as the binary form stores them.</summary>
+		public readonly float[]  Floats;
 
-		FbxProperty(Kind kind, long integer, double number, string text, int[] integers, double[] numbers)
+		FbxProperty(Kind kind, long integer = 0, double number = 0, string text = null, string @class = null, int[] integers = null,
+					double[] numbers = null, long[] longs = null, float[] floats = null)
 		{
 			PropertyKind = kind;
 			Integer      = integer;
 			Number       = number;
 			Text         = text;
+			Class        = @class;
 			Integers     = integers;
 			Numbers      = numbers;
+			Longs        = longs;
+			Floats       = floats;
 		}
 
-		public static FbxProperty Int   (int      value) => new(Kind.Int,         value, 0,     null,  null,  null);
-		public static FbxProperty Long  (long     value) => new(Kind.Long,        value, 0,     null,  null,  null);
-		public static FbxProperty Double(double   value) => new(Kind.Double,      0,     value, null,  null,  null);
-		public static FbxProperty String(string   value) => new(Kind.String,      0,     0,     value, null,  null);
-		/// <summary>An unquoted token, such as the <c>Y</c> in <c>Shading: Y</c>.</summary>
-		public static FbxProperty Raw   (string   value) => new(Kind.Raw,         0,     0,     value, null,  null);
-		public static FbxProperty Array (int[]    value) => new(Kind.IntArray,    0,     0,     null,  value, null);
-		public static FbxProperty Array (double[] value) => new(Kind.DoubleArray, 0,     0,     null,  null,  value);
+		public static FbxProperty Int   (int      value) => new(Kind.Int, integer: value);
+		public static FbxProperty Long  (long     value) => new(Kind.Long, integer: value);
+		public static FbxProperty Double(double   value) => new(Kind.Double, number: value);
+		public static FbxProperty String(string   value) => new(Kind.String, text: value);
+		/// <summary>An unquoted token in the ASCII form; a string in the binary one.</summary>
+		public static FbxProperty Raw   (string   value) => new(Kind.Raw, text: value);
+		/// <summary>A bool: the ASCII form's <c>Y</c> or <c>N</c> (as in <c>Shading: Y</c>), the binary form's 'C'.</summary>
+		public static FbxProperty Bool  (bool     value) => new(Kind.Bool, integer: value ? 1 : 0);
+		/// <summary>
+		/// An object's name with its class: <c>"Model::name"</c> in the ASCII form, <c>name\0\x01Model</c> in the
+		/// binary one, which is how the FBX SDK writes and reads each.
+		/// </summary>
+		public static FbxProperty ObjectName(string @class, string name) => new(Kind.ObjectName, text: name ?? "", @class: @class);
+		public static FbxProperty Array (int[]    value) => new(Kind.IntArray, integers: value);
+		public static FbxProperty Array (double[] value) => new(Kind.DoubleArray, numbers: value);
+		/// <summary>64 bit integers, such as an animation curve's key times: printed in the ASCII form as the doubles they
+		/// were written as before the binary form (every one a whole number, so the same text).</summary>
+		public static FbxProperty Array (long[]   value) => new(Kind.LongArray, longs: value);
+		/// <summary>Floats, such as an animation curve's key values: printed in the ASCII form as these doubles, stored in the
+		/// binary form as <paramref name="binary"/> (each double as a float when it is null).</summary>
+		public static FbxProperty FloatArray(double[] value, float[] binary = null)
+		{
+			if (binary == null)
+			{
+				binary = new float[value.Length];
+				for (int i = 0; i < value.Length; i++)
+					binary[i] = (float)value[i];
+			}
+			return new(Kind.FloatArray, numbers: value, floats: binary);
+		}
+
+		/// <summary>Whether the ASCII form writes it as an array block, which ends its line.</summary>
+		public bool IsArray => PropertyKind == Kind.IntArray || PropertyKind == Kind.DoubleArray ||
+							   PropertyKind == Kind.LongArray || PropertyKind == Kind.FloatArray;
 	}
 
 	/// <summary>
@@ -95,15 +135,22 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 	}
 
 	/// <summary>
-	/// Writes an FBX 7.4 document in the format's ASCII form.
+	/// Writes an FBX 7.4 document, in the format's binary form or its ASCII one (<see cref="BinaryEnabled"/>).
 	/// <para>
-	/// ASCII rather than binary on purpose: the FBX SDK - which is what Unity's model importer uses -
-	/// reads both, and the ASCII form can be diffed, eyeballed and unit tested, which matters a great
-	/// deal for a format whose failure mode is a silently wrong mesh rather than an error.
+	/// The FBX SDK - which is what Unity's model importer uses - reads both. The binary form is what a map's import
+	/// writes: no number is formatted, and Unity reads it without parsing text. The ASCII form can be diffed and
+	/// eyeballed, which matters for a format whose failure mode is a silently wrong mesh rather than an error: switch to
+	/// it to look at what is written.
 	/// </para>
 	/// </summary>
 	internal static class FbxDocument
 	{
+		/// <summary>
+		/// The binary form
+		/// . Off, files are written in the ASCII form, as before. Either is read the same; a file written
+		/// one way is not written again the other way until its version stamp asks for it (or it is deleted).
+		/// </summary>
+		public static bool BinaryEnabled = true;
 		/// <summary>How many array values to put on one line. Purely cosmetic; the parser does not care.</summary>
 		const int kArrayValuesPerLine = 30;
 
@@ -133,7 +180,10 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 		/// The file <see cref="Write"/> writes, as its bytes. It reads nothing but the document, which nothing changes once it
 		/// is made, so it can be made on a worker thread (FbxExporter.Export's unwritten).
 		/// </summary>
-		internal static byte[] Bytes(FbxNode root)
+		internal static byte[] Bytes(FbxNode root) => BinaryEnabled ? BinaryBytes(root) : AsciiBytes(root);
+
+		/// <summary>The file in the ASCII form.</summary>
+		internal static byte[] AsciiBytes(FbxNode root)
 		{
 			var builder = new StringBuilder(1 << 20);
 			s_NumberText = NumberCacheEnabled ? new Dictionary<long, string>() : null;
@@ -157,6 +207,176 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			return new UTF8Encoding(false).GetBytes(builder.ToString());
 		}
 
+		#region Binary form
+
+		// What the FBX SDK writes around a binary file's records, as Blender's exporter (io_scene_fbx encode_bin.py) writes
+		// it for files the SDK reads: the header, and a footer whose id goes with the fixed FileId and CreationTime below.
+		static readonly byte[] kBinaryHead = Encoding.ASCII.GetBytes("Kaydara FBX Binary  \0\x1a\0");
+		static readonly byte[] kFileId = { 0x28, 0xb3, 0x2a, 0xeb, 0xb6, 0x24, 0xcc, 0xc2, 0xbf, 0xc8, 0xb0, 0x2a, 0xa9, 0x2b, 0xfc, 0xf1 };
+		const string kCreationTime = "1970-01-01 10:00:00:000";
+		static readonly byte[] kFooterId = { 0xfa, 0xbc, 0xab, 0x09, 0xd0, 0xc8, 0xd4, 0x66, 0xb1, 0x76, 0xfb, 0x83, 0x1c, 0xf7, 0x26, 0x7e };
+		static readonly byte[] kFooterMagic = { 0xf8, 0x5a, 0x8c, 0x6a, 0xde, 0xf5, 0xd9, 0x7e, 0xec, 0xe9, 0x0c, 0xe3, 0x75, 0x8f, 0x29, 0x0b };
+		const uint kBinaryVersion = 7400;
+		/// <summary>A record of zeros ends a list of nested records (13 bytes: 32 bit offsets, before version 7500)</summary>
+		const int kNullRecordLength = 13;
+
+		/// <summary>
+		/// The file in the binary form (FBX 7.4: records with 32 bit offsets). Each property is written as the type its kind
+		/// says; arrays are stored uncompressed.
+		/// </summary>
+		internal static byte[] BinaryBytes(FbxNode root)
+		{
+			using var stream = new MemoryStream(1 << 20);
+			using var writer = new BinaryWriter(stream, new UTF8Encoding(false), leaveOpen: true);
+			writer.Write(kBinaryHead);
+			writer.Write(kBinaryVersion);
+			foreach (var child in root.Children)
+			{
+				WriteBinaryNode(writer, child);
+				// The SDK's own files carry these right after the header extension; the footer id goes with them
+				if (child.Name == "FBXHeaderExtension")
+				{
+					var fileId = new FbxNode("FileId");
+					fileId.Properties.Add(FbxProperty.Raw(null));
+					WriteBinaryRecord(writer, fileId, kFileId);
+					WriteBinaryNode(writer, new FbxNode("CreationTime").Prop(FbxProperty.String(kCreationTime)));
+					WriteBinaryNode(writer, new FbxNode("Creator").Prop(FbxProperty.String("Chisel Source importer")));
+				}
+			}
+			writer.Write(new byte[kNullRecordLength]);
+
+			writer.Write(kFooterId);
+			writer.Write(new byte[4]);
+			var offset = (int)stream.Position;
+			var padding = ((offset + 15) & ~15) - offset;
+			writer.Write(new byte[padding == 0 ? 16 : padding]);
+			writer.Write(kBinaryVersion);
+			writer.Write(new byte[120]);
+			writer.Write(kFooterMagic);
+			writer.Flush();
+			return stream.ToArray();
+		}
+
+		static void WriteBinaryNode(BinaryWriter writer, FbxNode node) => WriteBinaryRecord(writer, node, null);
+
+		// A record: where it ends, its property count, the properties' length, its name, the properties, then its nested
+		// records and a null record - which a node without properties gets even with nothing nested (Blender's
+		// encode_bin.py), as does one the ASCII form writes as a block regardless (AlwaysBlock)
+		static void WriteBinaryRecord(BinaryWriter writer, FbxNode node, byte[] rawBytes)
+		{
+			var stream = writer.BaseStream;
+			var start = stream.Position;
+			writer.Write(0u);                                   // where it ends, written below
+			writer.Write((uint)node.Properties.Count);
+			writer.Write(0u);                                   // the properties' length, written below
+			var name = Encoding.ASCII.GetBytes(node.Name);
+			writer.Write((byte)name.Length);
+			writer.Write(name);
+			var propertiesStart = stream.Position;
+			foreach (var property in node.Properties)
+				WriteBinaryProperty(writer, property, rawBytes);
+			var propertiesLength = stream.Position - propertiesStart;
+			if (node.Children.Count > 0 || node.AlwaysBlock || node.Properties.Count == 0)
+			{
+				foreach (var child in node.Children)
+					WriteBinaryNode(writer, child);
+				writer.Write(new byte[kNullRecordLength]);
+			}
+			var end = stream.Position;
+			stream.Position = start;
+			writer.Write((uint)end);
+			stream.Position = start + 8;
+			writer.Write((uint)propertiesLength);
+			stream.Position = end;
+		}
+
+		static void WriteBinaryProperty(BinaryWriter writer, FbxProperty property, byte[] rawBytes)
+		{
+			switch (property.PropertyKind)
+			{
+				case FbxProperty.Kind.Int:    writer.Write((byte)'I'); writer.Write((int)property.Integer); break;
+				case FbxProperty.Kind.Long:   writer.Write((byte)'L'); writer.Write(property.Integer); break;
+				case FbxProperty.Kind.Double: writer.Write((byte)'D'); writer.Write(Finite(property.Number)); break;
+				case FbxProperty.Kind.Bool:   writer.Write((byte)'C'); writer.Write((byte)(property.Integer != 0 ? 1 : 0)); break;
+				case FbxProperty.Kind.String:
+				case FbxProperty.Kind.Raw when rawBytes == null:
+					WriteBinaryString(writer, property.Text ?? "");
+					break;
+				case FbxProperty.Kind.Raw:
+					writer.Write((byte)'R');
+					writer.Write((uint)rawBytes.Length);
+					writer.Write(rawBytes);
+					break;
+				case FbxProperty.Kind.ObjectName:
+					// The binary form names an object the other way round: its name, then \0\x01, then its class
+					WriteBinaryString(writer, (property.Text ?? "") + "\0\x01" + property.Class);
+					break;
+				case FbxProperty.Kind.IntArray:
+					WriteBinaryArray(writer, 'i', property.Integers.Length, MemoryMarshal.AsBytes(property.Integers.AsSpan()));
+					break;
+				case FbxProperty.Kind.LongArray:
+					WriteBinaryArray(writer, 'l', property.Longs.Length, MemoryMarshal.AsBytes(property.Longs.AsSpan()));
+					break;
+				case FbxProperty.Kind.DoubleArray:
+				{
+					var values = property.Numbers;
+					double[] finite = null;
+					for (int i = 0; i < values.Length; i++)
+					{
+						if (double.IsFinite(values[i]))
+							continue;
+						finite ??= (double[])values.Clone();
+						finite[i] = Finite(values[i]);
+					}
+					WriteBinaryArray(writer, 'd', values.Length, MemoryMarshal.AsBytes((finite ?? values).AsSpan()));
+					break;
+				}
+				case FbxProperty.Kind.FloatArray:
+				{
+					var values = property.Floats;
+					float[] finite = null;
+					for (int i = 0; i < values.Length; i++)
+					{
+						if (float.IsFinite(values[i]))
+							continue;
+						finite ??= (float[])values.Clone();
+						finite[i] = float.IsNaN(values[i]) ? 0 : (values[i] > 0 ? float.MaxValue : float.MinValue);
+					}
+					WriteBinaryArray(writer, 'f', values.Length, MemoryMarshal.AsBytes((finite ?? values).AsSpan()));
+					break;
+				}
+			}
+		}
+
+		static void WriteBinaryString(BinaryWriter writer, string text)
+		{
+			var bytes = Encoding.UTF8.GetBytes(text);
+			writer.Write((byte)'S');
+			writer.Write((uint)bytes.Length);
+			writer.Write(bytes);
+		}
+
+		// An array: its type, its count, its encoding (0: stored as it is) and its length in bytes, then its values
+		static void WriteBinaryArray(BinaryWriter writer, char type, int count, ReadOnlySpan<byte> bytes)
+		{
+			writer.Write((byte)type);
+			writer.Write((uint)count);
+			writer.Write(0u);
+			writer.Write((uint)bytes.Length);
+			writer.Write(bytes);
+		}
+
+		// As AppendNumber clamps them: a non-finite value makes the SDK give up on the whole file
+		static double Finite(double value)
+		{
+			if (double.IsNaN(value))              return 0;
+			if (double.IsPositiveInfinity(value)) return double.MaxValue;
+			if (double.IsNegativeInfinity(value)) return double.MinValue;
+			return value;
+		}
+
+		#endregion
+
 		static void WriteNode(StringBuilder builder, FbxNode node, int depth)
 		{
 			Indent(builder, depth);
@@ -167,8 +387,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			for (int i = 0; i < node.Properties.Count; i++)
 			{
 				var property = node.Properties[i];
-				if (property.PropertyKind == FbxProperty.Kind.IntArray ||
-					property.PropertyKind == FbxProperty.Kind.DoubleArray)
+				if (property.IsArray)
 				{
 					// An array is a block of its own, so it has to be the last thing on the line.
 					arrayProperty = i;
@@ -200,9 +419,12 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 
 		static void WriteArray(StringBuilder builder, FbxProperty property, int depth)
 		{
-			var count = (property.PropertyKind == FbxProperty.Kind.IntArray)
-						? property.Integers.Length
-						: property.Numbers.Length;
+			var count = property.PropertyKind switch
+			{
+				FbxProperty.Kind.IntArray  => property.Integers.Length,
+				FbxProperty.Kind.LongArray => property.Longs.Length,
+				_                          => property.Numbers.Length,
+			};
 
 			builder.Append(" *");
 			AppendInteger(builder, count);
@@ -223,6 +445,8 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 				}
 				if (property.PropertyKind == FbxProperty.Kind.IntArray)
 					AppendInteger(builder, property.Integers[i]);
+				else if (property.PropertyKind == FbxProperty.Kind.LongArray)
+					AppendNumber(builder, property.Longs[i]);       // as the doubles they were written as
 				else
 					AppendNumber(builder, property.Numbers[i]);
 			}
@@ -240,6 +464,14 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 				case FbxProperty.Kind.Long:   AppendInteger(builder, property.Integer); break;
 				case FbxProperty.Kind.Double: AppendNumber(builder, property.Number); break;
 				case FbxProperty.Kind.Raw:    builder.Append(property.Text); break;
+				case FbxProperty.Kind.Bool:   builder.Append(property.Integer != 0 ? 'Y' : 'N'); break;
+				case FbxProperty.Kind.ObjectName:
+					builder.Append('"');
+					AppendEscaped(builder, property.Class);
+					builder.Append("::");
+					AppendEscaped(builder, property.Text);
+					builder.Append('"');
+					break;
 				case FbxProperty.Kind.String:
 					builder.Append('"');
 					AppendEscaped(builder, property.Text);

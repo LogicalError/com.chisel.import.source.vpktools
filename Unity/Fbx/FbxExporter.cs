@@ -393,6 +393,12 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 
 		#region Header and settings
 
+		/// <summary>
+		/// When a file says it was made (its header's CreationTimeStamp, to the millisecond). Settable so that two exports
+		/// of one hierarchy can be compared byte for byte (ModelFilesImportTests): made a millisecond apart, they differ.
+		/// </summary>
+		internal static Func<DateTime> Now = () => DateTime.Now;
+
 		static void WriteHeader(FbxNode document)
 		{
 			var header = document.Add(new FbxNode("FBXHeaderExtension") { AlwaysBlock = true });
@@ -400,7 +406,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			header.Add("FBXVersion", FbxProperty.Int(7400));
 			header.Add("EncryptionType", FbxProperty.Int(0));
 
-			var now = DateTime.Now;
+			var now = Now();
 			var stamp = header.Add(new FbxNode("CreationTimeStamp") { AlwaysBlock = true });
 			stamp.Add("Version", FbxProperty.Int(1000));
 			stamp.Add("Year", FbxProperty.Int(now.Year));
@@ -511,7 +517,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 				var kind = (node.Mesh != null) ? "Mesh" : (node.IsBone ? "LimbNode" : "Null");
 
 				var model = objects.Add(new FbxNode("Model"));
-				model.Prop(FbxProperty.Long(node.Id), FbxProperty.String("Model::" + node.Name), FbxProperty.String(kind));
+				model.Prop(FbxProperty.Long(node.Id), FbxProperty.ObjectName("Model", node.Name), FbxProperty.String(kind));
 				model.Add("Version", FbxProperty.Int(232));
 
 				var properties = model.Add(new FbxNode("Properties70") { AlwaysBlock = true });
@@ -536,7 +542,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 				properties.P("Lcl Scaling", "Lcl Scaling", "", "A",
 							 FbxProperty.Double(scale.x), FbxProperty.Double(scale.y), FbxProperty.Double(scale.z));
 
-				model.Add("Shading", FbxProperty.Raw("Y"));
+				model.Add("Shading", FbxProperty.Bool(true));
 				model.Add("Culling", FbxProperty.String("CullingOff"));
 
 				// Parent it. A node whose parent is the hierarchy root connects to 0, the FBX scene
@@ -550,7 +556,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 				{
 					var attribute = objects.Add(new FbxNode("NodeAttribute"));
 					attribute.Prop(FbxProperty.Long(node.AttributeId),
-								   FbxProperty.String("NodeAttribute::"),
+								   FbxProperty.ObjectName("NodeAttribute", ""),
 								   FbxProperty.String("LimbNode"));
 					var attributeProperties = attribute.Add(new FbxNode("Properties70") { AlwaysBlock = true });
 					attributeProperties.P("Size", "double", "Number", "", FbxProperty.Double(1));
@@ -575,7 +581,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 
 			var geometry = objects.Add(new FbxNode("Geometry"));
 			geometry.Prop(FbxProperty.Long(node.GeometryId),
-						  FbxProperty.String("Geometry::" + node.Name),
+						  FbxProperty.ObjectName("Geometry", node.Name),
 						  FbxProperty.String("Mesh"));
 
 			var vertices = mesh.vertices;
@@ -812,7 +818,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			for (int i = 0; i < names.Count; i++)
 			{
 				var material = objects.Add(new FbxNode("Material"));
-				material.Prop(FbxProperty.Long(ids[i]), FbxProperty.String("Material::" + names[i]), FbxProperty.String(""));
+				material.Prop(FbxProperty.Long(ids[i]), FbxProperty.ObjectName("Material", names[i]), FbxProperty.String(""));
 				material.Add("Version", FbxProperty.Int(102));
 				material.Add("ShadingModel", FbxProperty.String("phong"));
 				material.Add("MultiLayer", FbxProperty.Int(0));
@@ -891,7 +897,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 
 				var skinId = ids.Next();
 				var skin = objects.Add(new FbxNode("Deformer"));
-				skin.Prop(FbxProperty.Long(skinId), FbxProperty.String("Deformer::Skin " + node.Name), FbxProperty.String("Skin"));
+				skin.Prop(FbxProperty.Long(skinId), FbxProperty.ObjectName("Deformer", "Skin " + node.Name), FbxProperty.String("Skin"));
 				skin.Add("Version", FbxProperty.Int(101));
 				skin.Add("Link_DeformAcuracy", FbxProperty.Double(50));
 
@@ -929,7 +935,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 					var clusterId = ids.Next();
 					var cluster = objects.Add(new FbxNode("Deformer"));
 					cluster.Prop(FbxProperty.Long(clusterId),
-								 FbxProperty.String("SubDeformer::Cluster " + boneRecord.Name),
+								 FbxProperty.ObjectName("SubDeformer", "Cluster " + boneRecord.Name),
 								 FbxProperty.String("Cluster"));
 					cluster.Add("Version", FbxProperty.Int(100));
 					cluster.Add("UserData", FbxProperty.String(""), FbxProperty.String(""));
@@ -990,7 +996,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 				return;
 
 			var pose = objects.Add(new FbxNode("Pose"));
-			pose.Prop(FbxProperty.Long(ids.Next()), FbxProperty.String("Pose::BIND_POSES"), FbxProperty.String("BindPose"));
+			pose.Prop(FbxProperty.Long(ids.Next()), FbxProperty.ObjectName("Pose", "BIND_POSES"), FbxProperty.String("BindPose"));
 			pose.Add("Type", FbxProperty.String("BindPose"));
 			pose.Add("Version", FbxProperty.Int(100));
 			pose.Add("NbPoseNodes", FbxProperty.Int(posed.Count));
@@ -1042,7 +1048,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 
 				var stackId = ids.Next();
 				var stack = objects.Add(new FbxNode("AnimationStack"));
-				stack.Prop(FbxProperty.Long(stackId), FbxProperty.String("AnimStack::" + unique), FbxProperty.String(""));
+				stack.Prop(FbxProperty.Long(stackId), FbxProperty.ObjectName("AnimStack", unique), FbxProperty.String(""));
 				var stackProperties = stack.Add(new FbxNode("Properties70") { AlwaysBlock = true });
 				stackProperties.P("LocalStop", "KTime", "Time", "", FbxProperty.Long((long)(duration * kFbxTimePerSecond)));
 				stackProperties.P("ReferenceStop", "KTime", "Time", "", FbxProperty.Long((long)(duration * kFbxTimePerSecond)));
@@ -1053,7 +1059,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 				// an object, and the whole take then hangs off a layer that does not exist - which
 				// loses the animation silently, with no error from the importer.
 				var layer = objects.Add(new FbxNode("AnimationLayer") { AlwaysBlock = true });
-				layer.Prop(FbxProperty.Long(layerId), FbxProperty.String("AnimLayer::BaseLayer"), FbxProperty.String(""));
+				layer.Prop(FbxProperty.Long(layerId), FbxProperty.ObjectName("AnimLayer", "BaseLayer"), FbxProperty.String(""));
 				connections.Add("C", FbxProperty.String("OO"), FbxProperty.Long(layerId), FbxProperty.Long(stackId));
 
 				foreach (var curveSet in take.Nodes)
@@ -1114,7 +1120,7 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			var curveNodeId = ids.Next();
 			var curveNode = objects.Add(new FbxNode("AnimationCurveNode"));
 			curveNode.Prop(FbxProperty.Long(curveNodeId),
-						   FbxProperty.String("AnimCurveNode::" + (property == "Lcl Rotation" ? "R" : "T")),
+						   FbxProperty.ObjectName("AnimCurveNode", (property == "Lcl Rotation" ? "R" : "T")),
 						   FbxProperty.String(""));
 			var properties = curveNode.Add(new FbxNode("Properties70") { AlwaysBlock = true });
 			properties.P("d|X", "Number", "", "A", FbxProperty.Double(x[0]));
@@ -1159,30 +1165,33 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 			// along the take. The take spans at least one frame (see WriteAnimation).
 			var endTime = Math.Round((Math.Max(frameCount - 1, 1) / (double)frameRate) * kFbxTimePerSecond);
 
-			double[] times;
+			// KTime is a 64 bit integer, which the binary form stores as one; every time is rounded, so it holds it exactly
+			long[] times;
 			if (isConstant)
 			{
 				// One value, stated at both ends of the take rather than left to extrapolation - which also
 				// covers the single-frame take, whose one key would otherwise sit alone at time zero.
 				values     = new[] { values[0], values[0] };
-				times      = new[] { 0.0, endTime };
+				times      = new[] { 0L, (long)endTime };
 				frameCount = 2;
 			} else
 			{
-				times = new double[frameCount];
+				times = new long[frameCount];
 				for (int frame = 0; frame < frameCount; frame++)
-					times[frame] = Math.Round((frame / (double)frameRate) * kFbxTimePerSecond);
+					times[frame] = (long)Math.Round((frame / (double)frameRate) * kFbxTimePerSecond);
 			}
 
 			var curveId = ids.Next();
 			var curve = objects.Add(new FbxNode("AnimationCurve"));
-			curve.Prop(FbxProperty.Long(curveId), FbxProperty.String("AnimCurve::"), FbxProperty.String(""));
+			curve.Prop(FbxProperty.Long(curveId), FbxProperty.ObjectName("AnimCurve", ""), FbxProperty.String(""));
 			curve.Add("Default", FbxProperty.Double(values.Length > 0 ? values[0] : 0));
 			curve.Add("KeyVer", FbxProperty.Int(4008));
 			curve.Add("KeyTime", FbxProperty.Array(times));
-			curve.Add("KeyValueFloat", FbxProperty.Array(values));
+			curve.Add("KeyValueFloat", FbxProperty.FloatArray(values));
 			curve.Add("KeyAttrFlags", FbxProperty.Array(new[] { kInterpolationLinear }));
-			curve.Add("KeyAttrDataFloat", FbxProperty.Array(new[] { 0.0, 0.0, kDefaultKeyWeights, 0.0 }));
+			// The weights are a packed integer the ASCII form writes as one; the binary form stores its bits as the float
+			curve.Add("KeyAttrDataFloat", FbxProperty.FloatArray(new[] { 0.0, 0.0, kDefaultKeyWeights, 0.0 },
+																 new[] { 0.0f, 0.0f, BitConverter.Int32BitsToSingle((int)kDefaultKeyWeights), 0.0f }));
 			curve.Add("KeyAttrRefCount", FbxProperty.Array(new[] { frameCount }));
 
 			connections.Add("C", FbxProperty.String("OP"), FbxProperty.Long(curveId), FbxProperty.Long(curveNodeId),

@@ -326,8 +326,10 @@ namespace Chisel.Import.Source.VPKTools
 		// instead of the mesh's own - which on these ten-triangle bands is not the sphere's.
 		// 9: the iris uv's v runs up the eye. It ran down, which is Source's own D3D convention unflipped, so every
 		// eye wore its iris and cornea textures upside down.
+		// animation 2: model files and shared animation files are written in FBX's binary form (FbxDocument.BinaryEnabled),
+		// which every one of them is written again in once.
 		internal static readonly (string generator, int version) ModelVersion     = ("model", 9);
-		internal static readonly (string generator, int version) AnimationVersion = ("animation", 1);
+		internal static readonly (string generator, int version) AnimationVersion = ("animation", 2);
 
 		/// <summary>
 		/// What every collision node's name starts with. A model file cannot mark a mesh as a collider, so
