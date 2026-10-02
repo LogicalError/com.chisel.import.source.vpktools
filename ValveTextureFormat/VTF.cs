@@ -293,7 +293,11 @@ namespace Chisel.Import.Source.VPKTools
                             {
                                 long mipmapBufferOffset = (long)mipmapSize * (vtfHeader.frames * faces - (i * faces + face));
                                 stream.Position = stream.Length - mipmapBufferOffset;
-                                frames[i].Faces[face] = DecompressImage(stream, vtfHeader.width, vtfHeader.height, mipmapSize, vtfHeader.highResImageFormat);
+                                // Steps of the import batch running, if one is (ImportSteps), as is reading the bytes
+                                // (Texture2DHelpers.ReadImageBytes): the texture reads were 4.5 of the 45 s of
+                                // a map's first import, with nothing to say which part of them
+                                using (ImportSteps.Step("vtf: decoded"))
+                                    frames[i].Faces[face] = DecompressImage(stream, vtfHeader.width, vtfHeader.height, mipmapSize, vtfHeader.highResImageFormat);
                             }
                             frames[i].Pixels = frames[i].Faces[0];
 						}
@@ -316,16 +320,19 @@ namespace Chisel.Import.Source.VPKTools
 							vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_DXT3 ||
 							vtfHeader.highResImageFormat == VTFImageFormat.IMAGE_FORMAT_DXT5)
                         {
-                            for (int f = 0; f < frames.Length; f++)
+                            using (ImportSteps.Step("vtf: alpha looked at"))
                             {
-                                var pixels = frames[f].Pixels;
-                                for (int i = 0; i < pixels.Length; i++)
+                                for (int f = 0; f < frames.Length; f++)
                                 {
-                                    var pixel = pixels[i];
-                                    if (pixel.a != 1.0f)
+                                    var pixels = frames[f].Pixels;
+                                    for (int i = 0; i < pixels.Length; i++)
                                     {
-                                        hasAlpha = true;
-                                        break;
+                                        var pixel = pixels[i];
+                                        if (pixel.a != 1.0f)
+                                        {
+                                            hasAlpha = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }

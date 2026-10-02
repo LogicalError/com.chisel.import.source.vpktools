@@ -205,7 +205,11 @@ namespace Chisel.Import.Source.VPKTools
 			PackagePath.CleanPath(ref directory, ref fileName, ref extension);
             if (GetEntry(directory, fileName, extension, out VPKDirectoryEntry entry))
             {
-                Stream currentStream = GetStream(entry.ArchiveIndex);
+                // A step of the import batch running, if one is (ImportSteps): every file a map's import reads opens its
+                // archive again
+                Stream currentStream;
+                using (ImportSteps.Step("vpk: archives opened"))
+                    currentStream = GetStream(entry.ArchiveIndex);
                 if (currentStream != null)
                 {
                     try

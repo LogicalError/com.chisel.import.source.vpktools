@@ -108,12 +108,15 @@ namespace Chisel.Import.Source.VPKTools
 		{
 			var bytes = new byte[count];
 			read = 0;
-			while (read < count)
+			using (ImportSteps.Step("vtf: bytes read"))
 			{
-				var n = data.Read(bytes, (int)read, (int)(count - read));
-				if (n <= 0)
-					break;
-				read += n;
+				while (read < count)
+				{
+					var n = data.Read(bytes, (int)read, (int)(count - read));
+					if (n <= 0)
+						break;
+					read += n;
+				}
 			}
 			if (fill != 0)
 			{
