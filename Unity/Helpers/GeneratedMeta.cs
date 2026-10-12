@@ -34,8 +34,7 @@ namespace Chisel.Import.Source.VPKTools
 			Model,
 			/// <summary>
 			/// A mask written from a texture's alpha (Texture2DImporter.WriteAlphaMask), a .png owned by Unity's TextureImporter:
-			/// its defaults but for what makes it data. Every one has the same .meta but for its GUID
-			/// .
+			/// its defaults but for what makes it data. Every one has the same .meta but for its GUID.
 			/// </summary>
 			AlphaMask,
 		}
@@ -168,8 +167,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// The single-line fields of a generated model's .meta set per model (ModelImporter.ConfigureImportedModel): beside
-		/// them only its GUID, userData, material remaps and LOD transitions differ from one to the next
-		/// .
+		/// them only its GUID, userData, material remaps and LOD transitions differ from one to the next.
 		/// </summary>
 		internal static readonly string[] ModelFields = { "importAnimation", "animationType", "avatarSetup" };
 

@@ -23,8 +23,7 @@ namespace Chisel.Import.Source.VPKTools
 	/// - 3% of the size inside the surface on a sphere - and warns on every import.</item>
 	/// <item>PhysX inflates a flat hull to a tenth of its size in thickness: hulls 3e-7 m thick or less were inflated
 	/// at every size from 0.01 m to 5 m, hulls 1e-6 m thick were not. Source collides with such a piece as a plate of
-	/// no thickness. The 102 pieces that thin among the 110,137 in the models Black Mesa's maps use are all flat to
-	/// within the precision of the file, and none of the others is thinner than 1e-4 m but for one at 1.1e-6 m.</item>
+	/// no thickness. Pieces that thin are flat to within the precision of the file.</item>
 	/// </list>
 	/// </summary>
 	sealed class SourceCollisionPostprocessor : AssetPostprocessor

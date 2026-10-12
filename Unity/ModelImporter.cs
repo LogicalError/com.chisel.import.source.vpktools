@@ -123,21 +123,12 @@ namespace Chisel.Import.Source.VPKTools
 				// animation go through (ConvertBoneTransform), because a skin only deforms correctly
 				// when its vertices and its bones share a frame.
 				//
-				// There used to be two. The non-skinned one was InvModelMatrix * Rx(-90) *
-				// VmfSourceToUnity, whose first two factors are exact inverses: it was always just
-				// VmfSourceToUnity. The skinned one added Quaternion.Euler(90, 0, 90) and a swizzle,
-				// which works out to exactly a +90 degree rotation about Source's up axis applied to
-				// the vertices. That is not a property of skinned meshes. It is the rotation studiomdl
-				// compiles into the root bone of a model's ANIMATION relative to its reference pose -
-				// in 380 of 458 root-bone animations sampled across 230 multi-bone models it is exactly
-				// +90 degrees about +Z - and
-				// the engine renders the animated pose, which is what the level was laid out against.
-				// Baking it into the vertices made the bind pose look right for as long as nothing was
-				// animated. Once the model file carried its animation, Unity posed the root from it and
-				// the rotation was applied a second time, turning every skinned model 90 degrees in the
-				// map; and it had always been wrong for the models whose animation carries no such
-				// rotation (the rest are 0 or 180 degrees, or genuinely move). With a single basis, a
-				// model with a skeleton is posed exactly as Source renders it, whichever kind it is.
+				// The rotation studiomdl compiles into the root bone of a model's ANIMATION relative to its reference pose is not
+				// baked into the vertices. In most root-bone animations it is exactly +90 degrees about +Z, but not in all of
+				// them (the rest are 0 or 180 degrees, or genuinely move). The engine renders the animated pose, which is what
+				// the level was laid out against, and once the model file carries its animation Unity poses the root from it, so a
+				// baked rotation would be applied a second time. With a single basis, a model with a skeleton is posed exactly as
+				// Source renders it, whichever kind it is.
 				var transformation = SourceEngineUnits.VmfSourceToUnity;
 
 				for (int i = 0; i < vertices.Length; i++)
@@ -385,7 +376,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// model file that has to be written is written with its .meta (ImportOnce's writing) and all of them are imported in
 		/// ONE asset-editing block, where each took a refresh of its own;
 		/// then what follows a model file's import: its skins' variants, all of them saved in one block more
-		/// (<see cref="SaveSkinVariants"/>; 73 refreshes of their own on that map). The animation a model shares with others is
+		/// (<see cref="SaveSkinVariants"/>). The animation a model shares with others is
 		/// written before the block, which a refresh it takes may import a model file early for, as written: one imported
 		/// since is not imported twice.
 		/// <para>
@@ -506,8 +497,7 @@ namespace Chisel.Import.Source.VPKTools
 			}
 		}
 
-		// Each step of ImportAll timed (ImportSteps): the models took 40 of a map's 70 s first import
-		//, with nothing to say which part of them
+		// Each step of ImportAll timed (ImportSteps)
 		static ImportSteps.Scope Step(string name) => ImportSteps.Step(name);
 
 		static readonly (string generator, int version)[] s_ModelVersions = { ModelVersion, AnimationVersion };
@@ -660,9 +650,8 @@ namespace Chisel.Import.Source.VPKTools
 			}
 			finally
 			{
-				// The meshes used to survive as sub-assets of the prefab. Nothing owns them now - the
-				// FBX carries the geometry and Unity builds its own meshes from it - so they have to
-				// be destroyed explicitly or every imported model leaks one per LOD per bodypart.
+				// Nothing owns the meshes - the FBX carries the geometry and Unity builds its own meshes from it - so they
+				// have to be destroyed explicitly or every imported model leaks one per LOD per bodypart.
 				foreach (var modelEntry in modelEntries)
 				{
 					if (modelEntry?.Mesh != null)
@@ -722,8 +711,8 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// The prefabs of model files just imported: each file's, then a variant over it for each further skin - every variant
-		/// of every file saved in ONE asset-editing block, where each SaveAsPrefabAsset was a refresh of its own
-		///. Inside the block a variant is written, not imported, so each
+		/// of every file saved in ONE asset-editing block, where each SaveAsPrefabAsset was a refresh of its own.
+		/// Inside the block a variant is written, not imported, so each
 		/// is loaded once the block has ended. A skin a variant could not be made for is null, as before.
 		/// </summary>
 		internal static GameObject[][] SaveSkinVariants(IReadOnlyList<SkinnedFile> files)
@@ -1858,8 +1847,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>
 		/// Imports the materials of these models together, as each model's import asks for its own (ImportModelTextures): one
 		/// MaterialImporter.ImportAll for all of them - one refresh for their textures and one for themselves, where each
-		/// model took its own. The models' imports then find them current. a map's first import took 90
-		/// refreshes for one material and some 100 for a few textures, most of them a model's.
+		/// model took its own. The models' imports then find them current.
 		/// </summary>
 		/// <param name="progress">Told the index of each material it builds and the count, for a progress bar.</param>
 		public static void PrepareMaterials(GameResources gameResources, IEnumerable<SourceModel> models, Action<int, int> progress = null)
@@ -2240,10 +2228,8 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>
 		/// Whether to import MDL animations.
 		/// <para>
-		/// This used to be off because every sequence became an AnimationClip added as a sub-asset of
-		/// the model's prefab, and a map full of NPCs ran the editor out of memory doing it. Animation
-		/// now goes into the model file as takes and Unity creates the clips on import, so the cost is
-		/// a larger file rather than thousands of serialized sub-assets.
+		/// Animation goes into the model file as takes and Unity creates the clips on import, so the cost is a
+		/// larger file rather than thousands of serialized sub-assets.
 		/// </para>
 		/// <para>
 		/// It is still not free. Most models have no sequences at all, but the shared NPC animation

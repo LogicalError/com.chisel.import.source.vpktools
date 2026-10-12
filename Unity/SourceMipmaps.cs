@@ -52,8 +52,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// Off resamples every tap through the gamma table, as each level did before (<see cref="ResampleJob"/>): what
-		/// reading level 0 through it once (<see cref="LinearResampleJob"/>) is compared against. The mipmaps were 5.3 of the
-		/// 46 s a map's first import took, the most of any one part.
+		/// reading level 0 through it once (<see cref="LinearResampleJob"/>) is compared against.
 		/// </summary>
 		internal static bool LinearSourceEnabled = true;
 

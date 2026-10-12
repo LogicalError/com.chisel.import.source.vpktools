@@ -2,26 +2,25 @@
 // shows through. Here the face draws what the sky shows at that pixel - the 3D skybox's view when a SourceSkyCamera
 // drew one (_SourceSky3D), the 2D sky's cubemap otherwise. The properties are the 2D sky's (Skybox/Cubemap Skybox).
 //
-// IT IS AN ORDINARY OPAQUE SURFACE. It writes its depth and hides what is behind it, in every view. That is not a
-// detail: a Source map is sealed, and a sky face is one of the solids that seals it, so everything beyond one is
-// something the player is never meant to see. Source keeps it out by visibility instead - it draws the sky view over
-// the whole frame first, then skips sky faces while drawing the world, and its areas and PVS keep the rest of the map
-// out of the sky view (CSkyboxView submits the sky camera's area alone, viewrender.cpp, from engine->GetArea of
-// sky_camera's origin, SkyCamera.cpp). We have no vbsp areas, but we do not need them: the rooms are sealed, so a wall
-// that writes depth hides what is beyond it exactly as the area restriction would.
+// It is an ordinary opaque surface: it writes its depth and hides what is behind it, in every view. A Source map is
+// sealed, and a sky face is one of the solids that seals it, so everything beyond one is something the player is never
+// meant to see. Source keeps it out by visibility instead - it draws the sky view over the whole frame first, then
+// skips sky faces while drawing the world, and its areas and PVS keep the rest of the map out of the sky view
+// (CSkyboxView submits the sky camera's area alone, viewrender.cpp, from engine->GetArea of sky_camera's origin,
+// SkyCamera.cpp). We have no vbsp areas, but we do not need them: the rooms are sealed, so a wall that writes depth
+// hides what is beyond it exactly as the area restriction would.
 //
-// It was a backdrop once - depth at the far plane, hiding nothing - so that the 3D skybox miniature, which is real
-// geometry in the level, would not be sliced up by the sky faces standing in front of it. That was the wrong fix for
-// it. Sealing removes the slicing too, because a sealed play area never sees the miniature directly at all; it sees it
-// through these faces, which is what the game shows. And a backdrop breaks the miniature from the inside: a map's
-// 3D skybox is a box of toolsskybox brushes around its sky_camera, and the backdrops it paints inside it are
-// vista/surfacetension_skyline_0*, UnlitGeneric with "$translucent" "1" - which can never occlude anything. A
-// translucent card in front of a wall that also refuses to occlude shows the level two kilometres away through both.
+// It is not a backdrop (depth at the far plane, hiding nothing). Sealing already keeps the 3D skybox miniature, which
+// is real geometry in the level, from being sliced up by the sky faces in front of it, because a sealed play area never
+// sees the miniature directly; it sees it through these faces, which is what the game shows. A backdrop would also
+// break the miniature from the inside: a 3D skybox is a box of toolsskybox brushes around its sky_camera, and the
+// backdrops painted inside it are often UnlitGeneric with "$translucent" "1", which can never occlude anything. A
+// translucent card in front of a wall that also refuses to occlude shows the level far away through both.
 //
-// ALPHA 0 MARKS THE PIXEL AS SKY, for Chisel/Source/Fog, which never fogs the sky - Source's world fog is for the
-// world, and the 3D skybox carries its own (CSkyboxView::Enable3dSkyboxFog). The fog cannot read that off the depth
-// any more: a sky face now writes the depth of a wall a few metres away, and fogging it by that distance would paint
-// the level's haze over the vista. The marker has to be written here, where the surface knows what it is.
+// Alpha 0 marks the pixel as sky, for Chisel/Source/Fog, which never fogs the sky - Source's world fog is for the
+// world, and the 3D skybox carries its own (CSkyboxView::Enable3dSkyboxFog). The fog cannot read that off the depth:
+// a sky face writes the depth of a wall a few metres away, and fogging it by that distance would paint the level's
+// haze over the vista. The marker has to be written here, where the surface knows what it is.
 Shader "Chisel/Source/Sky Face"
 {
     Properties

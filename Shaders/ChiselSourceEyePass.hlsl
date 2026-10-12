@@ -137,7 +137,7 @@ Varyings SourceEyeVertex(Attributes input)
 	output.eyeUv       = input.eyeUv;
 	// Source takes the normal from the eyeball's CENTRE rather than the mesh (eye_refract_vs20.fxc:126), which
 	// keeps the eye reading as a sphere even where the mesh is coarse. The centre is not available here, and the
-	// thing that used to stand in for it - normalize(positionOS) - is the direction away from the MESH's origin,
+	// obvious stand-in for it - normalize(positionOS) - is the direction away from the MESH's origin,
 	// which on a character is a point between its feet. The mesh's own normal is the eyeball's actual surface
 	// direction and identical to Source's on a sphere; the difference is only that a normal an artist smoothed
 	// into the surrounding face stays smoothed.

@@ -105,9 +105,8 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// The bytes of an image, read at once. The decoders below read a field, or a byte, at a time, each read a call
-		/// through the VPK's stream and, for a byte, an array of its own (Stream.ReadByte): the texture reads took about
-		/// 10 s of a map's 67 s first import. A stream that ends early leaves the rest as
-		/// <paramref name="fill"/>, which is what the reads gave there: 0 where a field was read into a new array
+		/// through the VPK's stream and, for a byte, an array of its own (Stream.ReadByte). A stream that ends early leaves the
+		/// rest as <paramref name="fill"/>, which is what the reads gave there: 0 where a field was read into a new array
 		/// (DataParser), 255 where a byte was (ReadByte's -1, as a byte).
 		/// </summary>
 		static byte[] ReadImageBytes(Stream data, long count, byte fill, out long read)
@@ -261,8 +260,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// four-bit values, row by row, the low nibble first - then its colour, a block as DXT5 has it, always of four colours.
 		/// </summary>
 		/// <remarks>
-		/// It read eight bytes a block, as DXT1, and so decoded the first half of the image's alpha and colour as colour: 122
-		/// of Black Mesa's textures are DXT3, its Xen glass among them.
+		/// DXT1 blocks are eight bytes; reading a DXT3 block as one would decode the first half of the image's alpha and colour as colour.
 		/// </remarks>
 		/// <param name="data">Raw image byte data</param>
 		/// <param name="width">Expected width of the image</param>

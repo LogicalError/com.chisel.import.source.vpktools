@@ -30,9 +30,7 @@ namespace Chisel.Import.Source.VPKTools
 	/// reading it without interning would produce a separate copy per reference. An offset only
 	/// identifies a structure WITHIN A SINGLE FILE, though, which is why this carries the name of the
 	/// file it belongs to: reusing one across files hands back whatever happened to sit at the same
-	/// offset in the other one. That is not hypothetical - the same instance used to be passed to
-	/// every <c>$includemodel</c>, and models/Kleiner_animations.mdl came back with 4 animation
-	/// descriptions when read as an include against 7 read on its own.
+	/// offset in the other one.
 	/// </para>
 	/// </summary>
 	public class Lookup

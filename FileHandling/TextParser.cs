@@ -45,9 +45,9 @@ namespace Chisel.Import.Source.VPKTools
 		/// differs from one parameter to the next, so that is left to whoever applies it.
 		/// </summary>
 		/// <remarks>
-		/// This used to be a VMF light parser - every component divided by 255 and raised to 2.2, a fourth
-		/// read as a brightness - which turned "[1 1 1]" into 0.000005, and with it the $phongtint, $color
-		/// and $selfillumtint of hundreds of materials into black.
+		/// This is not a VMF light parser: dividing every component by 255 and raising it to 2.2, with a fourth read as a
+		/// brightness, would turn "[1 1 1]" into 0.000005 and make the $phongtint, $color and $selfillumtint of many
+		/// materials black.
 		/// </remarks>
 		public static RGBColor ParseColor(string stringValue)
 		{

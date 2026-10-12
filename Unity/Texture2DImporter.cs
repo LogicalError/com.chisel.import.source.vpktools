@@ -392,8 +392,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>
 		/// What a texture written ahead has still to write (<see cref="WriteAhead"/>): its .pngs, each encoded meanwhile on a
 		/// worker thread into a file of the project's Temp folder, and its .metas, all put in place when it is imported
-		/// (<see cref="ImportAhead"/>). Encoding them one after another, a normal map's conversion with it, was about 7 of the
-		/// 57 s of a map's first import. Until then
+		/// (<see cref="ImportAhead"/>). Until then
 		/// neither is where a refresh in between could come across it: one that found a .png without its .meta would import it
 		/// with Unity's defaults, and one that found a .meta without its .png would delete it.
 		/// </summary>
@@ -462,8 +461,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		// A texture that may hold a NaN has its .pngs written at once, as before: what a .png makes of a NaN is only known from
 		// the .png (FormatOfPng, ConvertSourceNormalMapFile). Only an HDR texture can: its texels are the one format decoded
-		// as floats (RGBA16161616F); every other is decoded from integers. Looking at every texel for one instead took 2.1 s
-		// of a map's first import.
+		// as floats (RGBA16161616F); every other is decoded from integers. Looking at every texel for one instead is slow.
 		static bool WrittenAtOnce(VTF sourceTexture)
 		{
 			if (sourceTexture.IsHDR)
@@ -803,8 +801,8 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>
 		/// Writes a texture's alpha as a mask as <see cref="ImportAlphaMask"/> would - its .png and its .meta - without importing
 		/// it, for <see cref="ImportAhead"/> to import with the textures written ahead: in a texture census, a build that asks
-		/// for a mask (a phong or environment-map mask in a normal map's alpha) took two refreshes of its own for it
-		///. Its stand-in is a texture that is no asset: a build only asks
+		/// for a mask (a phong or environment-map mask in a normal map's alpha) would take two refreshes of its own for it.
+		/// Its stand-in is a texture that is no asset: a build only asks
 		/// whether there is a mask. Null when it cannot be written ahead - no alpha, or no template yet for its .meta - with
 		/// nothing written; ImportAlphaMask then takes it, now.
 		/// </summary>
@@ -1145,7 +1143,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// as its CLAMPS/CLAMPT flags have the game do.
 		/// <para>
 		/// A face that already is size x size comes back unchanged, so a sky that imported before still writes the
-		/// same file. Every other shape used to throw from SetPixels, which took the whole map import down with it.
+		/// same file. SetPixels would throw for any other shape.
 		/// </para>
 		/// </summary>
 		internal static Color[] SkyFaceAsSquare(Color[] pixels, int width, int height, int size, bool isSide)
@@ -1426,8 +1424,8 @@ namespace Chisel.Import.Source.VPKTools
 			// shader in the project unpacks that convention, so reproducing it would be a second encoder to
 			// keep in step for no gain - the mip filtering this is all for is an alpha-test problem, and a
 			// normal map has no alpha test. How the VTF says it is sampled goes with it: Unity's importer
-			// starts from its defaults (anisotropy 1, bilinear, repeat), which every normal map had until
-			// the rest of the textures had the forced anisotropy and the VTF's filter and wrap.
+			// starts from its defaults (anisotropy 1, bilinear, repeat), so the forced anisotropy and the
+			// VTF's filter and wrap are written for the normal map as well.
 			GeneratedMeta.NormalMapSampling? sampling = null;
 			if (AssetImporter.GetAtPath(assetPath) is SourceTextureImporter source)
 			{
@@ -1501,8 +1499,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// The byte a .png SaveFramesAsPNG writes holds for a float, as LoadImage reads it back: EncodeArrayToPNG makes each
-		/// float (v * 255 + 0.5), clamped, an 8-bit RGBA .png
-		/// . Not for a NaN, which the probe did not try.
+		/// float (v * 255 + 0.5), clamped, an 8-bit RGBA .png. Not for a NaN.
 		/// </summary>
 		static byte PngByteOf(float value) => (byte)Mathf.Clamp(value * 255f + 0.5f, 0f, 255f);
 
@@ -1526,8 +1523,6 @@ namespace Chisel.Import.Source.VPKTools
 		/// written first and read back. With a NaN among them, the way it was. With <paramref name="unwritten"/>, it is left to
 		/// it, its pixels taken as the .png holds them, converted and encoded on a worker thread (<see cref="EncodeNormalMap"/>):
 		/// a texture written ahead holds no NaN (<see cref="WrittenAtOnce"/>), and one that did would not be written, but said.
-		/// Taking them on the main thread was most of the 1.2 s the metas written ahead took of a map's first
-		/// import.
 		/// </summary>
 		internal static bool WriteSourceNormalMap(string assetPath, Color[] pixels, int width, int height, bool selfShadowed,
 												  Unwritten unwritten = null)
@@ -1583,10 +1578,10 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// What SourceTextureImporter.FormatOf makes of a .png SaveFramesAsPNG wrote, from the pixels it was written from, as
-		/// the .png holds them (<see cref="PngByteOf"/>): only alpha decides it. Reading the .png back for it took 2.4 s of
-		/// a map's first import. A NaN alpha before any other below 255 has the .png read back.
+		/// the .png holds them (<see cref="PngByteOf"/>): only alpha decides it, so the .png need not be read back.
+		/// A NaN alpha before any other below 255 has the .png read back.
 		/// With <paramref name="alphaIsOne"/> (<see cref="VTF.AlphaIsOne"/>: every alpha is 1, which the .png holds as 255) the
-		/// pixels are not looked at again: that took 1.1 s of the same import.
+		/// pixels are not looked at again.
 		/// </summary>
 		internal static TextureFormat FormatOfWritten(Color[] pixels, int width, int height, bool compress, string assetPath,
 													  bool alphaIsOne = false)
@@ -1866,8 +1861,8 @@ namespace Chisel.Import.Source.VPKTools
 			//       what alphaSource above is for.
 
 			// Linear until a material claims the texture for a color slot (MarkAsColor). The VTF's
-			// TEXTUREFLAGS_SRGB cannot decide it: it used to mean NOCOMPRESS, and in this game it is set
-			// on only 191 of the 1468 textures materials sample as color, and on a few that hold masks.
+			// TEXTUREFLAGS_SRGB cannot decide it: it is missing on many of the textures materials sample as color, and
+			// set on a few that hold masks.
 			settings.sRGBTexture = false;
 
 			settings.filterMode = FilterMode.Bilinear;

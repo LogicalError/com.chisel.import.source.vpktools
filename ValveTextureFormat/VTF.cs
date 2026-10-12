@@ -294,8 +294,7 @@ namespace Chisel.Import.Source.VPKTools
                                 long mipmapBufferOffset = (long)mipmapSize * (vtfHeader.frames * faces - (i * faces + face));
                                 stream.Position = stream.Length - mipmapBufferOffset;
                                 // Steps of the import batch running, if one is (ImportSteps), as is reading the bytes
-                                // (Texture2DHelpers.ReadImageBytes): the texture reads were 4.5 of the 45 s of
-                                // a map's first import, with nothing to say which part of them
+                                // (Texture2DHelpers.ReadImageBytes)
                                 using (ImportSteps.Step("vtf: decoded"))
                                     frames[i].Faces[face] = DecompressImage(stream, vtfHeader.width, vtfHeader.height, mipmapSize, vtfHeader.highResImageFormat);
                             }

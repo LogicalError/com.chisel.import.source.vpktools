@@ -103,9 +103,6 @@ SourceVaryings SourceLitVertex(SourceAttributes input)
 // rim light and the environment fresnel fire at full strength on every back face whatever their exponent, and the
 // diffuse and phong terms light the wrong hemisphere. Flip it, as URP's own two-sided shaders do; the tangent's
 // handedness goes with it so the normal map's bitangent stays right-handed.
-//
-// Found on a map's agave: its inner leaves are the ones seen from behind, and they came out flat pale grey
-// because the rim term was adding the ambient probe over them at full strength.
 void SourceFlipNormalForBackFace(inout SourceVaryings input, FRONT_FACE_TYPE frontFace)
 {
 	half facing = IS_FRONT_VFACE(frontFace, 1.0h, -1.0h);

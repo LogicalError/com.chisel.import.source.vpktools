@@ -68,8 +68,7 @@ namespace Chisel.Import.Source.VPKTools
 
 		public override void OnImportAsset(AssetImportContext ctx)
 		{
-			// Each part is a step of the import batch running, if one is (ImportSteps): the textures' imports were 7.5 of
-			// the 30 s a map's models took, with nothing to say which part of them
+			// Each part is a step of the import batch running, if one is (ImportSteps)
 			byte[] bytes;
 			try
 			{

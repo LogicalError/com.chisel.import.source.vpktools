@@ -220,7 +220,7 @@ namespace Chisel.Import.Source.VPKTools
 					return standIns;
 				// Not written ahead: there is no template yet for what it is to be, so it is imported now, the slow way, and
 				// claimed at once, as without a census. The first texture of a kind is what the next ones are written ahead
-				// from, and a normal map is one only once it is converted
+				// from, and a normal map is one only once it is converted.
 				using (ImportSteps.Step("textures imported one by one"))
 					return Texture2DImporter.ClaimNow(Texture2DImporter.Import(sourceTexture, outputPath, claim), claim);
 			}
@@ -235,9 +235,8 @@ namespace Chisel.Import.Source.VPKTools
 		/// Starts a texture census, which ends when it is disposed. Until then, a texture ImportVTF is asked for that has to be
 		/// written is written ahead of its import (Texture2DImporter.WriteAhead) and the asker is handed stand-ins for it, and
 		/// so is a mask ImportAlphaMask has to write (Texture2DImporter.WriteAlphaMaskAhead); ending the census imports every
-		/// one of them in ONE refresh, where each took one of its own as it was asked for (about 0.12 s apiece in this
-		/// project). MaterialImporter.ImportAll builds its materials once under a census, for the textures they ask for, and
-		/// then again for real.
+		/// one of them in ONE refresh, where each would take one of its own as it was asked for. MaterialImporter.ImportAll
+		/// builds its materials once under a census, for the textures they ask for, and then again for real.
 		/// </summary>
 		internal TextureCensus BeginTextureCensus()
 		{
@@ -466,9 +465,8 @@ namespace Chisel.Import.Source.VPKTools
 			return sourceMaterial;
 		}
 
-		// A map references the same handful of materials from tens of thousands of brush sides -
-		// a map resolves 34040 sides down to 1393 distinct materials. Without this, every one
-		// of those sides re-reads the VMT out of the VPK, re-parses it, and does an AssetDatabase
+		// A map references the same handful of materials from tens of thousands of brush sides.
+		// Without this, every one of those sides re-reads the VMT out of the VPK, re-parses it, and does an AssetDatabase
 		// lookup, only to arrive at the Material we already had. Keyed on the GameEntry instance
 		// because entries are interned in `lookup`, so the same name always yields the same object.
 		readonly Dictionary<(GameEntry entry, bool isSprite, bool brushFace), Material> importedMaterials = new();
@@ -692,9 +690,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// The models currently being read, so <c>$includemodel</c> cannot recurse into one of them.
 		/// <para>
 		/// Reading a model reads the models it shares animation with, and nothing in the format says
-		/// those cannot point back. Sharing one interning table across files used to break such a
-		/// cycle by accident - the second visit found the first one's structures at the same offsets
-		/// and stopped - which is no longer true now that each file interns separately.
+		/// those cannot point back; this set breaks such a cycle.
 		/// </para>
 		/// </summary>
 		readonly HashSet<string> mdlLoadsInProgress = new();
@@ -844,9 +840,8 @@ namespace Chisel.Import.Source.VPKTools
 		public GameObject ImportModel(string entryName, string[] searchPaths = null, int skin = 0)
 		{
 			if (string.IsNullOrEmpty(entryName)) return null;
-			// A map places the same model again and again - a map with 170 entities over 64 models - and each one
-			// read the model's files out of the VPKs again, and asked for its materials and files again, only to arrive at
-			// the prefab it already had
+			// A map places the same model again and again; without this each one reads the model's files out of the VPKs again,
+			// and asks for its materials and files again, only to arrive at the prefab it already had
 			var entry = GetEntry(entryName, searchPaths);
 			if (entry != null && importedModels.TryGetValue((entry, skin), out var cached))
 				return cached;

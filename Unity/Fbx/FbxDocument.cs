@@ -146,20 +146,19 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 	internal static class FbxDocument
 	{
 		/// <summary>
-		/// The binary form
-		/// . Off, files are written in the ASCII form, as before. Either is read the same; a file written
-		/// one way is not written again the other way until its version stamp asks for it (or it is deleted).
+		/// The binary form. Off, files are written in the ASCII form, which is useful for debugging. Either is read the same;
+		/// a file written one way is not written again the other way until its version stamp asks for it (or it is deleted).
 		/// </summary>
 		public static bool BinaryEnabled = true;
 		/// <summary>How many array values to put on one line. Purely cosmetic; the parser does not care.</summary>
 		const int kArrayValuesPerLine = 30;
 
 		/// <summary>
-		/// The text of each number written so far in the document being written, by its bits. Formatting the numbers was
-		/// nearly all of the export - 6.1 of the 6.5 s a map's 71 model files took - and a mesh's
-		/// corners, a skin's weights and a take's keys repeat the same values over and over. A number's text is a function of
-		/// its bits alone, so what comes out is what formatting each one would write (FbxDocumentNumberTests). Per document:
-		/// a map's worth of models is never held. Off, every number is formatted: what the tests compare with.
+		/// The text of each number written so far in the document being written, by its bits. Formatting the numbers is
+		/// nearly all of the export, and a mesh's corners, a skin's weights and a take's keys repeat the same values over and
+		/// over. A number's text is a function of its bits alone, so what comes out is what formatting each one would write
+		/// (FbxDocumentNumberTests). Per document: a map's worth of models is never held. Off, every number is formatted: what
+		/// the tests compare with.
 		/// </summary>
 		internal static bool NumberCacheEnabled = true;
 

@@ -9,8 +9,7 @@ namespace Chisel.Import.Source.VPKTools
 	/// DXT1, DXT3 and DXT5 blocks decoded by a Burst job, a block at a time on every core, into exactly what
 	/// <see cref="Texture2DHelpers"/>' own decoders make of them: the same integer arithmetic per block, and every channel
 	/// the float a byte k makes, k / 255f, taken from a table made by that same expression in managed code
-	/// (<see cref="kByteToFloat"/>), so no float is worked out any other way. Decoding the textures in managed code was 3.6
-	/// of the 41 s of a map's first import, the most of what reading a texture takes.
+	/// (<see cref="kByteToFloat"/>), so no float is worked out any other way.
 	/// <para>
 	/// Only for an image whose sides are multiples of 4: the managed decoders treat the blocks past another size's edge
 	/// each their own way, and keep them.

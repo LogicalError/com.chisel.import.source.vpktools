@@ -60,8 +60,8 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// Writes new assets as <see cref="CreateStamped"/> writes one, all in the same asset-editing block: ONE refresh between
-		/// them, where each took one of its own - 10 of a map's entities' refreshes for its dust motes' meshes
-		/// alone. A Material Variant among them has to be a variant of a material that is an asset already.
+		/// them, where each would take one of its own. A Material Variant among them has to be a variant of a material that is
+		/// an asset already.
 		/// </summary>
 		public static void CreateStampedTogether(IReadOnlyList<(UnityEngine.Object asset, string assetPath)> assets,
 												 params (string generator, int version)[] versions)

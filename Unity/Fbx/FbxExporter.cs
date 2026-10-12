@@ -121,15 +121,14 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 		/// <summary>
 		/// As <see cref="Export(string, GameObject, IReadOnlyList{FbxAnimationTake})"/>, but with <paramref name="unwritten"/>
 		/// the file's text is made on a worker thread (FbxDocument.Bytes), and the file is written when what is unwritten is
-		/// (Texture2DImporter.Unwritten.WriteAll): the document is plain data, made here, which nothing changes after. Making
-		/// the text was 1.6 s of a map's first import on the main thread.
+		/// (Texture2DImporter.Unwritten.WriteAll): the document is plain data, made here, which nothing changes after.
 		/// </summary>
 		internal static Result Export(string path, GameObject root, IReadOnlyList<FbxAnimationTake> takes, Texture2DImporter.Unwritten unwritten)
 		{
 			if (root == null) throw new ArgumentNullException(nameof(root));
 			if (string.IsNullOrEmpty(path)) throw new ArgumentException("No output path", nameof(path));
 
-			// Each part timed (ImportSteps): the export took 5.5 s of a map's first import
+			// Each part timed (ImportSteps)
 			var ids       = new IdSource();
 			Hierarchy hierarchy;
 			var materialNames = new List<string>();
@@ -328,11 +327,9 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 		/// <remarks>
 		/// AN EMPTY SLOT STILL OWNS ITS SUBMESH INDEX. The geometry writes the raw submesh number into
 		/// LayerElementMaterial (<see cref="WriteGeometry"/>), and a node's material-layer indices are simply the
-		/// ORDER its materials are connected in - so skipping a null used to slide every later submesh onto its
+		/// ORDER its materials are connected in - so skipping a null would slide every later submesh onto its
 		/// neighbour's material and leave the last one indexing past the end of the list, where Unity substitutes a
-		/// white default material of its own. That is where the jeep's white windows came from, and the shift is the
-		/// worse half of it: the surfaces that still had a material were wearing the wrong one, which looks like
-		/// nothing at all whenever two materials happen to be similar.
+		/// white default material of its own.
 		/// One placeholder, emitted before everything else, keeps submesh N on connection N.
 		/// </remarks>
 		static int CollectMaterials(List<NodeRecord> nodes, IdSource ids,
@@ -951,13 +948,10 @@ namespace Chisel.Import.Source.VPKTools.Fbx
 					var boneGlobal = meshGlobal * bindPose.inverse;
 
 					// Transform is the OFFSET matrix - the bind pose itself, carrying the mesh into this
-					// bone's space - and NOT the mesh's global transform. This used to write the mesh's
-					// global, which for every model this importer builds is the identity; the reader took
-					// that as the bind pose, so every skinned model imported with identity bind poses and
-					// rendered as a heap (characters shredded, escalator steps strewn in a pattern).
-					// Settled by measurement, not by reading documentation: rewriting only this matrix to
-					// inverse(TransformLink) made a reimported rig consistent, and a reference file from
-					// the Autodesk SDK carries a different Transform on each cluster of a single mesh,
+					// bone's space - and NOT the mesh's global transform. A mesh's global is the identity for every model this
+					// importer builds; the reader would take that as the bind pose, and every skinned model would import with
+					// identity bind poses. Rewriting only this matrix to inverse(TransformLink) makes a reimported rig consistent,
+					// and a reference file from the Autodesk SDK carries a different Transform on each cluster of a single mesh,
 					// which a per-mesh global could never do.
 					var transform = new List<double>(16);
 					AppendMatrix(transform, ToFbxMatrix(bindPose));

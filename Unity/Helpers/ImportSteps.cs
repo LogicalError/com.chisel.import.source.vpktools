@@ -9,10 +9,6 @@ namespace Chisel.Import.Source.VPKTools
 	/// "&lt;label&gt; (steps)". A step inside another stops the outer one's clock until it ends, so each step's time is its
 	/// own and the steps add up to the batch. A batch begun inside another adds its steps to that one and says nothing of
 	/// its own: the materials of a map's models are steps of the model batch. Outside a batch a step times nothing.
-	/// <para>
-	/// The models took 40 of a map's 70 s first import, and their materials and textures 31.5 of those
-	///, with nothing to say which part of them.
-	/// </para>
 	/// </summary>
 	internal static class ImportSteps
 	{

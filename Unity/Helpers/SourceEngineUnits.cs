@@ -77,8 +77,8 @@ namespace Chisel.Import.Source.VPKTools
 			//       line up with Unity's meaning of the same words - Source's forward ends up in
 			//       Unity's x column and Source's right in Unity's y column, which is what the
 			//       swizzle and the negations below are for. Naming them after what AngleVectors
-			//       actually returns keeps that explicit; it used to bind them in swapped order,
-			//       which read as though the columns were wrong when they are not.
+			//       actually returns keeps that explicit; binding them in swapped order would read as
+			//       though the columns were wrong when they are not.
 			SourceEngineUnits.AngleVectors(angles, out Vector3 forward, out Vector3 right, out Vector3 up);
 
 			Quaternion quaternion = Quaternion.identity;

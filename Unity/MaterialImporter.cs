@@ -84,8 +84,8 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>
 		/// Writes a material this importer has just built as a new asset, stamped current, with ONE import.
 		/// <para>
-		/// It used to take three, each its own refresh: CreateAsset imports the file it writes, UnityAssets.Save imported
-		/// it again, and the stamp - importer userData - took a third (SaveAndReimport). A .meta written before
+		/// The slow way takes three, each its own refresh: CreateAsset imports the file it writes, UnityAssets.Save imports
+		/// it again, and the stamp - importer userData - takes a third (SaveAndReimport). A .meta written before
 		/// CreateAsset does not help: CreateAsset writes its own. What does: CreateAsset inside an asset-editing block,
 		/// which writes the .mat and its .meta at once and leaves the import to the end of the block, and the stamp put
 		/// into that .meta on disk before the block ends (<see cref="GeneratedMeta.SetUserData"/>), where the one import
@@ -239,16 +239,13 @@ namespace Chisel.Import.Source.VPKTools
 
 		/// <summary>
 		/// Imports a material for each request, each as <see cref="Import"/> would, but writes all the ones that have to be
-		/// written in ONE asset-editing block: one refresh between them, where Import takes one each. In this project a
-		/// refresh costs about 0.12 s besides the import itself
-		/// , and a material version bump rebuilds every material a map uses at its next import,
-		/// over a thousand for the larger maps.
+		/// written in ONE asset-editing block: one refresh between them, where Import takes one each. A material version bump
+		/// rebuilds every material a map uses at its next import, over a thousand for the larger maps.
 		/// <para>
 		/// The textures they are built with that have to be written are written first, and imported together too: the
 		/// materials are built once under a texture census (<see cref="GameResources.BeginTextureCensus"/>), which writes each
 		/// such texture ahead of its import and hands the build stand-ins for it, then the census imports them in one refresh,
-		/// and the materials are built again, for real, from the textures as imported. A map's first import wrote ~475
-		/// textures one refresh each.
+		/// and the materials are built again, for real, from the textures as imported.
 		/// </para>
 		/// <para>
 		/// The first request for a file decides it, as the first of two Import calls would. A material that cannot be
@@ -733,7 +730,7 @@ namespace Chisel.Import.Source.VPKTools
 		/// <summary>
 		/// A sprite's material (env_sprite and whatever else names a .spr or sprite .vmt): Chisel's billboard shader with the
 		/// sprite's texture. A sprite entity tints and dims it with its rendercolor and renderamt, through _TintColor on a
-		/// variant of it (VmfEntityConverter.GetTintedSpriteMaterial). URP's Particles/Unlit, which sprites used to get,
+		/// variant of it (VmfEntityConverter.GetTintedSpriteMaterial). URP's Particles/Unlit
 		/// neither faces the camera nor has a _TintColor.
 		/// </summary>
 		internal static Material CreateSpriteMaterial(GameResources gameResources, VMT sourceMaterial, string materialName)
@@ -780,9 +777,9 @@ namespace Chisel.Import.Source.VPKTools
 				{
 					if (!complexShader && translucency && additiveBlending)
 					{
-						// This used to be Unity's FX/Flare. That is a lens-flare shader and never depth
-						// tests, so every material that landed here showed through walls. The unlit
-						// Source shader with the VMT's own additive blend state is the real equivalent.
+						// Unity's FX/Flare is a lens-flare shader and never depth tests, so every material that landed here
+						// would show through walls. The unlit Source shader with the VMT's own additive blend state is the
+						// real equivalent.
 						var unlitSourceShader = SourceShaderLookup.Find("UnlitGeneric");
 						if (unlitSourceShader != null)
 							return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, unlitSourceShader);
@@ -807,9 +804,9 @@ namespace Chisel.Import.Source.VPKTools
 				{
 					if (!complexShader && translucency && additiveBlending)
 					{
-						// This used to be Unity's FX/Flare. That is a lens-flare shader and never depth
-						// tests, so every material that landed here showed through walls. The unlit
-						// Source shader with the VMT's own additive blend state is the real equivalent.
+						// Unity's FX/Flare is a lens-flare shader and never depth tests, so every material that landed here
+						// would show through walls. The unlit Source shader with the VMT's own additive blend state is the
+						// real equivalent.
 						var unlitSourceShader = SourceShaderLookup.Find("UnlitGeneric");
 						if (unlitSourceShader != null)
 							return CreateSourceShaderMaterial(gameResources, sourceMaterial, materialName, unlitSourceShader);
@@ -1763,18 +1760,17 @@ namespace Chisel.Import.Source.VPKTools
 		/// </summary>
 		/// <remarks>
 		/// <para>
-		/// A DELIBERATE DEVIATION from Source, recorded here rather than left to be
-		/// discovered. Source gates alpha to coverage on its own key, $allowalphatocoverage, and only 142 of the 480
-		/// $alphatest materials in Black Mesa set it - not the chain-link fences whose stair-stepped edges are what
-		/// prompted the work. Following the key faithfully would therefore leave the complaint unanswered on the
-		/// materials it was made about, so every alpha-tested material gets it. Valve's key exists because the feature
-		/// cost something on 2004 hardware and was not always available; it is free and universal on ours.
+		/// A deliberate deviation from Source. Source gates alpha to coverage on its own key, $allowalphatocoverage, which most
+		/// $alphatest materials do not set - not even the chain-link fences whose stair-stepped edges are what prompted the
+		/// work. Following the key faithfully would therefore leave the complaint unanswered on the materials it was made
+		/// about, so every alpha-tested material gets it. Valve's key exists because the feature cost something on 2004
+		/// hardware and was not always available; it is free and universal on ours.
 		/// </para>
 		/// <para>
 		/// It is a uniform rule and not a classification: nothing here decides what KIND of surface a material is, so
 		/// there is no judgement to be wrong about on another map. It also does nothing at all unless the camera is
 		/// multisampling - URP only turns the render state on through _AlphaToMaskAvailable when it is, and this
-		/// project multisamples at 4x since the move to Forward+.
+		/// project multisamples at 4x.
 		/// </para>
 		/// <para>
 		/// URP gates it on the surface being OPAQUE as well as clipped, because a translucent surface's alpha is its
@@ -1798,11 +1794,8 @@ namespace Chisel.Import.Source.VPKTools
 		/// $rimlightexponent: how wide the rim is, 4 when the key is absent as Source has it.
 		/// </summary>
 		/// <remarks>
-		/// The key was parsed all along and never reached the shader, which squared the edge term twice for a fixed
-		/// exponent of 4 - so a material asking for anything narrower got a rim twice as broad as it wanted. The term
-		/// is ADDITIVE emission of the ambient probe rather than a modulation of the surface, so too broad a rim does
-		/// not merely brighten an edge, it washes the albedo out across whole faces: a map's agave asks for 8 and
-		/// its upward-facing inner leaves came out flat pale grey while the outward-facing ones were correct.
+		/// The rim term is ADDITIVE emission of the ambient probe rather than a modulation of the surface, so too broad a rim
+		/// does not merely brighten an edge, it washes the albedo out across whole faces.
 		/// Clamped at 1 because the exponent is a lobe width and a value below 1 broadens it past the whole surface.
 		/// </remarks>
 		internal static float RimLightExponentOf(VMT sourceMaterial)
@@ -1977,19 +1970,13 @@ namespace Chisel.Import.Source.VPKTools
 			}
 			else
 			{
-				// A PLAIN OPAQUE SURFACE WRITES ALPHA 1, whatever its base texture's alpha channel holds.
+				// A plain opaque surface writes alpha 1, whatever its base texture's alpha channel holds.
 				//
 				// In Source that channel is never opacity on a material that is neither $translucent nor $alphatest -
 				// it is a mask for whatever feature claims it ($selfillum, $basealphaenvmapmask,
 				// $basemapalphaphongmask, $detail) or it is unused. Source never noticed, because its fog is mixed in
 				// per pixel by each shader. Ours is a screen-space pass that READS the camera colour's alpha, so
-				// exporting a mask there quietly excluded those surfaces from the fog.
-				//
-				// A census of both VPKs: of 11070 opaque VMTs, 2673 have a base texture with an alpha
-				// channel and NOT ONE of them claims that alpha as opacity. Sampling 60 of them, 85% have texels
-				// below 0.5. The worst are worldspawn walls - concrete_wall_c2a2_deeptnl_01a has a mean alpha of
-				// 25/255, with 98.5% of its texels below 0.5 and 34.7% below even the fog's 0.05 threshold, so
-				// tightening that threshold could never have closed this.
+				// exporting a mask there would exclude those surfaces from the fog.
 				SetFloatIfPresent(unityMaterial, "_OpaqueAlpha", 1.0f);
 			}
 
@@ -2121,11 +2108,10 @@ namespace Chisel.Import.Source.VPKTools
 
 			if (images == null || images.Length == 0)
 			{
-				// A texture the VMT names but that cannot be imported used to return null in silence, and
-				// Unity binds WHITE for an unset texture - so the material came out as a white surface with
-				// nothing anywhere saying why. It looks like a shader bug and it is not one. Ten materials
-				// in this game are in that state; five name textures that are in no VPK at all, and the
-				// rest were losing the name to a parse bug. Saying so makes the difference visible.
+				// A texture the VMT names but that cannot be imported would otherwise go unsaid, and
+				// Unity binds WHITE for an unset texture - so the material comes out as a white surface with
+				// nothing anywhere saying why. It looks like a shader bug and it is not one. Some of these name
+				// textures that are in no VPK at all. Saying so makes the difference visible.
 				if (warnIfMissing)
 					Debug.LogWarning($"Material '{material.name}' names texture '{textureName}' for " +
 									 $"{materialPropertyName}, which could not be imported - the slot will " +
